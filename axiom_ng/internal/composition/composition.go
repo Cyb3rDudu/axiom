@@ -30,6 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -47,11 +48,14 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/events"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/mirror"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/pglib"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/repair"
+	libsqlite "github.com/Cyb3rDudu/axiom/axiom_ng/internal/library/sqlite"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/search"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/server"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/store"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom_ng/internal/store/migrations"
 	axsync "github.com/Cyb3rDudu/axiom/axiom_ng/internal/sync"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/zoteroprovider"
 )
@@ -152,9 +156,20 @@ type Root struct {
 	// exactly like the pre-F04 main.go locals).
 	database *db.DB
 	rep      *repo.Repo
-	// libStore is the F06 Library persistence (nil without the store
-	// role) — the revision Mits-Schrieb + import service sit on it.
-	libStore *library.Store
+	// libRepo is the F06/F12 Library persistence (nil without the sync
+	// role) — the engine-neutral repository; the import service sits on
+	// it. libDB/libSQLite carry the engine's closer (own pool for the
+	// PostgreSQL profile, one file for the SQLite profile — F12 #306:
+	// SEPARATE from the store pool either way; components see only their
+	// own repository).
+	libRepo   library.Repository
+	libDB     *db.DB
+	libSQLite io.Closer
+	// revPublisher carries the legacy sync-lane revision Mits-Schreib
+	// when wired (shared-database shapes only — the lane reads the Zotero
+	// mirror; separate DSN / SQLite leave it nil, unwired honestly, F12
+	// #306).
+	revPublisher library.RevisionPublisher
 	// libProvider is the F07 Zotero adapter (nil without the zotero
 	// provider wiring); its Close releases the writer lease.
 	libProvider *zoteroprovider.Provider
@@ -544,7 +559,30 @@ func (r *Root) componentsFor() []Component {
 	comps = append(comps, funcComponent{
 		name: "postgres",
 		role: RoleStore,
-		start: func(ctx context.Context) error {
+		// Named return: a failure AFTER a pool opened (migrate, store
+		// ledger, library engine, provider wiring — everything below runs
+		// in ONE component start) must CLOSE what it opened — the start
+		// undo only stops STARTED components, and Stop bails on a never-
+		// started root, so without this the pools would leak on boot abort
+		// (F12 review: both pools, doubled by the library engine).
+		start: func(ctx context.Context) (err error) {
+			defer func() {
+				if err == nil {
+					return
+				}
+				if r.libSQLite != nil {
+					_ = r.libSQLite.Close()
+					r.libSQLite = nil
+				}
+				if r.libDB != nil {
+					r.libDB.Close()
+					r.libDB = nil
+				}
+				if r.database != nil {
+					r.database.Close()
+					r.database = nil
+				}
+			}()
 			database, err := db.Open(ctx, r.cfg.DatabaseURL)
 			if err != nil {
 				return fmt.Errorf("postgres: %w", err)
@@ -564,7 +602,7 @@ func (r *Root) componentsFor() []Component {
 			// F09 #303: the Store component's ledger — the revision-intake
 			// columns on ingest_jobs (additive; same fingerprint rule as
 			// the library ledger below).
-			if err := store.Migrate(ctx, database.Pool()); err != nil {
+			if err := storemigrations.Migrate(ctx, database.Pool()); err != nil {
 				return fmt.Errorf("store migrate: %w", err)
 			}
 			// The Library runtime (own migration set + Mits-Schrieb + the
@@ -586,17 +624,71 @@ func (r *Root) componentsFor() []Component {
 				r.logger.Printf("library: not selected in this role set — no Library runtime (F09 store slice)")
 				return nil
 			}
-			// F06 #300: the Library component's own migration set (own
-			// ledger, same physical DB — additive; the F01 fingerprint
-			// derives from the core set alone).
-			if err := library.Migrate(ctx, database.Pool()); err != nil {
-				return fmt.Errorf("library migrate: %w", err)
+			// F06 #300 + F12 #306: the Library component's own persistence —
+			// OWN pool/file, chosen by storage.library.driver. The same
+			// PostgreSQL instance today, a separate logical database at the
+			// DM cutover: the components never shared a pool handle, so the
+			// cutover turns a DSN, not code.
+			switch r.cfg.StorageLibraryDriver {
+			case "", "postgres":
+				libDSN := r.cfg.LibraryDatabaseURL
+				if libDSN == "" {
+					libDSN = r.cfg.DatabaseURL
+				}
+				libDB, err := db.Open(ctx, libDSN)
+				if err != nil {
+					return fmt.Errorf("library postgres: %w", err)
+				}
+				r.libDB = libDB
+				// Own migration set, own ledger (additive; the F01
+				// fingerprint derives from the core set alone).
+				if err := pglib.Migrate(ctx, libDB.Pool()); err != nil {
+					return fmt.Errorf("library migrate: %w", err)
+				}
+				r.libRepo = pglib.NewStore(libDB.Pool())
+				// The legacy Mits-Schrieb lane reads the Zotero mirror on the
+				// SHARED database. A separate library DSN has no mirror — the lane
+				// unwires HONESTLY (logged; the engine's mirror reads also fold to
+				// absence defensively, but the wiring is the loud half). Revision
+				// intake is the successor lane.
+				sharedDSN := r.cfg.LibraryDatabaseURL == "" || r.cfg.LibraryDatabaseURL == r.cfg.DatabaseURL
+				if sharedDSN {
+					r.logger.Printf("library: PostgreSQL profile (own pool over the shared database; separate engine from the store repo)")
+				} else {
+					r.logger.Printf("library: PostgreSQL profile over its OWN database — legacy sync-lane revision Mits-Schreib UNWIRED (no Zotero mirror reachable from the library DSN; revision intake is the successor lane)")
+				}
+				// Source-revision Mits-Schrieb: sync completion and heal/ custody
+				// publish through the same store (F09 turns the Store onto these
+				// rows) — shared-database shape only.
+				if rp, ok := r.libRepo.(library.RevisionPublisher); ok && sharedDSN {
+					r.srv.SetRevisionPublisher(rp)
+					r.revPublisher = rp
+				}
+			case "sqlite":
+				path := r.cfg.LibrarySQLitePath
+				if path == "" {
+					home, herr := os.UserHomeDir()
+					if herr != nil || home == "" {
+						return fmt.Errorf("library sqlite: no home dir for the default library.sqlite path — set AXIOM_LIBRARY_SQLITE_PATH")
+					}
+					path = home + "/.axiom-ng/library.sqlite"
+				}
+				libRepo, err := libsqlite.Open(ctx, path)
+				if err != nil {
+					return fmt.Errorf("library sqlite: %w", err)
+				}
+				r.libRepo = libRepo
+				r.libSQLite = libRepo
+				r.logger.Printf("library: SQLite profile (%s — single file, single host; multi-replica needs the PostgreSQL profile)", path)
+				// The legacy Zotero-sync Mits-Schrieb reads the shared
+				// mirror — not reachable from a component-local file (no
+				// ATTACH, no cross-component queries by F12 rule). The
+				// revision-intake lane (F09) replaces it; capability-honest
+				// unwiring, logged once.
+				r.logger.Printf("library: SQLite profile — legacy sync-lane revision Mits-Schrieb unwired (mirror lives on the store database; revision intake is the successor lane)")
+			default:
+				return fmt.Errorf("library: unknown AXIOM_STORAGE_LIBRARY_DRIVER %q (known: postgres, sqlite)", r.cfg.StorageLibraryDriver)
 			}
-			r.libStore = library.NewStore(database.Pool())
-			// Source-revision Mits-Schrieb: sync completion and heal/
-			// custody publish through the same store (F09 turns the Store
-			// onto these rows).
-			r.srv.SetRevisionPublisher(r.libStore)
 			// The import contract: fake providers until F07 ports Zotero
 			// behind the ports (capability-honest — unwired stays 404).
 			switch r.cfg.LibraryImportProviders {
@@ -607,7 +699,7 @@ func (r *Root) componentsFor() []Component {
 					Provider:       "fake",
 					LibraryID:      r.cfg.ZoteroLibraryID,
 					MaxImportBytes: r.cfg.LibraryImportMaxBytes,
-				}, r.libStore, library.NewStaging(r.cfg.ArtifactRoot), library.Ports{
+				}, r.libRepo, library.NewStaging(r.cfg.ArtifactRoot), library.Ports{
 					Catalog:     prov,
 					Records:     prov,
 					Renditions:  prov,
@@ -634,6 +726,15 @@ func (r *Root) componentsFor() []Component {
 				// meets it. The mirror source identity is ensured on demand (the
 				// first sync would create it too) so revisions/GetSource bind to
 				// the same source id the sync mirror uses.
+				//
+				// F12 #306, Ziel 5: the source identity lives in the Zotero
+				// MIRROR on the shared database — a component-local SQLite
+				// file must not reach into the store repository for it (no
+				// cross-component queries). The combination is refused
+				// loudly instead of degrading silently.
+				if r.libSQLite != nil {
+					return fmt.Errorf("library: AXIOM_LIBRARY_IMPORT_PROVIDERS=zotero requires the PostgreSQL profile (the Zotero mirror lives on the shared database); AXIOM_STORAGE_LIBRARY_DRIVER=%q is not combinable with it", r.cfg.StorageLibraryDriver)
+				}
 				serverID := r.src.ServerID()
 				sourceID, serr := mirror.New(r.rep).EnsureSource(ctx, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, serverID)
 				if serr != nil {
@@ -657,7 +758,7 @@ func (r *Root) componentsFor() []Component {
 					BaseURL:   r.cfg.ZoteroBaseURL,
 					LibraryID: r.cfg.ZoteroLibraryID,
 					APIKey:    apiKey,
-					Store:     r.libStore,
+					Store:     r.libRepo,
 				})
 				if perr != nil {
 					return fmt.Errorf("library zotero provider: %w", perr)
@@ -668,7 +769,7 @@ func (r *Root) componentsFor() []Component {
 					Provider:       "zotero",
 					LibraryID:      r.cfg.ZoteroLibraryID,
 					MaxImportBytes: r.cfg.LibraryImportMaxBytes,
-				}, r.libStore, library.NewStaging(r.cfg.ArtifactRoot), library.Ports{
+				}, r.libRepo, library.NewStaging(r.cfg.ArtifactRoot), library.Ports{
 					Catalog:     prov,
 					Records:     prov,
 					Renditions:  prov,
@@ -711,6 +812,16 @@ func (r *Root) componentsFor() []Component {
 				_ = r.libProvider.Close()
 			}
 			closeInternalEdge(&r.libEdge, r.logger)
+			// Library persistence closes BEFORE the store pool (reverse of
+			// the start order — the store pool is the last resource).
+			if r.libSQLite != nil {
+				_ = r.libSQLite.Close()
+				r.libSQLite = nil
+			}
+			if r.libDB != nil {
+				r.libDB.Close()
+				r.libDB = nil
+			}
 			if r.database != nil {
 				r.database.Close()
 			}
@@ -763,9 +874,12 @@ func (r *Root) componentsFor() []Component {
 			// #197 standing entity consolidation: every successful sync hooks
 			// a debounced consolidation run (one run per sync burst).
 			r.syncSvc.SetConsolidator(r.rep)
-			// F06 #300: sync completion publishes source revisions.
-			if r.libStore != nil {
-				r.syncSvc.SetRevisionSink(r.libStore)
+			// F06 #300: sync completion publishes source revisions —
+			// shared-database shapes only (the lane reads the Zotero mirror
+			// on the shared DB; a separate library DSN or the SQLite profile
+			// unwired it honestly at the library gate, F12 #306).
+			if r.revPublisher != nil {
+				r.syncSvc.SetRevisionSink(r.revPublisher)
 			}
 			return nil
 		},
@@ -879,8 +993,13 @@ func (r *Root) componentsFor() []Component {
 			}
 			// Role probe (R4 Ziel 1/3): capability check of the query runner
 			// at start. Best-effort: an unreachable query runner keeps search
-			// degraded-but-up (R3 fallback).
-			go probeQueryRunnerRole(ctx, queryClient, r.cfg.QueryRunnerURL, r.logger)
+			// degraded-but-up (R3 fallback). F12 #306: the verdict feeds the
+			// capability report — runner-backed capabilities stay absent
+			// until the probe vouches for the roles.
+			go func() {
+				qe, rk := probeQueryRunnerRole(ctx, queryClient, r.cfg.QueryRunnerURL, r.logger)
+				searchSvc.SetRunnerRoles(qe, rk)
+			}()
 			r.srv.RegisterCheck("query-runner", runnerCheck(queryClient))
 			return nil
 		},

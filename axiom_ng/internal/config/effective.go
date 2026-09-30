@@ -100,6 +100,11 @@ var envRows = []envRow{
 	// F06 #300: Library import surface knobs.
 	{"AXIOM_LIBRARY_IMPORT_MAX_BYTES", "LibraryImportMaxBytes", false},
 	{"AXIOM_LIBRARY_IMPORT_PROVIDERS", "LibraryImportProviders", false},
+	// F12 #306: per-component persistence profile (library engine + own
+	// DSN / sqlite path). Not secret — operator-debuggable wiring state.
+	{"AXIOM_STORAGE_LIBRARY_DRIVER", "StorageLibraryDriver", false},
+	{"AXIOM_LIBRARY_DATABASE_URL", "LibraryDatabaseURL", false},
+	{"AXIOM_LIBRARY_SQLITE_PATH", "LibrarySQLitePath", false},
 	{"AXIOM_ZOTERO_WRITE_KEY_FILE", "ZoteroWriteKeyFile", false},
 	{"AXIOM_QUARANTINE_ROOT", "QuarantineRoot", false},
 	{"AXIOM_API_PORT", "APIPort", false},
@@ -168,7 +173,7 @@ func Effective(cfg Config) []Entry {
 		}
 		var value any
 		switch {
-		case row.env == "AXIOM_DATABASE_URL":
+		case row.env == "AXIOM_DATABASE_URL", row.env == "AXIOM_LIBRARY_DATABASE_URL":
 			value = sanitizeDSN(f.String())
 		case row.secret:
 			value = RedactedValue
@@ -291,6 +296,11 @@ func ValidateEnv() []string {
 		}
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s=%q: %v (loader falls back to the default silently)", row.env, raw, err))
+		}
+		// Vocabulary keys: values the loader would silently fall back on
+		// are not parse errors but WORD errors — same reporting channel.
+		if row.env == "AXIOM_STORAGE_LIBRARY_DRIVER" && raw != "" && raw != "postgres" && raw != "sqlite" {
+			problems = append(problems, fmt.Sprintf("%s=%q: unknown driver (known: postgres, sqlite) — the composition aborts at start", row.env, raw))
 		}
 	}
 	return problems

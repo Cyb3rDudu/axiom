@@ -108,14 +108,16 @@ func runnerCheck(h HealthRunner) runnerCheckFn { return runnerCheckFn{health: h.
 // query_embedding and reranking. A capable-but-different runner is a valid
 // query runner; a runner without them gets a WARNING — search stays up and
 // degrades per R3. #216: the roles line also distinguishes warm from cold.
-// Moved verbatim from the pre-F04 main.go.
-func probeQueryRunnerRole(ctx context.Context, c *processor.Client, url string, logger *log.Logger) {
+// Moved verbatim from the pre-F04 main.go; F12 #306 returns the verdict so
+// the search service's capability report can require the PROBED roles (a
+// wired-but-incapable runner must not read as equipment).
+func probeQueryRunnerRole(ctx context.Context, c *processor.Client, url string, logger *log.Logger) (queryEmbedding, reranking bool) {
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	caps, err := c.Capabilities(probeCtx)
 	if err != nil {
-		logger.Printf("runner roles: query runner %s not reachable at start (search degrades per R3 until it is): %v", url, err)
-		return
+		logger.Printf("runner roles: query runner %s not reachable at start (search degrades per R3 until it is; capabilities report the runner arms absent until a probe succeeds): %v", url, err)
+		return false, false
 	}
 	feats := caps.Features
 	qe, rk := feats != nil && feats["query_embedding"], feats != nil && feats["reranking"]
@@ -131,4 +133,5 @@ func probeQueryRunnerRole(ctx context.Context, c *processor.Client, url string, 
 	default:
 		logger.Printf("WARNING: runner roles: query runner %s only partially query-capable (query_embedding=%v reranking=%v) — partial R3 degradation expected", url, qe, rk)
 	}
+	return qe, rk
 }

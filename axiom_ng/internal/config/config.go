@@ -169,6 +169,23 @@ type Config struct {
 	// the honest no-provider state).
 	LibraryImportProviders string
 
+	// StorageLibraryDriver selects the Library component's persistence
+	// engine (F12 #306, AXIOM_STORAGE_LIBRARY_DRIVER): "postgres" (own
+	// pool over AXIOM_LIBRARY_DATABASE_URL, defaulting to the core DSN)
+	// or "sqlite" (one library.sqlite file, AXIOM_LIBRARY_SQLITE_PATH).
+	// Empty defaults to postgres — the 0.1.x-borne behavior.
+	StorageLibraryDriver string
+	// LibraryDatabaseURL is the Library component's OWN PostgreSQL DSN
+	// (F12 #306, AXIOM_LIBRARY_DATABASE_URL; empty = AXIOM_DATABASE_URL).
+	// A separate pool either way — the DM cutover later points it at a
+	// separate logical database without code changes.
+	LibraryDatabaseURL string
+	// LibrarySQLitePath is the library.sqlite file path for the SQLite
+	// profile (F12 #306, AXIOM_LIBRARY_SQLITE_PATH; empty =
+	// ~/.axiom-ng/library.sqlite). One file, never attached, never shared
+	// with other components.
+	LibrarySQLitePath string
+
 	// ZoteroWriteKeyFile holds the local-API write key (#184). The key NEVER
 	// lives in the repo; missing file = repair API disabled.
 	ZoteroWriteKeyFile string
@@ -278,6 +295,9 @@ func Load() Config {
 		ArtifactRoot:               env("AXIOM_ARTIFACT_ROOT", ""),
 		LibraryImportMaxBytes:      envInt64("AXIOM_LIBRARY_IMPORT_MAX_BYTES", 0),
 		LibraryImportProviders:     env("AXIOM_LIBRARY_IMPORT_PROVIDERS", ""),
+		StorageLibraryDriver:       env("AXIOM_STORAGE_LIBRARY_DRIVER", "postgres"),
+		LibraryDatabaseURL:         env("AXIOM_LIBRARY_DATABASE_URL", ""),
+		LibrarySQLitePath:          env("AXIOM_LIBRARY_SQLITE_PATH", ""),
 		ZoteroWriteKeyFile:         env("AXIOM_ZOTERO_WRITE_KEY_FILE", os.Getenv("HOME")+"/.axiom-ng/write-api-key"),
 		QuarantineRoot:             env("AXIOM_QUARANTINE_ROOT", quarantineDefault),
 		APIPort:                    envInt("AXIOM_API_PORT", defaultAPIPort),

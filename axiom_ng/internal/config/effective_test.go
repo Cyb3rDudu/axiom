@@ -172,6 +172,29 @@ func TestEffectiveCarriesFixerInterval(t *testing.T) {
 	}
 }
 
+// TestEffectiveLibraryPersistenceRows — the F12 per-component
+// persistence knobs render value-level: driver and sqlite path from env,
+// the Library DSN sanitized (a DSN row is wiring state, not a secret —
+// credentials still never leave, the sanitizer drops the userinfo).
+func TestEffectiveLibraryPersistenceRows(t *testing.T) {
+	t.Setenv("AXIOM_STORAGE_LIBRARY_DRIVER", "sqlite")
+	t.Setenv("AXIOM_LIBRARY_SQLITE_PATH", "/tmp/probe.sqlite")
+	t.Setenv("AXIOM_LIBRARY_DATABASE_URL", "postgresql://axiom_user:axiom_password@localhost:5432/lib_test?sslmode=disable")
+	got := map[string]Entry{}
+	for _, e := range Effective(Load()) {
+		got[e.Env] = e
+	}
+	if e, ok := got["AXIOM_STORAGE_LIBRARY_DRIVER"]; !ok || e.Value != "sqlite" || e.Source != "env" {
+		t.Fatalf("driver row = %+v (ok=%v), want value sqlite source env", e, ok)
+	}
+	if e, ok := got["AXIOM_LIBRARY_SQLITE_PATH"]; !ok || e.Value != "/tmp/probe.sqlite" || e.Source != "env" {
+		t.Fatalf("sqlite path row = %+v (ok=%v), want value /tmp/probe.sqlite source env", e, ok)
+	}
+	if e, ok := got["AXIOM_LIBRARY_DATABASE_URL"]; !ok || e.Value != "postgresql://localhost:5432/lib_test?sslmode=disable" || e.Source != "env" {
+		t.Fatalf("library DSN row = %+v (ok=%v), want the sanitized DSN (no userinfo, not <redacted>) under source env", e, ok)
+	}
+}
+
 // TestValidateEnvFlagsSilentFallbacks — the raw-env re-parser catches
 // what the loader would silently ignore (typo'd duration, non-numeric
 // port, non-boolean flag).
@@ -189,6 +212,9 @@ func TestValidateEnvFlagsSilentFallbacks(t *testing.T) {
 		// to the default.
 		"AXIOM_SEARCH_SPARSE_ARM":         "t",
 		"AXIOM_SEARCH_FRONTMATTER_FILTER": "y",
+		// F12: driver vocabulary — an unknown engine name would sail
+		// through validate and abort only at composition start.
+		"AXIOM_STORAGE_LIBRARY_DRIVER": "oracle",
 	} {
 		t.Setenv(env, val)
 		problems := ValidateEnv()
@@ -203,6 +229,13 @@ func TestValidateEnvFlagsSilentFallbacks(t *testing.T) {
 		t.Setenv("AXIOM_SEARCH_RERANK", val)
 		if problems := ValidateEnv(); len(problems) != 0 {
 			t.Fatalf("%q must be accepted as a recognized boolean, got %v", val, problems)
+		}
+	}
+	// Driver vocabulary: postgres and sqlite are the known engines.
+	for _, val := range []string{"postgres", "sqlite"} {
+		t.Setenv("AXIOM_STORAGE_LIBRARY_DRIVER", val)
+		if problems := ValidateEnv(); len(problems) != 0 {
+			t.Fatalf("driver %q must validate, got %v", val, problems)
 		}
 	}
 }
