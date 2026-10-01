@@ -84,14 +84,15 @@ edge becomes an in-process call — same software, same contracts.
 
 | Role | Serves |
 | --- | --- |
-| `all` | the full stack in one process (the default boot; config-derived loops included) |
-| `api` | the public edge only — no claim/fixer loops; in split mode it proxies Library/Store surfaces to the component processes |
-| `library` | the Library contract surface on its internal edge, plus the repair track (supervised `axiom-repair-worker` children, the Zotero write gateway) |
-| `store` | revision intake (`POST /api/v1/store/ingest`), the claim loop, signed processor-source serving, the OpenSearch outbox |
+| `all` | the full stack in one process |
+| `api` | the public edge only — no claim/fixer loops |
+| `library` | the Library contract surface plus the repair track |
+| `store` | revision intake, the claim loop, the OpenSearch outbox |
 
-Which role runs in which operating form (all-in-one, split process,
-container, Kubernetes, remote compute, launchd) — and which CI witness
-proves each form — is the [topology matrix](topologies.md).
+The canonical role reference — which role runs in which operating form
+(all-in-one, split process, container, Kubernetes, remote compute,
+launchd) and which CI witness proves each form — is the
+[topology matrix](topologies.md).
 
 ## Name mapping: 0.1.x → 0.2.0 {#name-mapping}
 
@@ -406,8 +407,7 @@ compose network nothing is loopback.)
 **Symptom.** A periodic log line from the dispatcher:
 
 ```text
-CLOCK SKEW WARNING: host-DB offset 45s exceeds ±30s (host ahead of DB);
-freshness must stay DB-side — investigate host sleep/NTP/VM clock
+CLOCK SKEW WARNING: host-DB offset 45s exceeds ±30s (host ahead of DB); freshness must stay DB-side (#271) — investigate host sleep/NTP/VM clock
 ```
 
 **Cause.** Lease writes and fences run on the **database** clock; the host
@@ -538,7 +538,6 @@ export AXIOM_ZOTERO_BASE=http://127.0.0.1:23119/api
 export AXIOM_API_PORT=8111
 export AXIOM_BIND_ADDR=0.0.0.0
 export AXIOM_COMPUTE_WORKER_URLS=http://$WORKER_HOST:8116
-export AXIOM_COMPUTE_WORKER_URL=http://$WORKER_HOST:8116
 export AXIOM_QUERY_RUNNER_URL=http://$WORKER_HOST:8116
 export AXIOM_COMPUTE_WORKER_SOURCE_SECRET=guide-secret
 export AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL=http://host.docker.internal:8111
@@ -558,9 +557,10 @@ Why these values: the worker is a container, so it pulls document sources
 over signed URLs from `host.docker.internal` — which requires the API to
 listen beyond loopback (`AXIOM_BIND_ADDR=0.0.0.0`; on an untrusted network,
 bind the specific interface instead). The write-key path deliberately does
-not exist: the Zotero write surface stays off. The first boot migrates the
-schema and waits for the four dependency probes; watch for the startup
-banner, then `ok:true` at `http://127.0.0.1:8111/api/health`.
+not exist: the Zotero write surface stays off. The first boot migrates
+the schema; watch for the startup banner, then `ok:true` with the four
+dependency checks (postgres, zotero, query-runner, ingest-runner) at
+`http://127.0.0.1:8111/api/health`.
 
 ### 4. Doctor, green
 

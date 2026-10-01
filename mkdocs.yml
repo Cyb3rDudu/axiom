@@ -15,6 +15,11 @@ site_url: https://cyb3rdudu.github.io/axiom/
 repo_url: https://github.com/Cyb3rDudu/axiom
 edit_uri: blob/main/docs/
 
+# Strict builds stay silent about broken in-page anchors unless asked
+# (docs CI runs mkdocs build --strict; warn surfaces them in the log).
+validation:
+        anchors: warn
+
 theme:
         name: material
         # Dark is the operating default; logo and favicon come from the axiom
