@@ -1,0 +1,265 @@
+# topology.yaml — the F14 Kubernetes example (#308): the SAME roles as the
+# container compose topology (deploy/container/compose.topology.yml), one
+# image, roles per argument. Structural example only: CI validates the
+# manifests with kubeconform (no cluster dependency); the domain layer
+# stays free of Kubernetes imports (internal/composition lint sonde).
+#
+# Operators adapt the placeholder Secret/env values (generic names by
+# convention — no deployment facts of any specific environment). The
+# compute worker Deployment is the remote-class role; point its image at
+# a real-compute build for production use — the reference image proves
+# the topology, not the compute quality.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: axiom
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: axiom-env
+  namespace: axiom
+type: Opaque
+stringData:
+  # operators fill: DSN, source secret — never commit real values
+  AXIOM_DATABASE_URL: postgresql://user:pass@postgres:5432/axiom
+  AXIOM_PROCESSOR_SOURCE_SECRET: change-me
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: axiom-config
+  namespace: axiom
+data:
+  AXIOM_OPENSEARCH_URL: http://opensearch:9200
+  AXIOM_OS_INDEX: axiom-chunks
+  AXIOM_PROCESSOR_URLS: http://axiom-compute-worker:8112
+  AXIOM_PROCESSOR_URL: http://axiom-compute-worker:8112
+  AXIOM_QUERY_RUNNER_URL: http://axiom-compute-worker:8112
+  AXIOM_ZOTERO_BASE: http://zotero:23119/api
+  AXIOM_COMPONENT_TIMEOUT: 45s
+---
+# internal library edge (the api's AXIOM_LIBRARY_URL target)
+apiVersion: v1
+kind: Service
+metadata:
+  name: axiom-library
+  namespace: axiom
+spec:
+  selector:
+    app: axiom-library
+  ports:
+    - name: edge
+      port: 8211
+      targetPort: 8211
+---
+# internal store edge (the api's AXIOM_STORE_URL target) + the public port
+# the dispatcher signs processor-source URLs against
+apiVersion: v1
+kind: Service
+metadata:
+  name: axiom-store
+  namespace: axiom
+spec:
+  selector:
+    app: axiom-store
+  ports:
+    - name: public
+      port: 8114
+      targetPort: 8114
+    - name: edge
+      port: 8212
+      targetPort: 8212
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: axiom-api
+  namespace: axiom
+spec:
+  selector:
+    app: axiom-api
+  ports:
+    - name: public
+      port: 8111
+      targetPort: 8111
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: axiom-compute-worker
+  namespace: axiom
+spec:
+  selector:
+    app: axiom-compute-worker
+  ports:
+    - name: http
+      port: 8112
+      targetPort: 8112
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axiom-library
+  namespace: axiom
+spec:
+  replicas: 1 # the Library single-writer lease owns exclusivity
+  selector:
+    matchLabels:
+      app: axiom-library
+  template:
+    metadata:
+      labels:
+        app: axiom-library
+    spec:
+      containers:
+        - name: library
+          image: axiom-topology:latest
+          args: ["serve", "library"]
+          ports:
+            - containerPort: 8113
+            - containerPort: 8211
+          envFrom:
+            - configMapRef:
+                name: axiom-config
+            - secretRef:
+                name: axiom-env
+          env:
+            - name: AXIOM_API_PORT
+              value: "8113"
+            - name: AXIOM_BIND_ADDR
+              value: "0.0.0.0"
+            - name: AXIOM_LIBRARY_IMPORT_PROVIDERS
+              value: fake
+            - name: AXIOM_INTERNAL_LIBRARY_ADDR
+              value: "0.0.0.0:8211"
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8113
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axiom-store
+  namespace: axiom
+spec:
+  replicas: 1 # the dispatcher claims per worker id; scale via workers, not stores
+  selector:
+    matchLabels:
+      app: axiom-store
+  template:
+    metadata:
+      labels:
+        app: axiom-store
+    spec:
+      containers:
+        - name: store
+          image: axiom-topology:latest
+          args: ["serve", "store"]
+          ports:
+            - containerPort: 8114
+            - containerPort: 8212
+          envFrom:
+            - configMapRef:
+                name: axiom-config
+            - secretRef:
+                name: axiom-env
+          env:
+            - name: AXIOM_API_PORT
+              value: "8114"
+            - name: AXIOM_BIND_ADDR
+              value: "0.0.0.0"
+            - name: AXIOM_DISPATCHER_ENABLED
+              value: "1"
+            - name: AXIOM_DISPATCHER_WORKER_ID
+              value: axiom-store
+            - name: AXIOM_PROCESSOR_SOURCE_BASE_URL
+              value: http://axiom-store:8114
+            - name: AXIOM_INTERNAL_STORE_ADDR
+              value: "0.0.0.0:8212"
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8114
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axiom-api
+  namespace: axiom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: axiom-api
+  template:
+    metadata:
+      labels:
+        app: axiom-api
+    spec:
+      containers:
+        - name: api
+          image: axiom-topology:latest
+          args: ["serve", "api"]
+          ports:
+            - containerPort: 8111
+          envFrom:
+            - configMapRef:
+                name: axiom-config
+            - secretRef:
+                name: axiom-env
+          env:
+            - name: AXIOM_API_PORT
+              value: "8111"
+            - name: AXIOM_BIND_ADDR
+              value: "0.0.0.0"
+            - name: AXIOM_LIBRARY_URL
+              value: http://axiom-library:8211
+            - name: AXIOM_STORE_URL
+              value: http://axiom-store:8212
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8111
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: axiom-compute-worker
+  namespace: axiom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: axiom-compute-worker
+  template:
+    metadata:
+      labels:
+        app: axiom-compute-worker
+    spec:
+      containers:
+        - name: worker
+          image: axiom-topology:latest
+          args: ["worker"]
+          ports:
+            - containerPort: 8112
+          env:
+            - name: AXIOM_PROCESSOR_PORT
+              value: "8112"
+            - name: AXIOM_PROCESSOR_BIND_ADDR
+              value: "0.0.0.0"
+            - name: AXIOM_PROCESSOR_COMPUTE
+              value: reference
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: 8112
+            initialDelaySeconds: 5
+            periodSeconds: 5

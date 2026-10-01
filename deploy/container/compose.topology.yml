@@ -1,0 +1,179 @@
+# compose.topology.yml — the F14 container split topology (#308):
+# ONE image (deploy/container/Dockerfile), roles per argument — library /
+# store / api as three RAG containers, the compute worker as a fourth
+# container in its OWN network namespace (the remote-class equivalence
+# leg: the store reaches it exclusively over HTTP), plus ephemeral
+# Postgres + OpenSearch and a stand-in Zotero probe.
+#
+#   docker build -f deploy/container/Dockerfile -t axiom-topology .
+#   docker compose -f deploy/container/compose.topology.yml up -d
+#   deploy/container/topology-smoke.sh
+#
+# Everything is ephemeral: named volumes are project-scoped and dropped by
+# `docker compose down -v`. No host state.
+name: axiom-topology
+
+x-rag-env: &rag-env
+  AXIOM_DATABASE_URL: postgresql://axiom:axiom@pg:5432/axiom
+  AXIOM_OPENSEARCH_URL: http://opensearch:9200
+  AXIOM_OS_INDEX: topology-chunks-v1
+  AXIOM_PROCESSOR_URLS: http://worker:8112
+  AXIOM_PROCESSOR_URL: http://worker:8112
+  AXIOM_QUERY_RUNNER_URL: http://worker:8112
+  AXIOM_ZOTERO_BASE: http://zotero:23119/api
+  AXIOM_ZOTERO_WRITE_KEY_FILE: /run/axiom/no-write-key
+  AXIOM_ARTIFACT_ROOT: /var/lib/axiom/artifacts
+  AXIOM_QUARANTINE_ROOT: /var/lib/axiom/quarantine
+  AXIOM_FIXER_INVOKER_ENABLED: "0"
+  AXIOM_DISPATCHER_ENABLED: "0"
+  AXIOM_COMPONENT_TIMEOUT: 45s
+
+x-healthcheck: &healthcheck
+  interval: 5s
+  timeout: 5s
+  retries: 60
+  start_period: 10s
+
+services:
+  pg:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: axiom
+      POSTGRES_PASSWORD: axiom
+      POSTGRES_DB: axiom
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U axiom -d axiom"]
+      <<: *healthcheck
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS localhost:9200 >/dev/null || exit 1"]
+      <<: *healthcheck
+
+  # Stand-in for the operator's Zotero local API: answers the Server-ID
+  # probe and empty item pages. The REAL Zotero provider is not part of
+  # the container topology (operators mount their Zotero host instead).
+  zotero:
+    image: python:3.11-slim
+    command:
+      - python3
+      - -c
+      - |
+        import http.server
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Zotero-Server-ID", "topology-standin")
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"[]")
+            def log_message(self, *a):
+                pass
+        http.server.HTTPServer(("0.0.0.0", 23119), H).serve_forever()
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:23119/api/')\""]
+      <<: *healthcheck
+
+  library:
+    image: axiom-topology
+    command: ["serve", "library"]
+    environment:
+      <<: *rag-env
+      AXIOM_API_PORT: "8113"
+      AXIOM_BIND_ADDR: "0.0.0.0"
+      AXIOM_LIBRARY_IMPORT_PROVIDERS: fake
+      AXIOM_INTERNAL_LIBRARY_ADDR: "0.0.0.0:8211"
+    volumes:
+      - library-state:/var/lib/axiom
+    depends_on:
+      pg:
+        condition: service_healthy
+      zotero:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8113/api/health')\""]
+      <<: *healthcheck
+
+  store:
+    image: axiom-topology
+    command: ["serve", "store"]
+    environment:
+      <<: *rag-env
+      AXIOM_API_PORT: "8114"
+      AXIOM_BIND_ADDR: "0.0.0.0"
+      AXIOM_DISPATCHER_ENABLED: "1"
+      AXIOM_DISPATCHER_WORKER_ID: topology-store
+      AXIOM_PROCESSOR_SOURCE_SECRET: topology-secret
+      AXIOM_PROCESSOR_SOURCE_BASE_URL: http://store:8114
+      AXIOM_INTERNAL_STORE_ADDR: "0.0.0.0:8212"
+    volumes:
+      # the seeded fixture the mirror row points at (read-only)
+      - ../../axiom_ng/internal/backfill/testdata:/srv/seed:ro
+      - store-state:/var/lib/axiom
+    depends_on:
+      # sequential boot on a fresh database: db.Migrate owns the schema,
+      # concurrent first migrates collide on CREATE TYPE
+      library:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8114/api/health')\""]
+      <<: *healthcheck
+
+  api:
+    image: axiom-topology
+    command: ["serve", "api"]
+    environment:
+      <<: *rag-env
+      AXIOM_API_PORT: "8111"
+      AXIOM_BIND_ADDR: "0.0.0.0"
+      AXIOM_LIBRARY_URL: http://library:8211
+      AXIOM_STORE_URL: http://store:8212
+    volumes:
+      - api-state:/var/lib/axiom
+    ports:
+      - "127.0.0.1:18111:8111"
+    depends_on:
+      store:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8111/api/health')\""]
+      <<: *healthcheck
+
+  # The compute worker: same image, worker role — a separate network
+  # namespace the store reaches only over HTTP (remote-class equivalence).
+  worker:
+    image: axiom-topology
+    command: ["worker"]
+    environment:
+      AXIOM_PROCESSOR_PORT: "8112"
+      AXIOM_PROCESSOR_BIND_ADDR: "0.0.0.0"
+      AXIOM_PROCESSOR_COMPUTE: reference
+      AXIOM_PROCESSOR_WORK_ROOT: /var/lib/axiom/worker
+      AXIOM_CAPTION_CACHE_DIR: /var/lib/axiom/cache/captions
+    volumes:
+      - worker-state:/var/lib/axiom
+    depends_on:
+      store:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8112/v1/health')\""]
+      <<: *healthcheck
+
+volumes:
+  pgdata:
+  osdata:
+  library-state:
+  store-state:
+  api-state:
+  worker-state:

@@ -153,7 +153,7 @@ func startSplitProc(t *testing.T, e *splitE2EEnv, role string, port, edge int) *
 		"AXIOM_DATABASE_URL=" + e.dsn,
 		fmt.Sprintf("AXIOM_API_PORT=%d", port),
 		"AXIOM_BIND_ADDR=127.0.0.1",
-		"AXIOM_OS_URL=" + e.osURL,
+		"AXIOM_OPENSEARCH_URL=" + e.osURL,
 		"AXIOM_OS_INDEX=" + e.osIndex,
 		"AXIOM_PROCESSOR_URLS=" + e.runner,
 		"AXIOM_PROCESSOR_URL=" + e.runner,

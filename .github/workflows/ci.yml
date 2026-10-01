@@ -69,8 +69,8 @@ jobs:
       - name: dev scripts lint
         working-directory: .
         run: |
-          bash -n scripts/dev/*.sh deploy/launchd/qos-probe.sh
-          shellcheck --severity=warning scripts/dev/*.sh deploy/launchd/qos-probe.sh
+          bash -n scripts/dev/*.sh deploy/launchd/qos-probe.sh deploy/container/topology-smoke.sh deploy/container/entrypoint.sh
+          shellcheck --severity=warning scripts/dev/*.sh deploy/launchd/qos-probe.sh deploy/container/topology-smoke.sh deploy/container/entrypoint.sh
           # env.sh and dev-up.sh must define the same dev identity — drift would
           # point manual tool runs at a stale (or prod) namespace
           a="$(grep -hE '^DEV_(INDEX|DB)=' scripts/dev/env.sh | sort)"
@@ -155,6 +155,105 @@ jobs:
       # the environment.
       - name: "library repository contract suite (engine: sqlite, PG-free)"
         run: go test -count=1 -v ./internal/library/reposuite ./internal/library/sqlite -run 'TestRepositoryContractSuite|TestSkipGuardProbes'
+
+  # --- F14 #308: deployment-topology witnesses --------------------------------
+  # The split-process leg: the SAME functional gates as the dev-host
+  # split smoke, as an ephemeral in-CI ride. Three real `serve` processes
+  # (one binary, three roles) against a scratch database on the pgvector
+  # service and a fresh index on the OpenSearch service; the compute
+  # worker is a reference-mode child process the test itself spawns
+  # (AXIOM_F14_WORKER_PYTHON — a requirements-only venv). No host state.
+  split-topology:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: axiom_user
+          POSTGRES_PASSWORD: axiom_password
+          POSTGRES_DB: axiom_ng_ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U axiom_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      opensearch:
+        image: opensearchproject/opensearch:2.19.1
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -fsS localhost:9200 >/dev/null || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      AXIOM_TEST_DATABASE_URL:
+        "postgresql://axiom_user:axiom_password@localhost:5432/axiom_ng_ci_test?sslmode=\
+        disable"
+    steps:
+      - uses: actions/checkout@v4
+      - name: kernel mmap budget for OpenSearch
+        run: sudo sysctl -w vm.max_map_count=262144 || true
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: axiom_ng/go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # pandoc: the worker's EPUB lane shells out to it (same as the
+      # runner-pytest job); the reference stack is requirements.txt only.
+      - name: install pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+      - name: worker venv (reference stack)
+        run: |
+          python -m venv /tmp/f14-worker-venv
+          /tmp/f14-worker-venv/bin/pip install -r axiom-compute-worker/requirements.txt
+      - name: wait for OpenSearch
+        run: |
+          for i in $(seq 1 60); do
+            curl -fsS localhost:9200 >/dev/null && exit 0
+            sleep 5
+          done
+          echo "OpenSearch never became ready" >&2; exit 1
+      - name: split topology E2E (three processes + smoke classes)
+        working-directory: axiom_ng
+        env:
+          AXIOM_F14_E2E: "1"
+          AXIOM_F14_OS_URL: http://localhost:9200
+          AXIOM_F14_WORKER_PYTHON: /tmp/f14-worker-venv/bin/python
+        run: go test -count=1 -v -timeout 15m ./internal/store -run 'TestF14SplitTopologyE2E'
+
+  # The container leg: ONE image (roles per argument), the split roles as
+  # containers, the compute worker in its own network namespace (the
+  # remote-class equivalence), and the same contract-class smoke against
+  # the containerized public edge. The K8s example manifests ride along
+  # as STRUCTURAL artifacts: kubeconform validates them — no cluster in
+  # CI (documented equivalent per #308).
+  container-topology:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: kernel mmap budget for OpenSearch
+        run: sudo sysctl -w vm.max_map_count=262144 || true
+      - name: build the topology image
+        run: docker build -f deploy/container/Dockerfile -t axiom-topology .
+      - name: container split up (sequential role boot)
+        run: docker compose -f deploy/container/compose.topology.yml up -d --wait
+      - name: container split smoke
+        run: deploy/container/topology-smoke.sh "docker compose"
+      # structural validation of the K8s example (pinned kubeconform)
+      - name: kubeconform the K8s manifests
+        run: |
+          curl -fsSL -o /tmp/kubeconform.tgz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.0/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tgz -C /tmp kubeconform
+          /tmp/kubeconform -strict -summary deploy/k8s/topology.yaml
 
   go-db-it:
     runs-on: ubuntu-latest
