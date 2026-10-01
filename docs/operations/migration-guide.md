@@ -375,6 +375,32 @@ to one TTL (the dead owner's lease is still "fresh"). Wait it out — 30 s by
 default at personal-library scale — or raise
 `DefaultWriterLeaseTTL` only with a reason.
 
+### Remote-class worker behind a loopback port (source base override) {#remote-class-worker}
+
+**Symptom.** At dispatcher start a log line
+
+```text
+source base override: all ingest candidates are loopback — forcing
+http://127.0.0.1:<api-port> (configured <your-base> is not loopback-stable)
+```
+
+and afterwards every source download from a worker that runs in its own
+network namespace (container, VM) times out or connects to itself — it
+literally cannot reach the loopback of the host.
+
+**Cause.** The solo-loopback guard: when **every** ingest candidate URL is
+loopback, the dispatcher assumes co-located workers and rewrites a
+configured non-loopback source base to loopback (a production safety net —
+a stale LAN base makes every source download a zero-byte timeout for truly
+co-located workers). A containerized worker published on a loopback port
+looks co-located to the guard but is remote-class in reality.
+
+**Fix.** Address the worker by a **non-loopback, machine-resolvable** name
+(the local network name, or the machine's LAN address) and publish its port
+on all interfaces. Then the guard does not fire and the configured source
+base stays as set. (The container topology never hits this: inside a
+compose network nothing is loopback.)
+
 ### Clock-skew warnings
 
 **Symptom.** A periodic log line from the dispatcher:
@@ -425,8 +451,10 @@ Nothing but this page: a fresh machine (or an empty directory), no
 inherited environment, no host databases. Everything substrate-shaped runs
 as disposable containers; the runtime itself is the binary you build.
 
-**Prerequisites:** a Go toolchain (see `axiom_ng/go.mod`), Docker with the
-compose plugin, `jq`, `curl`, `git`.
+**Prerequisites:** a Go toolchain (see `axiom_ng/go.mod`), a container
+runtime with a compose implementation (Docker + compose plugin, or podman +
+podman-compose — the topology smoke accepts either via
+`AXIOM_TOPOLOGY_COMPOSE`), `jq`, `curl`, `git`.
 
 ### 1. Clone and build
 
@@ -465,32 +493,53 @@ class H(http.server.BaseHTTPRequestHandler):
         pass
 http.server.HTTPServer(("0.0.0.0", 23119), H).serve_forever()'
 
-# The compute worker: reference backend, from the topology image (next
-# command builds it once; the split excursion reuses it).
+# The compute worker: reference backend, from the topology image (the
+# next command builds it once; the split excursion reuses it).
+#
+# Port note: 8112 is the conventional worker port — if something already
+# listens there (or on any port below), pick a free one and use it
+# consistently. This walkthrough uses 8116.
+#
+# The publish must cover ALL interfaces (-p 8116:8112, no 127.0.0.1
+# prefix): the worker is remote-class (its own network namespace), and the
+# dispatcher refuses non-loopback source bases for loopback-co-located
+# candidates — address the worker by a machine-resolvable name instead
+# (step 3), which requires more than loopback reachability.
 docker build -f deploy/container/Dockerfile -t axiom-topology .
 docker run -d --name axiom-guide-worker \
   --add-host=host.docker.internal:host-gateway \
   -e AXIOM_PROCESSOR_PORT=8112 -e AXIOM_PROCESSOR_BIND_ADDR=0.0.0.0 \
-  -p 127.0.0.1:8112:8112 axiom-topology worker
+  -p 8116:8112 axiom-topology worker
 ```
 
 `--add-host` makes the recipe work on Linux; Docker Desktop resolves the
-name natively.
+name natively. (`docker` and `podman` are interchangeable throughout — on
+podman hosts the worker could also use the native
+`host.containers.internal` name.)
 
 ### 3. Write the environment file, then `serve all`
 
+The compute worker's URL must be a **non-loopback** name that resolves on
+this machine — the local network name (macOS: the LocalHostName with a
+`.local` suffix; Linux: the hostname/FQDN or the machine's LAN address).
+A loopback URL would trigger the dispatcher's solo-loopback guard (see
+[troubleshooting](#remote-class-worker)) and rewrite
+the source base to loopback, which the containerized worker cannot reach.
+
 ```bash
 mkdir -p "$HOME/axiom-guide-state"
-cat > "$HOME/axiom-guide-state/axiom.env" <<'EOF'
+WORKER_HOST="$(hostname -f)"                       # Linux: hostname/FQDN
+[ "$(uname -s)" = "Darwin" ] && WORKER_HOST="$(scutil --get LocalHostName).local"
+cat > "$HOME/axiom-guide-state/axiom.env" <<EOF
 export AXIOM_DATABASE_URL=postgresql://axiom:axiom@127.0.0.1:55432/axiom
 export AXIOM_OPENSEARCH_URL=http://127.0.0.1:9201
 export AXIOM_OS_INDEX=axiom-guide-chunks-v1
 export AXIOM_ZOTERO_BASE=http://127.0.0.1:23119/api
 export AXIOM_API_PORT=8111
 export AXIOM_BIND_ADDR=0.0.0.0
-export AXIOM_COMPUTE_WORKER_URLS=http://127.0.0.1:8112
-export AXIOM_COMPUTE_WORKER_URL=http://127.0.0.1:8112
-export AXIOM_QUERY_RUNNER_URL=http://127.0.0.1:8112
+export AXIOM_COMPUTE_WORKER_URLS=http://$WORKER_HOST:8116
+export AXIOM_COMPUTE_WORKER_URL=http://$WORKER_HOST:8116
+export AXIOM_QUERY_RUNNER_URL=http://$WORKER_HOST:8116
 export AXIOM_COMPUTE_WORKER_SOURCE_SECRET=guide-secret
 export AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL=http://host.docker.internal:8111
 export AXIOM_DISPATCHER_ENABLED=1
@@ -611,7 +660,9 @@ docker compose -f deploy/container/compose.topology.yml down -v
 The smoke proves the split over its own public edge (`127.0.0.1:18111`):
 health, intake through the public edge, the remote-class worker ride to
 searchability, typed search/passage shapes, the library kill probe (typed
-`library/unavailable`, leak-free), and clean teardown.
+`library/unavailable`, leak-free), and clean teardown. On podman hosts,
+substitute `docker` → `podman` and run the smoke with
+`AXIOM_TOPOLOGY_COMPOSE="python3 -m podman_compose"`.
 
 ### 7. Teardown
 
