@@ -144,7 +144,11 @@ def test_warmup_flag_true_default_marks_finished_in_reference(tmp_path):
 
 def test_health_ok_and_capabilities_surface_models_warmed_reference():
     """Reference backend: health is green; models_warmed reflects the true
-    loaded state (False until first use, since nothing is eager-loaded)."""
+    loaded state (False until first use, since nothing is eager-loaded).
+    warmup_enabled is False for this backend — warmup is real-model
+    machinery, and advertising it for perpetually-lazy stubs is exactly
+    the combination the dispatcher's #264 readiness gate reads as
+    "warming forever" (reference ingest wedged behind the gate; F14)."""
     old = settings.get()
     settings.set(Settings(work_root=None, warmup=True))
     query_service.reset()
@@ -155,7 +159,7 @@ def test_health_ok_and_capabilities_surface_models_warmed_reference():
             assert h.json()["status"] == "ok"
             assert h.json()["models_warmed"] is False
             caps = c.get("/v1/capabilities").json()
-            assert caps["warmup_enabled"] is True
+            assert caps["warmup_enabled"] is False
             assert caps["models_warmed"] is False
     finally:
         query_service.reset()

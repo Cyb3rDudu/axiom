@@ -130,7 +130,14 @@ def warmup_status() -> dict[str, Any]:
     # Plain reads are atomic under the GIL; the singletons are assigned
     # before the event is set, so the pair can only lag, never lie.
     return {
-        "warmup_enabled": settings.get().warmup,
+        # warmup is REAL-model machinery: the reference backend has nothing
+        # to preload (instant stubs, lazy by design for the hermetic
+        # counters). Reporting warmup_enabled=False there is the honest
+        # shape AND the one the dispatcher's #264 readiness gate reads as
+        # ready — warmup_enabled=True with perpetually-lazy stubs would
+        # defer claims against a reference worker forever.
+        "warmup_enabled": settings.get().warmup
+        and settings.get().compute_backend == "real",
         "warmup_finished": _warmup_event.is_set(),
         "models_warmed": _embedder is not None and _reranker is not None,
         "warmup_failed": _warmup_failed,
@@ -152,12 +159,10 @@ def start_warmup() -> None:
         _warmup_event.set()  # not planned: nothing to await
         return
     if settings.get().compute_backend != "real":
-        # Reference stubs load instantly — build them EAGERLY instead of
-        # leaving them lazy: models_warmed is "both back-ends loaded right
-        # now", and the dispatcher's #264 readiness gate defers claims
-        # forever against warmup_enabled=true + models_warmed=false. Lazy
-        # stubs would wedge every reference-mode ingest behind that gate.
-        _warmup_worker()
+        # Reference mode: no warmup machinery applies (instant stubs load
+        # lazily; warmup_status reports warmup_enabled=False for this
+        # backend). Mark the event done so await_warmup never blocks.
+        _warmup_event.set()
         return
     with _lock:
         if _warmup_planned:
