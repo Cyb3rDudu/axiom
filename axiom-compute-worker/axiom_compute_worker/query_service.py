@@ -152,9 +152,12 @@ def start_warmup() -> None:
         _warmup_event.set()  # not planned: nothing to await
         return
     if settings.get().compute_backend != "real":
-        # Nothing to warm (instant reference stubs); mark done so
-        # await_warmup never blocks. Endpoints keep lazy-loading.
-        _warmup_event.set()
+        # Reference stubs load instantly — build them EAGERLY instead of
+        # leaving them lazy: models_warmed is "both back-ends loaded right
+        # now", and the dispatcher's #264 readiness gate defers claims
+        # forever against warmup_enabled=true + models_warmed=false. Lazy
+        # stubs would wedge every reference-mode ingest behind that gate.
+        _warmup_worker()
         return
     with _lock:
         if _warmup_planned:

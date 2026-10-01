@@ -1546,6 +1546,26 @@ def _compute_reference(
 
     chunk_dicts = chunk_markdown(markdown, page_label_map)
 
+    # §11 parity for EPUB sources: the chunker pre-shapes epub_cfi locators
+    # with EMPTY cfi positions; the real backend fills them from the
+    # original XHTML DOM. That map is pure text/DOM work — no models — so
+    # the reference backend runs the SAME enrichment: a reference EPUB
+    # result must pass the same locator validation (empty cfi_start would
+    # make the store reject the whole result with LOCATOR_CFI_EMPTY).
+    if (attach.get("content_type") or "") == "application/epub+zip":
+        from .epub_cfi import build_cfi_map
+
+        entries = build_cfi_map(str(source_path))
+        _enrich_epub_cfi_locators(chunk_dicts or [], entries)
+        filled = sum(
+            1 for c in chunk_dicts or []
+            if (c.get("metadata", {}) or {}).get("cfi_start")
+        )
+        log.info(
+            "reference epub cfi enrichment: %d chunk(s), %d entry(ies), %d chunk(s) with cfi_start",
+            len(chunk_dicts or []), len(entries), filled,
+        )
+
     # Same stage shape as the real backend (stubs are instant, but
     # /v1/jobs must not look backend-dependent).
     enter("embed")
@@ -1649,6 +1669,20 @@ def _enrich_epub_cfi_locators(
         # char-exact) ride along and sharpen the envelope — unless the
         # map was tail-trimmed and the labels leave the trusted range.
         _merge_marker_pages(meta, marker_pagemap_max)
+
+        # Contract-shape chunks (chunking.chunk_markdown, the reference
+        # backend) already carry their locator dict and pass through
+        # _adapt_chunk UNTOUCHED — the meta above would never reach the
+        # §11 locator. Sync the positions into the pre-shaped locator so
+        # both backends emit real epub_cfi locators (old-style dicts have
+        # no locator; the guard skips them exactly as before).
+        loc = c.get("locator")
+        if isinstance(loc, dict) and loc.get("type") == "epub_cfi":
+            loc["cfi_start"] = cfi_start
+            loc["cfi_end"] = cfi_end
+            for key in ("page_start", "page_end", "page_trust", "chapter"):
+                if meta.get(key) is not None:
+                    loc[key] = meta[key]
 
 
 def _normalize_epub_image_paths(markdown: str) -> str:
