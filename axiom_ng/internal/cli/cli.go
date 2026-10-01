@@ -304,7 +304,10 @@ Commands:
                                 processes' internal edges (F11 #305)
   serve library                 Library slice: Zotero provider + import
                                 ladder + sync mirror (F07 #301; no
-                                store-processing, no repair); serves the
+                                store-processing) + the repair track (F14
+                                #308: the supervised repair-worker loop
+                                and write gateway live behind the Library
+                                single-writer); serves the
                                 internal Library edge on
                                 AXIOM_INTERNAL_LIBRARY_ADDR when set
   serve store                   the Store slice (F09 #303): revision

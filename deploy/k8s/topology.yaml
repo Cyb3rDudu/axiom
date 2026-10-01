@@ -31,6 +31,9 @@ metadata:
   name: axiom-config
   namespace: axiom
 data:
+  # postgres / opensearch / zotero are PLACEHOLDER Service names — the
+  # example ships the axiom roles only; operators point these at their
+  # own database, search, and Zotero hosts.
   AXIOM_OPENSEARCH_URL: http://opensearch:9200
   AXIOM_OS_INDEX: axiom-chunks
   AXIOM_PROCESSOR_URLS: http://axiom-compute-worker:8112

@@ -81,8 +81,8 @@ func TestNoKubernetesImportsAnywhere(t *testing.T) {
 // import — the sonde's detector, shared by the tree scan and the teeth
 // test so a rotted detector cannot stay green.
 func isK8sImportLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, "\"") && strings.Contains(trimmed, "k8s.io/")
+	// any quoted k8s.io path on the line — covers aliased imports too
+	return strings.Contains(strings.TrimSpace(line), "\"k8s.io/")
 }
 
 // TestK8sImportSondeHasTeeth — the red path: a planted k8s.io import line

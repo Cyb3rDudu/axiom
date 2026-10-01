@@ -96,15 +96,21 @@ ok "intake accepted through the public edge (202)"
 # --- 3. remote-class ride to searchability + typed shapes -------------------
 
 chunk_id=""
+sres=""
 for _ in $(seq 1 120); do
     sres="$(curl -fsS -m 60 -X POST "$API/api/v1/search" -H 'Content-Type: application/json' \
         -d "{\"query\":\"chapter inhalt\",\"top_n\":5,\"filters\":{\"document_ids\":[\"$doc_uuid\"]}}" 2>/dev/null || true)"
     if [ -n "$sres" ] && echo "$sres" | jq -e '(.hits | length) > 0' >/dev/null 2>&1; then
         break
     fi
+    sres=""
     sleep 5
 done
-[ -n "$sres" ] || die "search never answered"
+if [ -z "$sres" ]; then
+    echo "topology-smoke: search never became ready — store/worker tails:" >&2
+    cc logs --tail 30 store worker >&2 || true
+    die "no searchable hit through the container split"
+fi
 echo "$sres" | jq -e '(.hits | type) == "array"' >/dev/null || die "hits not an array"
 chunk_id="$(echo "$sres" | jq -r '.hits[0].chunk_id // empty')"
 [ -n "$chunk_id" ] || die "no hit — the container job did not become searchable (see: $COMPOSE logs store worker)"

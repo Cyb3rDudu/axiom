@@ -28,7 +28,12 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY axiom-compute-worker/axiom_compute_worker ./axiom_compute_worker
 COPY --from=build /out/axiom /usr/local/bin/axiom
 COPY --chmod=0755 deploy/container/entrypoint.sh /usr/local/bin/entrypoint.sh
-# run as a non-root role user; state roots are volumes in every topology
-RUN useradd --system --create-home --uid 1100 axiom
+# State roots pre-created and owned by the runtime user: fresh named
+# volumes mount root-owned otherwise, and every role writes under
+# /var/lib/axiom (artifacts, quarantine, worker roots) — uid 1100 would
+# EACCES on Linux (F14 review finding; podman's auto-chown masked it).
+RUN useradd --system --create-home --uid 1100 axiom \
+    && mkdir -p /var/lib/axiom \
+    && chown -R axiom:axiom /var/lib/axiom
 USER axiom
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

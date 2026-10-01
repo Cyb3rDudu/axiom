@@ -251,7 +251,7 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 	if baseDSN == "" || osURL == "" {
 		t.Skip("AXIOM_TEST_DATABASE_URL / AXIOM_F14_OS_URL incomplete; skipping")
 	}
-	if !strings.Contains(strings.Split(baseDSN, "?")[0], "_test") && !strings.Contains(strings.Split(baseDSN, "?")[0], "ci_test") {
+	if !strings.Contains(strings.Split(baseDSN, "?")[0], "_test") {
 		t.Fatalf("refusing to run against non-test database %q", baseDSN)
 	}
 	ctx := contextBg()
