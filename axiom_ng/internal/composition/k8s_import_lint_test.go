@@ -15,10 +15,21 @@ package composition
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 )
+
+// k8sImportLine: optional alias identifier, whitespace, then a quoted
+// k8s.io path — exactly the two spellings an import line can take. The
+// shape is ANCHORED so the sonde's own source (which mentions "k8s.io/
+// inside string literals) cannot self-flag.
+var k8sImportLine = regexp.MustCompile(`^\s*(?:[\w.]+\s+)?"k8s\.io/`)
+
+// isK8sImportLine is the sonde's detector, shared by the tree scan and
+// the teeth test so a rotted detector cannot stay green.
+func isK8sImportLine(line string) bool { return k8sImportLine.MatchString(line) }
 
 // TestNoKubernetesImportsAnywhere — red on any k8s.io import in any
 // non-test or test .go file under the module, and on any k8s.io line in
@@ -77,22 +88,22 @@ func TestNoKubernetesImportsAnywhere(t *testing.T) {
 	}
 }
 
-// isK8sImportLine reports whether one source line is a quoted k8s.io
-// import — the sonde's detector, shared by the tree scan and the teeth
-// test so a rotted detector cannot stay green.
-func isK8sImportLine(line string) bool {
-	// any quoted k8s.io path on the line — covers aliased imports too
-	return strings.Contains(strings.TrimSpace(line), "\"k8s.io/")
-}
-
-// TestK8sImportSondeHasTeeth — the red path: a planted k8s.io import line
-// must be detected (the sonde's own detector, on an in-memory string).
+// TestK8sImportSondeHasTeeth — the red path: planted k8s.io import lines
+// (plain and aliased) must be detected, and the sonde's own literal
+// mentions must NOT be.
 func TestK8sImportSondeHasTeeth(t *testing.T) {
-	planted := "package probe\n\nimport (\n\t\"k8s.io/client-go/kubernetes\"\n)\n\nvar _ = kubernetes.TODO\n"
+	planted := "package probe\n\nimport (\n\t\"k8s.io/client-go/kubernetes\"\n\tclientgo \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n)\n\nvar _ = kubernetes.TODO\n"
+	var caught int
 	for _, line := range strings.Split(planted, "\n") {
 		if isK8sImportLine(line) {
-			return // caught
+			caught++
 		}
 	}
-	t.Fatal("sonde detector does not catch a planted k8s.io import")
+	if caught != 2 {
+		t.Fatalf("sonde detector: %d planted k8s.io imports caught, want 2 (plain + aliased)", caught)
+	}
+	self := "return strings.Contains(strings.TrimSpace(line), \"\\\"k8s.io/\")"
+	if isK8sImportLine(self) {
+		t.Fatal("sonde detector self-flags its own string literal mention")
+	}
 }
