@@ -99,6 +99,8 @@ nav:
                   - Services & Releases: operations/services.md
                   - Deployment: operations/deployment.md
                   - Deployment Topologies: operations/topologies.md
+                  - Migration Guide (0.2.0): operations/migration-guide.md
+                  - Deprecation Schedule: operations/deprecations.md
                   - launchd Scheduling (QoS): operations/launchd-qos.md
                   - KG Maintenance: operations/kg-maintenance.md
                   - Retention / GC Maintenance Run: operations/retention-maintenance.md

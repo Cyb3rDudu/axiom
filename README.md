@@ -21,6 +21,12 @@ page.
 
 ## How to get it up
 
+Running 0.2.0? Start with the [Operator Migration
+Guide](https://cyb3rdudu.github.io/axiom/operations/migration-guide/) — the
+role-based runtime (`axiom serve all|api|library|store`), the name mapping,
+and the clean-machine walkthrough. The minimal 0.1.x-style setup below keeps
+working through the compatibility aliases.
+
 A minimal local setup is two processes on loopback plus two stores:
 
 ```text
@@ -67,6 +73,12 @@ first test.
 
 - **[Full Documentation](https://cyb3rdudu.github.io/axiom/)** — Welcome,
   Concept Tour, User Guide, Developer Guide, Operations, References.
+- **[Operator Guide: Migrating to 0.2.0](https://cyb3rdudu.github.io/axiom/operations/migration-guide/)** —
+  the 0.2.0 architecture map, name mapping, CLI/config migration,
+  deployment per topology, troubleshooting, and a clean-machine
+  walkthrough.
+- **[Deprecation Schedule](https://cyb3rdudu.github.io/axiom/operations/deprecations/)** —
+  alias policy and counter-based removal criteria.
 - **[Quick Start](https://cyb3rdudu.github.io/axiom/get-started/quickstart/)** —
   get up and running in minutes, with every env var.
 - **[Installation / Deployment](https://cyb3rdudu.github.io/axiom/operations/deployment/)** —

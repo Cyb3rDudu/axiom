@@ -10,7 +10,9 @@ and fix the cause (not the symptom).
 > possible for the same symptom; the diagnostic step tells you which one to
 > rule in or out first. Apply fixes at the root, not by re-running the same job
 > blindly (reprocessing only re-does changed/invalidated work, so a blind
-> restart rarely helps a real cause).
+> restart rarely helps a real cause). The 0.2.0-specific patterns — writer
+> lease / split-brain, clock-skew warnings, baseline/golden failures — live
+> in the [Operator Guide: Migrating to 0.2.0](migration-guide.md).
 
 ## The symptom table
 
