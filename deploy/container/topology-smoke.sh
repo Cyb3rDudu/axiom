@@ -11,15 +11,15 @@
 #      envelope, leak-free
 #   5. teardown: compose down leaves nothing behind
 #
-# Usage: deploy/container/topology-smoke.sh [compose-command]
-#   COMPOSE defaults to "docker compose"; podman hosts pass
-#   "podman-compose" (or a configured podman compose provider).
+# Usage: deploy/container/topology-smoke.sh
+#   COMPOSE via AXIOM_TOPOLOGY_COMPOSE (default "docker compose"); podman
+#   hosts export e.g. "podman-compose".
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 COMPOSE_DIR="$REPO/deploy/container"
 COMPOSE_FILE="$COMPOSE_DIR/compose.topology.yml"
-COMPOSE="${1:-${AXIOM_TOPOLOGY_COMPOSE:-docker compose}}"
+COMPOSE="${AXIOM_TOPOLOGY_COMPOSE:-docker compose}"
 API="http://127.0.0.1:18111"
 FIXTURE="$REPO/axiom_ng/internal/backfill/testdata/book.epub"
 SEED_PATH_IN_CONTAINER="/srv/seed/book.epub"

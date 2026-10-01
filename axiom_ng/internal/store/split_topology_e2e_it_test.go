@@ -532,8 +532,10 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 	// 4. kill probe: the library PROCESS dies → the public import status
 	// route answers the typed library/unavailable envelope, leak-free.
 	libEdgeProbe := fmt.Sprintf("http://127.0.0.1:%d/internal/v1/library/sources/probe", e.libraryEdge)
-	if lcode, lerr := probeAlive(libEdgeProbe); lerr != nil || lcode == "000" {
-		t.Fatalf("library edge not answering before the kill (code=%s err=%v) — library already dead?", lcode, lerr)
+	if lresp, lerr := http.Get(libEdgeProbe); lerr != nil {
+		t.Fatalf("library edge not answering before the kill: %v — library already dead?", lerr)
+	} else {
+		lresp.Body.Close()
 	}
 	if err := e.library.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("TERM library: %v", err)
@@ -596,15 +598,6 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 	})
 }
 
-func probeAlive(url string) (string, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return "000", err
-	}
-	defer resp.Body.Close()
-	return fmt.Sprintf("%d", resp.StatusCode), nil
-}
-
 // tailLogs renders the last lines of a process's captured output (the
 // bytes.Buffer is written by the process goroutine; reading it racily at
 // failure time is fine — it is best-effort diagnostics).
@@ -616,13 +609,7 @@ func tailLogsN(buf *bytes.Buffer, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-func tailLogs(buf *bytes.Buffer) string {
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) > 25 {
-		lines = lines[len(lines)-25:]
-	}
-	return strings.Join(lines, "\n")
-}
+func tailLogs(buf *bytes.Buffer) string { return tailLogsN(buf, 25) }
 
 // srcIDSeededMirror seeds the mirror rows the revision resolves to and
 // records the source uuid + document uuid on the env.

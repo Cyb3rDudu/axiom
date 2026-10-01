@@ -8,9 +8,7 @@ set -e
 ROLE="${1:-}"
 
 case "$ROLE" in
-serve | serve\ all | serve\ api | serve\ library | serve\ store)
-    # drop the leading role word ("serve X" -> "serve X"): the binary
-    # takes the same argv
+serve*)
     exec /usr/local/bin/axiom "$@"
     ;;
 worker)

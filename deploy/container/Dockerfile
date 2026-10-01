@@ -10,11 +10,12 @@
 # topology proof (the processor contract is backend-transparent).
 FROM golang:1.26 AS build
 WORKDIR /src
-# layer-cache friendsliness: modules first, then sources
-COPY axiom_ng/go.mod axiom_ng/go.sum ./axiom_ng/
-RUN cd axiom_ng && go mod download
-COPY axiom_ng ./axiom_ng
-RUN cd axiom_ng && CGO_ENABLED=0 go build -o /out/axiom ./cmd/axiom
+# layer-cache friendliness: modules first, then sources
+WORKDIR /src/axiom_ng
+COPY axiom_ng/go.mod axiom_ng/go.sum ./
+RUN go mod download
+COPY axiom_ng ./
+RUN CGO_ENABLED=0 go build -o /out/axiom ./cmd/axiom
 
 FROM python:3.11-slim
 # pandoc: the EPUB lane shells out to it (same as the CI runner job)
@@ -26,8 +27,7 @@ COPY axiom-compute-worker/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY axiom-compute-worker/axiom_compute_worker ./axiom_compute_worker
 COPY --from=build /out/axiom /usr/local/bin/axiom
-COPY deploy/container/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/axiom
+COPY --chmod=0755 deploy/container/entrypoint.sh /usr/local/bin/entrypoint.sh
 # run as a non-root role user; state roots are volumes in every topology
 RUN useradd --system --create-home --uid 1100 axiom
 USER axiom

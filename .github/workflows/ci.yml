@@ -211,10 +211,12 @@ jobs:
       - name: install pandoc
         run: sudo apt-get update && sudo apt-get install -y pandoc
       - name: worker venv (reference stack)
+        working-directory: .
         run: |
           python -m venv /tmp/f14-worker-venv
           /tmp/f14-worker-venv/bin/pip install -r axiom-compute-worker/requirements.txt
       - name: wait for OpenSearch
+        working-directory: .
         run: |
           for i in $(seq 1 60); do
             curl -fsS localhost:9200 >/dev/null && exit 0
@@ -242,13 +244,19 @@ jobs:
       - name: kernel mmap budget for OpenSearch
         run: sudo sysctl -w vm.max_map_count=262144 || true
       - name: build the topology image
+        working-directory: .
         run: docker build -f deploy/container/Dockerfile -t axiom-topology .
       - name: container split up (sequential role boot)
+        working-directory: .
         run: docker compose -f deploy/container/compose.topology.yml up -d --wait
       - name: container split smoke
-        run: deploy/container/topology-smoke.sh "docker compose"
+        working-directory: .
+        env:
+          AXIOM_TOPOLOGY_COMPOSE: docker compose
+        run: deploy/container/topology-smoke.sh
       # structural validation of the K8s example (pinned kubeconform)
       - name: kubeconform the K8s manifests
+        working-directory: .
         run: |
           curl -fsSL -o /tmp/kubeconform.tgz \
             https://github.com/yannh/kubeconform/releases/download/v0.6.0/kubeconform-linux-amd64.tar.gz

@@ -1,15 +1,10 @@
 #!/bin/bash
-# qos-probe.sh — reproducible scheduling-class sonde (F14 #308, from the
-# diagnostics 2026-09-21 OCRmyPDF background-QoS report).
-#
-# What it measures: whether the CURRENT process tree gets full-core
-# scheduling. It runs N parallel CPU-bound children (pure sha256 loops,
-# no I/O, no models), then reports wall time, summed CPU time, and mean
-# core occupancy. Under a launchd Background coalition macOS pins the
-# work largely to efficiency cores — a 12-child probe that would occupy
-# ~9-11 cores under Standard collapses to ~2-3 mean cores under
-# Background (the report's controlled A/B/C: 82.56 s vs 8.81 s vs 7.45 s;
-# 9.4x Standard-to-Background slowdown).
+# qos-probe.sh — reproducible scheduling-class sonde (F14 #308). Runs N
+# parallel CPU-bound children and reports wall/CPU/mean-core occupancy;
+# under a launchd Background coalition macOS pins that work to efficiency
+# cores. Measurement recipe + acceptance criteria:
+# docs/operations/launchd-qos.md; evidence:
+# docs/diagnostics/2026-09-21-ocrmypdf-background-qos.md.
 #
 # Usage:
 #   deploy/launchd/qos-probe.sh                     # measure in place

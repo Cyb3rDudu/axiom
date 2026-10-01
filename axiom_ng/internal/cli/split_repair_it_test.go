@@ -169,7 +169,7 @@ func TestIT_SplitLibraryRoleRepairKillSonde(t *testing.T) {
 	// Ports deliberately zero: RepairExecutor nil means the LOCAL binding
 	// must spawn the real child (the sonde kills a process, not a stub);
 	// the runner ports stay unused in this role set.
-	root, err := composition.Select(cfg, sondeLogger(), composition.Ports{}, libraryRoles()...)
+	root, err := composition.Select(cfg, log.New(os.Stderr, "cli-sonde: ", log.LstdFlags), composition.Ports{}, libraryRoles()...)
 	if err != nil {
 		t.Fatalf("select library roles: %v", err)
 	}
@@ -260,5 +260,3 @@ func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
 }
-
-func sondeLogger() *log.Logger { return log.New(os.Stderr, "cli-sonde: ", log.LstdFlags) }

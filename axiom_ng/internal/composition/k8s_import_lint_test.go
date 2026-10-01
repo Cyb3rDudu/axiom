@@ -62,9 +62,8 @@ func TestNoKubernetesImportsAnywhere(t *testing.T) {
 		}
 		rel, _ := filepath.Rel(root, path)
 		for i, line := range strings.Split(string(body), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "\"") && strings.Contains(trimmed, "k8s.io/") {
-				violations = append(violations, rel+":"+strconv.Itoa(i+1)+": "+trimmed)
+			if isK8sImportLine(line) {
+				violations = append(violations, rel+":"+strconv.Itoa(i+1)+": "+strings.TrimSpace(line))
 			}
 		}
 		return nil
@@ -78,18 +77,22 @@ func TestNoKubernetesImportsAnywhere(t *testing.T) {
 	}
 }
 
+// isK8sImportLine reports whether one source line is a quoted k8s.io
+// import — the sonde's detector, shared by the tree scan and the teeth
+// test so a rotted detector cannot stay green.
+func isK8sImportLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "\"") && strings.Contains(trimmed, "k8s.io/")
+}
+
 // TestK8sImportSondeHasTeeth — the red path: a planted k8s.io import line
 // must be detected (the sonde's own detector, on an in-memory string).
 func TestK8sImportSondeHasTeeth(t *testing.T) {
 	planted := "package probe\n\nimport (\n\t\"k8s.io/client-go/kubernetes\"\n)\n\nvar _ = kubernetes.TODO\n"
-	caught := false
 	for _, line := range strings.Split(planted, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "\"") && strings.Contains(trimmed, "k8s.io/") {
-			caught = true
+		if isK8sImportLine(line) {
+			return // caught
 		}
 	}
-	if !caught {
-		t.Fatal("sonde detector does not catch a planted k8s.io import")
-	}
+	t.Fatal("sonde detector does not catch a planted k8s.io import")
 }

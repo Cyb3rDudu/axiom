@@ -14,8 +14,6 @@ Runs on any host with python3 (plistlib — no macOS tools needed, so CI
 on Linux can enforce it). Exit 0 = policy holds.
 """
 
-from __future__ import annotations
-
 import sys
 from pathlib import Path
 import plistlib
