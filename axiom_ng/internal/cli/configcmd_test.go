@@ -528,3 +528,21 @@ func TestServeRoutesThroughTheChain(t *testing.T) {
 		t.Fatalf("serve must name the FILE-fed port in the guard refusal, got exit=%d: %s", exit, buf.String())
 	}
 }
+
+// TestDoctorProbeHTTPRedactsCredentialQuery — the doctor's HTTP probe
+// error lines never carry a credential query parameter: Go's url.Error
+// echoes the FULL probed URL, and an operator-typed ?password= would
+// land verbatim in the report detail (the probeDatabase precedent now
+// applies to probeHTTP too).
+func TestDoctorProbeHTTPRedactsCredentialQuery(t *testing.T) {
+	_, err := probeHTTP("http://127.0.0.1:1/_cluster/health?password=probeVIEWSECRET")
+	if err == nil {
+		t.Fatal("the probe must fail against a refused port")
+	}
+	if strings.Contains(err.Error(), "probeVIEWSECRET") {
+		t.Fatalf("probe error carried the credential value: %s", err)
+	}
+	if !strings.Contains(err.Error(), config.RedactedValue) {
+		t.Fatalf("probe error must show the redaction placeholder, got: %s", err)
+	}
+}

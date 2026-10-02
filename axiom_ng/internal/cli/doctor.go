@@ -207,12 +207,16 @@ func probeDatabase(dsn string) (*schemaInfo, error) {
 	return info, nil
 }
 
-// probeHTTP issues a bounded GET and reports the status code.
+// probeHTTP issues a bounded GET and reports the status code. Error
+// strings pass through config.RedactQueryCredentials: the probed URL
+// can carry a credential query parameter an operator typed, and Go's
+// *url.Error echoes the FULL URL — the doctor detail lines must never
+// carry it (the probeDatabase precedent).
 func probeHTTP(url string) (int, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return 0, fmt.Errorf("unreachable: %v", err)
+		return 0, fmt.Errorf("unreachable: %s", config.RedactQueryCredentials(err.Error()))
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode, nil

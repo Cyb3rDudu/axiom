@@ -283,6 +283,40 @@ func TestURLRowsDropUserinfo(t *testing.T) {
 	}
 }
 
+// Query credentials never survive ANY rendered URL row (F13 review):
+// the strict DSN sanitizer covered only the two DSN keys — every other
+// URL-shaped row (and every slice element) passes through renderOutput
+// now, so a ?password= typed into e.g. the OpenSearch URL is redacted
+// exactly like it is in a DSN. Percent-encoded key spellings included.
+func TestURLRowsRedactQueryCredentials(t *testing.T) {
+	t.Setenv("AXIOM_OPENSEARCH_URL", "http://oshost:9200?password=osVIEWSECRET")
+	t.Setenv("AXIOM_QUERY_RUNNER_URL", "http://qhost:8112?pass%77ord=pctVIEWSECRET&x=1")
+	t.Setenv("AXIOM_COMPUTE_WORKER_URLS", "http://u:p@h1:1,http://h2:2?password=listVIEWSECRET")
+	for _, e := range Effective(Load()) {
+		switch v := e.Value.(type) {
+		case string:
+			for _, secret := range []string{"osVIEWSECRET", "pctVIEWSECRET", "listVIEWSECRET"} {
+				if strings.Contains(v, secret) {
+					t.Fatalf("query credential survived in %s: %v", e.Env, v)
+				}
+			}
+		case []string:
+			for _, u := range v {
+				if strings.Contains(u, "listVIEWSECRET") {
+					t.Fatalf("query credential survived in slice row %s: %v", e.Env, v)
+				}
+			}
+		}
+	}
+	// the sanitized URL keeps its non-credential parts — redaction must
+	// not over-reach into uselessness.
+	for _, e := range Effective(Load()) {
+		if e.Env == "AXIOM_OPENSEARCH_URL" && !strings.Contains(e.Value.(string), "oshost:9200") {
+			t.Fatalf("sanitizer removed the host: %v", e.Value)
+		}
+	}
+}
+
 // A command path is not a credential (F08 review round 2): the legacy
 // AXIOM_FIXER_CMD envRow must NOT be flagged secret — flipping its
 // redaction flag back to true turns this test red, so operators keep

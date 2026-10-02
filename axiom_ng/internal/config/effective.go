@@ -178,14 +178,17 @@ func render(cfg Config, source func(envRow) string) []Entry {
 			value = f.Interface().(time.Duration).String()
 		case f.Kind() == reflect.String:
 			// URL-valued rows are non-secret by table decision, but an inline
-			// userinfo (scheme://user:pass@host) is a credential the operator
-			// typed — values never leave with one attached.
-			value = stripURLUserinfo(f.String())
+			// userinfo (scheme://user:pass@host) or a credential query
+			// parameter (?password=…, incl. percent-encoded and keyword/value
+			// spellings) is a credential the operator typed — values never
+			// leave with one attached (renderOutput is the ONE projection;
+			// the write gate refuses the same forms on the way IN).
+			value = renderOutput(f.String())
 		case f.Kind() == reflect.Slice && f.Type().Elem().Kind() == reflect.String:
 			urls, _ := f.Interface().([]string)
 			redacted := make([]string, len(urls))
 			for i, u := range urls {
-				redacted[i] = stripURLUserinfo(u)
+				redacted[i] = renderOutput(u)
 			}
 			value = redacted
 		default:
@@ -313,6 +316,14 @@ func stripURLUserinfo(s string) string {
 	}
 	u.User = nil
 	return u.String()
+}
+
+// renderOutput is the output projection for URL-shaped values: userinfo
+// stripped, then query credentials redacted — every rendered row and
+// every slice element goes through it (the DSN rows keep their stricter
+// sanitizeDSN; this covers everything else a URL can carry).
+func renderOutput(s string) string {
+	return RedactQueryCredentials(stripURLUserinfo(s))
 }
 
 // ValidateEnv re-parses the RAW environment against the table's field
