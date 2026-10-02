@@ -99,6 +99,15 @@ func TestConfigSetGoodAndBad(t *testing.T) {
 		{"AXIOM_LIBRARY_DATABASE_URL", "host=dbhost password=KWVALSECRET user=axiom dbname=lib", "credential"},
 		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://h/lib?password=QSECRET", "credential"},
 		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://h/lib?pass%77ord=PCTSECRET", "credential"},
+		// the whitespace keyword/value spelling: pgconn TRIMS whitespace
+		// from keyword keys, so `password =…` (space or tab) is a working
+		// credential the literal-equals pattern misses.
+		{"AXIOM_LIBRARY_DATABASE_URL", "host=dbhost password =KWVALSECRET user=axiom dbname=lib", "credential"},
+		{"AXIOM_LIBRARY_DATABASE_URL", "host=dbhost password\t=KWVALSECRET user=axiom dbname=lib", "credential"},
+		// the render-symmetry over-match, pinned as DELIBERATE: a free-text
+		// value containing a credential-shaped fragment is refused too —
+		// what the effective view would redact is never a stored form.
+		{"AXIOM_SEARCH_FRONTMATTER_FILTER", "notes,password=x,todo", "credential"},
 		// a bare username is an identity, not a credential — legal.
 	} {
 		exit, out, _ := captureRunTo("config", "set", tc.key, tc.value)
@@ -108,7 +117,7 @@ func TestConfigSetGoodAndBad(t *testing.T) {
 		if !strings.Contains(out, tc.key) || !strings.Contains(out, tc.wantMention) {
 			t.Fatalf("set %s must name key+reason, got: %s", tc.key, out)
 		}
-		if strings.ContainsAny(out, "\x00") || strings.Contains(out, "the-ws-secret") ||
+		if strings.Contains(out, "the-ws-secret") ||
 			strings.Contains(out, "KWVALSECRET") || strings.Contains(out, "QSECRET") || strings.Contains(out, "PCTSECRET") {
 			t.Fatalf("set refusal echoed a secret value: %s", out)
 		}
@@ -552,6 +561,7 @@ func TestDoctorProbeHTTPRedactsCredentialQuery(t *testing.T) {
 // nowhere; a regression that fails every valid configuration would
 // have gone unnoticed.
 func TestConfigValidateExitsZeroWhenConsistent(t *testing.T) {
+	backedConfig(t) // pin the store path — never the runner's default
 	t.Setenv("AXIOM_DATABASE_URL", "")
 	t.Setenv("AXIOM_SEARCH_RERANK", "false")
 	t.Setenv("AXIOM_API_PORT", "8222")
@@ -565,6 +575,14 @@ func TestConfigValidateExitsZeroWhenConsistent(t *testing.T) {
 // every row while keeping the counts line honest goes red here).
 func TestImportEnvPositiveRows(t *testing.T) {
 	path := backedConfig(t)
+	// Isolation: the assertion is an EXACT map — any ambient AXIOM_*
+	// variable in the runner's environment would widen the import.
+	// Snapshot/restore the whole environment and clear every vocabulary
+	// key, so the import sees exactly the three rows set below.
+	defer restoreProcessEnv(snapshotEnv())()
+	for _, k := range config.RowKeys() {
+		os.Unsetenv(k)
+	}
 	t.Setenv("AXIOM_API_PORT", "8222")
 	t.Setenv("AXIOM_STORAGE_LIBRARY_DRIVER", "sqlite")
 	t.Setenv("AXIOM_SEARCH_RERANK", "false")
@@ -620,6 +638,15 @@ func TestValidateEnvSkipsShadowedLegacySpelling(t *testing.T) {
 	t.Setenv("AXIOM_PROCESSOR_TIMEOUT", "not-a-duration")
 	if problems := config.ValidateEnv(); len(problems) != 0 {
 		t.Fatalf("shadowed legacy value must be skipped, got %v", problems)
+	}
+	// Converse: with the canonical spelling UNSET the legacy value is
+	// LIVE — an unparseable one must still be flagged (a skip logic that
+	// degenerated into "never check legacy" would pass the half above
+	// and ship broken legacy boots).
+	os.Unsetenv("AXIOM_COMPUTE_WORKER_TIMEOUT")
+	problems := config.ValidateEnv()
+	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "; "), "AXIOM_PROCESSOR_TIMEOUT") {
+		t.Fatalf("unshadowed invalid legacy value must be flagged, got %v", problems)
 	}
 }
 

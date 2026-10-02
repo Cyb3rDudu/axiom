@@ -158,6 +158,18 @@ func EffectiveChain(cfg Config, ch Chain) []Entry {
 	return render(cfg, ch.stage)
 }
 
+// RowKeys lists every environment key the loader reads (one per
+// envRows row) — callers needing the exact vocabulary (test isolation
+// pinning the ambient environment before asserting exact import
+// results) use it instead of re-deriving the set.
+func RowKeys() []string {
+	keys := make([]string, 0, len(envRows))
+	for _, row := range envRows {
+		keys = append(keys, row.env)
+	}
+	return keys
+}
+
 // render is the shared row renderer; source decides each row's stage
 // label.
 func render(cfg Config, source func(envRow) string) []Entry {
@@ -260,10 +272,24 @@ func RedactQueryCredentials(s string) string {
 	return credentialQueryRe.ReplaceAllString(s, "$1="+RedactedValue)
 }
 
+// credentialKeywordRe matches the DSN keyword/value credential form
+// with WHITESPACE tolerated around the equals sign — pgconn TRIMS
+// " \t\n\r\v\f" from keyword/value keys before matching (pgconn
+// config.go, v5.9.2), so `host=h password =KWVAL dbname=d` is a WORKING
+// credential the query-parameter pattern above misses (it requires the
+// literal `=` directly after the key). The pattern lives on the WRITE
+// side only: an unparseable DSN renders as the wholesale redaction
+// placeholder, so the render regex stays literal — the gate is
+// deliberately at least as wide as anything the loader honors. The
+// over-match in a URL query (`?password =x`, which pgx does NOT honor —
+// exact-key lookup) is harmless: refused, never mis-opened.
+var credentialKeywordRe = regexp.MustCompile(
+	"(?i)(?:^|\\s)(?:sslpassword|passfile|password)[ \\t\\n\\r\\v\\f]*=")
+
 // InlineCredential reports whether a NON-secret value still carries a
 // credential in a form the loaders honor — the write-surface refusal
 // predicate (F13 review: the render side's own credential recognition,
-// reused as the gate). Two forms:
+// reused as the gate). Three forms:
 //
 //   - userinfo WITH a password (scheme://user:pass@…). A bare username
 //     (scheme://user@…) is an identity, not a credential — legal.
@@ -273,16 +299,27 @@ func RedactQueryCredentials(s string) string {
 //     branch also covers the DSN keyword/value form
 //     ("host=h password=kw dbname=d"): the same literal key=value
 //     shape, matched to the next whitespace.
+//   - the whitespace-spelled keyword/value form ("password =kw"):
+//     pgconn trims whitespace from the key, so it is a working
+//     credential — see credentialKeywordRe.
 //
 // The return value names the FORM for the refusal message — never any
 // part of the value. Empty return = no credential found.
-func InlineCredential(key, value string) string {
+//
+// Deliberate over-match: a free-text value containing a
+// credential-shaped fragment (say a filter listing `notes,password=x,todo`)
+// is refused too. The rule is render-symmetric — whatever the effective
+// view would REDACT is unwritable — and per-key URL-shape detection
+// would buy back exactly the smuggle-via-another-key problem the
+// symmetry exists to close. A redacted render is never a legal stored
+// form; such a value keeps riding the environment.
+func InlineCredential(value string) string {
 	if u, err := url.Parse(value); err == nil && u.Scheme != "" && u.User != nil {
 		if _, hasPW := u.User.Password(); hasPW {
 			return "inline userinfo credential (scheme://user:pass@…)"
 		}
 	}
-	if RedactQueryCredentials(value) != value {
+	if RedactQueryCredentials(value) != value || credentialKeywordRe.MatchString(value) {
 		return "query-parameter credential (password/sslpassword/passfile, incl. percent-encoded and keyword/value spellings)"
 	}
 	return ""

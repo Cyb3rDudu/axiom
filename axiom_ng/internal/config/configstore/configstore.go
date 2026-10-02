@@ -48,9 +48,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -223,7 +224,7 @@ func (s *Store) SetAll(values, secretRefs map[string]string) error {
 		return err
 	}
 	defer tx.Rollback() // no-op after Commit
-	for _, key := range sortedKeysOf(values) {
+	for _, key := range slices.Sorted(maps.Keys(values)) {
 		if key == "" {
 			return fmt.Errorf("config sqlite: empty key")
 		}
@@ -233,7 +234,7 @@ func (s *Store) SetAll(values, secretRefs map[string]string) error {
 			return err
 		}
 	}
-	for _, key := range sortedKeysOf(secretRefs) {
+	for _, key := range slices.Sorted(maps.Keys(secretRefs)) {
 		if secretRefs[key] != SecretRefSourceEnv {
 			return fmt.Errorf("config sqlite: unknown secret-ref source %q (known: %s)", secretRefs[key], SecretRefSourceEnv)
 		}
@@ -244,16 +245,6 @@ func (s *Store) SetAll(values, secretRefs map[string]string) error {
 		}
 	}
 	return tx.Commit()
-}
-
-// sortedKeysOf returns the map's keys in sorted order.
-func sortedKeysOf[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // Unset removes one key from BOTH tables — an override row and a
@@ -314,7 +305,7 @@ func checkRuntimeOnly(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if len(foreign) > 0 {
-		sort.Strings(foreign)
+		slices.Sort(foreign)
 		return fmt.Errorf("runtime-only rule violated: file carries domain/foreign tables %v — config.sqlite is runtime configuration, never Fachdaten (check AXIOM_CONFIG_PATH)", foreign)
 	}
 	return nil
@@ -448,7 +439,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	for _, name := range names {
 		sqlText, err := schemaFS.ReadFile(name)
 		if err != nil {
@@ -510,12 +501,16 @@ func withDB(path string, fn func(context.Context, *sql.DB) error) error {
 // reads as empty, env-equivalent: booting against it behaves like the
 // env-only path, and the next writer migrates it. A file whose ledger
 // claims applied migrations but whose runtime tables are gone is
-// CORRUPT, not uninitialized: loud.
+// CORRUPT, not uninitialized: loud. The existence count matches
+// checkRuntimeOnly's vocabulary (tables AND views): a VIEW named
+// settings passed the Fachdaten gate must read as PRESENT, not as
+// absent — the subsequent SELECT then either works or errors loudly,
+// never silently empty.
 func readAll(ctx context.Context, db *sql.DB) (Settings, error) {
 	s := Settings{Values: map[string]string{}, SecretRefs: map[string]string{}}
 	var runtimeTables int
 	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('settings', 'secret_refs')`).Scan(&runtimeTables); err != nil {
+		`SELECT count(*) FROM sqlite_master WHERE type IN ('table', 'view') AND name IN ('settings', 'secret_refs')`).Scan(&runtimeTables); err != nil {
 		return s, err
 	}
 	if runtimeTables == 0 {

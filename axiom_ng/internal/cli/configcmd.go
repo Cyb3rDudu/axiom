@@ -6,7 +6,8 @@
 // full consistency check (validate: env values, file rows, secret-ref
 // drift, and the composition wiring), and the one-shot env importer
 // (import-env: non-secrets as values, secrets as REFERENCES — values
-// never enter the file or any output line).
+// never enter the file or any output line; credential-carrying rows
+// skipped loudly, left env-only).
 package cli
 
 import (
@@ -14,8 +15,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/composition"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
@@ -225,8 +227,8 @@ func cmdConfigImportEnv(name string) int {
 	// everything else is validated before the first write.
 	var skipped []string
 	clean := make(map[string]string, len(values))
-	for _, k := range sortedKeys(values) {
-		if form := config.InlineCredential(k, values[k]); form != "" {
+	for _, k := range slices.Sorted(maps.Keys(values)) {
+		if form := config.InlineCredential(values[k]); form != "" {
 			skipped = append(skipped, fmt.Sprintf("%s (%s — left in the environment, not imported)", k, form))
 			continue
 		}
@@ -256,17 +258,6 @@ func cmdConfigImportEnv(name string) int {
 	fmt.Printf("imported %d settings and %d secret references from the environment into config.sqlite (idempotent; secrets stored as references only — values stay in the environment)\n",
 		len(clean), len(refs))
 	return exitOK
-}
-
-// sortedKeys returns the map's keys in sorted order (deterministic
-// write and message order).
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // openConfigStore opens (creating atomically on first write) the

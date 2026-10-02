@@ -298,10 +298,11 @@ func validateKV(key, value, stage string) []string {
 	// predicate (InlineCredential): whatever the effective view would
 	// REDACT must never be WRITABLE — userinfo-with-password, query
 	// parameters (literal, percent-encoded, and DSN keyword/value
-	// spellings of password/sslpassword/passfile). The credential-free
-	// value is the storable form; the credential rides the environment /
+	// spellings — whitespace-tolerant, as pgconn trims keys — of
+	// password/sslpassword/passfile). The credential-free value is the
+	// storable form; the credential rides the environment /
 	// OS secret store. The message names the FORM, never the value.
-	if form := InlineCredential(key, value); form != "" {
+	if form := InlineCredential(value); form != "" {
 		problems = append(problems, fmt.Sprintf("%s: carries %s — store the credential-free value in %s and feed the credential via env / OS secret store", key, form, stage))
 	}
 	return problems
@@ -386,7 +387,14 @@ func SecretRefDrift() []string {
 			}
 		}
 		if !fed {
-			problems = append(problems, fmt.Sprintf("%s: secret reference expects the environment to feed it, but neither it nor its dual-fed sibling is set — the default (empty) applies", key))
+			// The sibling clause is PAIR-AWARE phrasing: for a dual-fed
+			// secret either spelling feeds it; an unpaired secret key has
+			// no sibling to name.
+			if _, dual := pairOf(key); dual {
+				problems = append(problems, fmt.Sprintf("%s: secret reference expects the environment to feed it, but neither it nor its dual-fed sibling is set — the default (empty) applies", key))
+			} else {
+				problems = append(problems, fmt.Sprintf("%s: secret reference expects the environment to feed it, but the environment does not feed it — the default (empty) applies", key))
+			}
 		}
 	}
 	sort.Strings(problems)

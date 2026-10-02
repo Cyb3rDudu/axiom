@@ -147,22 +147,7 @@ func TestConfigstoreConfinementCatchesPlantedImports(t *testing.T) {
 	// Legal shape 3: a HIDDEN directory (the transient .blankprobe-N trees
 	// another package's tests create under the module root mid-run) is
 	// skipped wholesale — the standing gate must not race parallel tests.
-	{
-		root := t.TempDir()
-		dir := filepath.Join(root, ".blankprobe-race")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "planted.go"),
-			[]byte("package main\n\nimport _ \""+modulePath+"/internal/config/configstore\"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		perPkg, err := scanImports(root)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if v := confinementViolations(perPkg); len(v) != 0 {
-			t.Fatalf("hidden dot-directory probe trees must be skipped, got %v", v)
-		}
+	if v := probe(".blankprobe-race"); len(v) != 0 {
+		t.Fatalf("hidden dot-directory probe trees must be skipped, got %v", v)
 	}
 }

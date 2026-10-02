@@ -401,15 +401,73 @@ func TestAdoptedFileTightenedTo0600(t *testing.T) {
 // TestReadRejectsURLSignificantPathChars — the read path carries the
 // same guard as the write path: a PRESENT file whose path contains a
 // "?" must not be opened (the DSN would silently redirect to a
-// different file).
+// DIFFERENT file). A valid store sits at the misdirected literal
+// target and a 0-byte file at the ?-carrying name (so Read passes the
+// Stat check and reaches the guard): without the guard the DSN reads
+// the marker row and returns clean — this shape is what makes the
+// witness able to fail.
 func TestReadRejectsURLSignificantPathChars(t *testing.T) {
 	dir := t.TempDir()
+	literal := filepath.Join(dir, "a")
+	st, err := Open(literal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Set("AXIOM_API_PORT", "8012"); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
 	weird := filepath.Join(dir, "a?b.sqlite")
 	if err := os.WriteFile(weird, nil, 0o600); err != nil { // present at the literal name
 		t.Fatal(err)
 	}
 	if _, _, err := Read(weird); err == nil {
 		t.Fatal("read must reject ? in the path of a present file")
+	}
+	// the literal target itself stays readable — the guard is on the
+	// PATH, not on the store.
+	s, found, err := Read(literal)
+	if err != nil || !found || s.Values["AXIOM_API_PORT"] != "8012" {
+		t.Fatalf("the literal target must stay readable, found=%v err=%v values=%v", found, err, s.Values)
+	}
+}
+
+// TestCorruptFileStaysLoud — the corrupt shapes ERROR, never read as
+// empty: (a) a ledger claiming applied migrations with both runtime
+// tables gone; (b) settings present but secret_refs dropped. Both are
+// damaged past-selves (truncation victims, not the crashed-first-write
+// uninitialized shape) — reading them as empty would silently discard
+// the operator's overrides behind a green boot.
+func TestCorruptFileStaysLoud(t *testing.T) {
+	drop := func(t *testing.T, path, stmts string) {
+		db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(stmts); err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+	}
+	for _, tc := range []struct {
+		name, stmts, wantErr string
+	}{
+		{"both-tables-gone", `DROP TABLE settings; DROP TABLE secret_refs;`, "corrupt"},
+		{"secret-refs-gone", `DROP TABLE secret_refs;`, "no such table"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.sqlite")
+			st := openStore(t, path)
+			if err := st.Set("AXIOM_API_PORT", "8012"); err != nil {
+				t.Fatal(err)
+			}
+			st.Close()
+			drop(t, path, tc.stmts)
+			_, _, err := Read(path)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("corrupt shape must error naming %q, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }
 
