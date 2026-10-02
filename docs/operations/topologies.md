@@ -1,7 +1,9 @@
 # Deployment topologies
 
-Date: F14 (#308) — structural overview; the operator walkthrough (install,
-upgrade, secrets, backup) follows with F15 (#309)
+Date: F14 (#308) — structural overview; the operator entry point is the
+[migration guide](migration-guide.md) (F15, #309). Secrets handling lives
+in [Services & Releases](services.md); a dedicated backup runbook follows
+with the release train.
 Scope: which role runs in which operating form, which edges exist between
 processes, and which witness proves each form in CI
 

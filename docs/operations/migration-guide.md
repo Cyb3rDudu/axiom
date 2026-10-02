@@ -17,7 +17,9 @@ public edge:
 - **Unchanged:** every public HTTP route (the unversioned compat routes and
   the versioned `/api/v1/{health,search,passage/{id}}` edge) behaves
   byte-identically through 0.2.x. The F01 golden suite (#295) froze the
-  0.1.18 baseline as the witness; the same suite runs green against the new
+  0.1.18 baseline as the witness — the frozen route inventory lives at
+  `axiom_ng/internal/baseline/fixtures/api_inventory.txt` in the repository;
+  the same suite runs green against the new
   binary in all-in-one **and** split-process form.
 - **Unchanged:** your environment. Every 0.1.x env var still loads; legacy
   spellings feed their canonical successors through the deprecation witness
@@ -223,7 +225,8 @@ Operating rules that matter to an operator:
 - **SQLite is single-host.** The WAL lives next to the file; one host's
   process set owns it. Multi-replica or network-filesystem deployments need
   PostgreSQL (SQLite on NFS is corruption).
-- **The Zotero sync mirror lane (Mits-Schrieb)** stays wired **only** in
+- **The write-along sync mirror lane** (the German term *Mits-Schrieb*
+  appears in the codebase and log lines) stays wired **only** in
   shared-database shapes (own DSN unset, or identical to the core DSN). A
   separate library DSN or the SQLite profile unwires it — with a loud log
   line, never silently.
