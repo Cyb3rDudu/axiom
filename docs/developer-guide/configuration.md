@@ -1,10 +1,12 @@
 # Configuration
 
-Every axiom knob is read from an `AXIOM_*` environment variable at startup.
-This page is the **single, machine-maintainable reference** for all of them.
-The two code bases each read their own set — the Go orchestrator
-(`axiom_ng`) and the Python runner (`axiom_compute_worker`) — so the table is
-organized by *where the variable is consumed* (`set by`).
+Every axiom knob is read from an `AXIOM_*` environment variable at startup —
+and, since F13 (#307), optionally from the persistent runtime configuration
+file `config.sqlite` under the state root. This page is the **single,
+machine-maintainable reference** for all of them. The two code bases each
+read their own set — the Go orchestrator (`axiom_ng`) and the Python runner
+(`axiom_compute_worker`) — so the table is organized by *where the variable
+is consumed* (`set by`).
 
 > **Single source:** this table is meant to be regenerated from code. Each
 > variable's name, default, and consumer live in exactly one place in the source
@@ -12,6 +14,67 @@ organized by *where the variable is consumed* (`set by`).
 > `axiom-compute-worker/config.py` for the Python set). A completeness grep against
 > those two files is the DoD check for this page — nothing here should exist
 > without a code backing, and no code variable should be missing.
+
+## The resolution chain (F13 #307)
+
+The Go orchestrator resolves every `AXIOM_*` knob through one chain:
+
+```
+--set KEY=VALUE flag  >  environment variable  >  config.sqlite row  >  default
+```
+
+- Each stage overrides only what it sets; unset stages fall through.
+- **Env-only is the fully supported path**: without a `config.sqlite`, every
+  boot resolves exactly as before (the container story — no file needed, none
+  created).
+- The file layer and the flag layer apply with **environment semantics**: a
+  value stored in the file behaves exactly as if the operator had exported it
+  (same parsers, same dual-fed canonical/legacy rules, same deprecation
+  witnesses on legacy spellings).
+- One resolution per process: `axiom serve`, `doctor`, and `config` resolve
+  once at entry; child processes inherit the resolved environment.
+- The **KG legacy mode flags** do not read `--set`; they resolve through the
+  chain without flags.
+
+### `config.sqlite` — the persistent runtime configuration
+
+One small SQLite file per host installation (default `~/.axiom-ng/config.sqlite`,
+override with `AXIOM_CONFIG_PATH`), created atomically on first write
+(`config set` / `config import-env`), WAL journal, restrictive permissions.
+
+| Table | Content |
+| --- | --- |
+| `settings` | Non-secret overrides. Key = the canonical `AXIOM_*` name (one vocabulary across env, file, and `--set`); value in its exact environment spelling. |
+| `secret_refs` | Secret **references**, never values: a row records that a secret key's value is expected from the process environment (`source=env`). The value itself stays in the OS secret store / environment. |
+| `config_schema_migrations` | The version ledger (own migrations, embedded in the binary). |
+
+Hard rules with teeth:
+
+- **Runtime configuration only — never domain data.** The store refuses files
+  carrying any table outside the vocabulary above (a Library/Store schema
+  smuggled in, or `AXIOM_CONFIG_PATH` pointed at a domain database, fails
+  loudly at read time).
+- **No secret values, ever.** `config set` refuses secret keys; `import-env`
+  stores secrets as references; the inspection tests prove zero secret bytes
+  in the file, its WAL sidecar, and every output line.
+- A **present-but-invalid file** (unknown key, unparseable value, secret
+  value) refuses startup with a diagnosis — never a silent fall-back to
+  defaults.
+
+### CLI surface
+
+| Command | Effect |
+| --- | --- |
+| `axiom config get --effective [--json]` | One row per key: effective value (secrets redacted, DSN credential-free) and the source column `flag`/`env`/`file`/`default`. |
+| `axiom config set KEY VALUE` | Write one override into `config.sqlite` — validated FIRST: unknown key, type violation, vocabulary violation (e.g. an unknown storage driver), and secret keys each exit **1** with the diagnosis and touch nothing. Argument-shape errors exit **2**. |
+| `axiom config unset KEY` | Remove one override (idempotent; unknown keys refused like `set`). |
+| `axiom config validate` | Full consistency pass: env values parse, file rows valid, secret references still have their env source, and the derived role set wires (composition check, network-free). Exit 0 only when everything holds. |
+| `axiom config import-env` | One-shot import of the current environment into `config.sqlite`: non-secrets as `settings` rows, secrets as `secret_refs` (values never enter the file). Idempotent — a replay writes the same state. The effective configuration does not move: the environment still owns every imported key until it is cleared; the file row takes over then. |
+| `axiom --set KEY=VALUE …` | One-shot override on `serve`, `doctor`, and `config` (repeatable) — the CLI-flag stage of the chain. Same validation teeth as `config set`; secret keys are refused (command lines are visible in history and `ps`). |
+
+`axiom doctor` reports the file as its own `config-file` check: absent = ok
+(the env-only bootstrap), present = shape summary, broken = fail with the
+cfg-dependent checks skipped honestly.
 
 ## Conventions
 
@@ -88,6 +151,8 @@ organized by *where the variable is consumed* (`set by`).
 > The runner reads its variables under a shared processor prefix in
 > `config.py`; each is listed above by its full name.
 
+| `AXIOM_CONFIG_PATH` | `~/.axiom-ng/config.sqlite` | Location of the persistent runtime configuration file (F13 #307). Unset/absent = the env-only bootstrap (the container path — nothing is created). |
+
 ## Near-miss pairs
 
 These look almost identical but belong to **different processes / scopes**.
@@ -126,6 +191,7 @@ CI step can diff `config.go`'s `Load()` and the runner package's
 `config.py` **and** `axiom-compute-worker/__init__.py` (where
 `AXIOM_PROCESSOR_COMPUTE` is re-read) — against this table and flag (a) a code
 variable missing here, or (b) a table row without a code backing. The grep
-targets the package(s), not a single file.
+targets the package(s), not a single file; `AXIOM_CONFIG_PATH` lives in
+`internal/config/configstore` (the store-location knob, not a `Load()` knob).
 
 Next: [Testing](testing.md) · [Architecture Overview](architecture.md)
