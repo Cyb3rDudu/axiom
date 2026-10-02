@@ -254,6 +254,34 @@ func RedactQueryCredentials(s string) string {
 	return credentialQueryRe.ReplaceAllString(s, "$1="+RedactedValue)
 }
 
+// InlineCredential reports whether a NON-secret value still carries a
+// credential in a form the loaders honor — the write-surface refusal
+// predicate (F13 review: the render side's own credential recognition,
+// reused as the gate). Two forms:
+//
+//   - userinfo WITH a password (scheme://user:pass@…). A bare username
+//     (scheme://user@…) is an identity, not a credential — legal.
+//   - a query parameter the render side itself redacts: password /
+//     sslpassword / passfile, literal AND percent-encoded key spellings
+//     (pgconn decodes both — verified in this package's tests). This
+//     branch also covers the DSN keyword/value form
+//     ("host=h password=kw dbname=d"): the same literal key=value
+//     shape, matched to the next whitespace.
+//
+// The return value names the FORM for the refusal message — never any
+// part of the value. Empty return = no credential found.
+func InlineCredential(key, value string) string {
+	if u, err := url.Parse(value); err == nil && u.Scheme != "" && u.User != nil {
+		if _, hasPW := u.User.Password(); hasPW {
+			return "inline userinfo credential (scheme://user:pass@…)"
+		}
+	}
+	if RedactQueryCredentials(value) != value {
+		return "query-parameter credential (password/sslpassword/passfile, incl. percent-encoded and keyword/value spellings)"
+	}
+	return ""
+}
+
 // sanitizeDSN strips the credential from a Postgres DSN, keeping scheme,
 // host, port, database and params — the whole userinfo is dropped AND
 // credential query values (password, sslpassword, passfile — pgx honors

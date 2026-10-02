@@ -243,6 +243,42 @@ func TestFileCarriesZeroSecretBytes(t *testing.T) {
 			}
 		}
 	}
+
+	// POSITIVE CONTROL (review finding): the sonde must be able to FAIL.
+	// A planted secret through a RAW handle — the exact bypass a future
+	// write-path regression would amount to — must be DETECTED by this
+	// scan shape; a scanner that cannot go red proves nothing. The
+	// planted file is quarantined in its own directory.
+	qdir := filepath.Join(dir, "quarantine")
+	if err := os.MkdirAll(qdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	planted := filepath.Join(qdir, "planted.sqlite")
+	if err := os.WriteFile(planted, []byte("settings blob containing hunter2-password raw"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !scanCarries(planted, []string{"hunter2-password"}) {
+		t.Fatal("the byte scan missed a planted secret — the sonde is vacuous")
+	}
+	if scanCarries(path, []string{"hunter2-password"}) {
+		t.Fatal("positive control cross-contaminated the sanctioned store")
+	}
+}
+
+// scanCarries reports whether any of secrets appears in the file's
+// bytes — the sonde primitive both the clean assertion and the
+// positive control share.
+func scanCarries(path string, secrets []string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, secret := range secrets {
+		if strings.Contains(string(b), secret) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestDefaultPathOverride — AXIOM_CONFIG_PATH wins, the default sits in

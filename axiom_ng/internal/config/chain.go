@@ -291,15 +291,16 @@ func validateKV(key, value, stage string) []string {
 		return []string{fmt.Sprintf("%s: empty value is unset semantics here — unset the key instead", key)}
 	}
 	problems := checkRawValue(row, value)
-	// No credentials on the value-carrying surfaces: a URL with inline
-	// userinfo (scheme://user:pass@host) is a credential the operator
-	// typed — config.sqlite (and ps/history for --set) must never hold
-	// it. The credential-free URL is the storable form; the credential
-	// rides the environment / OS secret store (the render side already
-	// strips userinfo from every OUTPUT — this keeps it out of the
-	// INPUT).
-	if stripURLUserinfo(value) != value {
-		problems = append(problems, fmt.Sprintf("%s: carries an inline credential (userinfo) — store the credential-free URL in %s and feed the credential via env / OS secret store", key, stage))
+	// No credentials on the value-carrying surfaces. The gate is the
+	// render side's own credential recognition turned into a refusal
+	// predicate (InlineCredential): whatever the effective view would
+	// REDACT must never be WRITABLE — userinfo-with-password, query
+	// parameters (literal, percent-encoded, and DSN keyword/value
+	// spellings of password/sslpassword/passfile). The credential-free
+	// value is the storable form; the credential rides the environment /
+	// OS secret store. The message names the FORM, never the value.
+	if form := InlineCredential(key, value); form != "" {
+		problems = append(problems, fmt.Sprintf("%s: carries %s — store the credential-free value in %s and feed the credential via env / OS secret store", key, form, stage))
 	}
 	return problems
 }

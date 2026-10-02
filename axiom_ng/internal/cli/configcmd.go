@@ -198,7 +198,20 @@ func cmdConfigValidate(flags map[string]string) int {
 // until it is cleared (the file row takes over then).
 func cmdConfigImportEnv(name string) int {
 	values, refs := config.EnvImportRows()
-	if problems := config.ValidateSettings(values, refs); len(problems) > 0 {
+	// Credential-carrying values are legal IN THE ENVIRONMENT but never
+	// enter the file: those rows are SKIPPED loudly (the environment
+	// keeps owning them — the effective configuration does not move);
+	// everything else is validated before the first write.
+	var skipped []string
+	clean := make(map[string]string, len(values))
+	for _, k := range sortedKeys(values) {
+		if form := config.InlineCredential(k, values[k]); form != "" {
+			skipped = append(skipped, fmt.Sprintf("%s (%s — left in the environment, not imported)", k, form))
+			continue
+		}
+		clean[k] = values[k]
+	}
+	if problems := config.ValidateSettings(clean, refs); len(problems) > 0 {
 		for _, p := range problems {
 			fmt.Println("invalid:", p)
 		}
@@ -211,31 +224,35 @@ func cmdConfigImportEnv(name string) int {
 		return exitFailure
 	}
 	defer st.Close()
-	keys := make([]string, 0, len(values))
-	for k := range values {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if err := st.Set(k, values[k]); err != nil {
+	for _, k := range sortedKeys(clean) {
+		if err := st.Set(k, clean[k]); err != nil {
 			fmt.Fprintf(os.Stderr, "%s config import-env: %v\n", name, err)
 			return exitFailure
 		}
 	}
-	refKeys := make([]string, 0, len(refs))
-	for k := range refs {
-		refKeys = append(refKeys, k)
-	}
-	sort.Strings(refKeys)
-	for _, k := range refKeys {
+	for _, k := range sortedKeys(refs) {
 		if err := st.SetSecretRef(k, refs[k]); err != nil {
 			fmt.Fprintf(os.Stderr, "%s config import-env: %v\n", name, err)
 			return exitFailure
 		}
 	}
+	for _, s := range skipped {
+		fmt.Println("skipped:", s)
+	}
 	fmt.Printf("imported %d settings and %d secret references from the environment into config.sqlite (idempotent; secrets stored as references only — values stay in the environment)\n",
-		len(values), len(refs))
+		len(clean), len(refs))
 	return exitOK
+}
+
+// sortedKeys returns the map's keys in sorted order (deterministic
+// write and message order).
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // openConfigStore opens (creating atomically on first write) the

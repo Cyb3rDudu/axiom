@@ -319,7 +319,7 @@ func TestValidateFlagsTeeth(t *testing.T) {
 		"AXIOM_QUERY_RUNNER_URL": "http://u:pw@runner:8012",
 	})
 	joined := strings.Join(problems, "\n")
-	for _, want := range []string{"AXIOM_NOPE", "AXIOM_API_PORT", "AXIOM_WS_SECRET", "AXIOM_SEARCH_RERANK", "AXIOM_FIXER_INTERVAL", "AXIOM_QUERY_RUNNER_URL", "inline credential"} {
+	for _, want := range []string{"AXIOM_NOPE", "AXIOM_API_PORT", "AXIOM_WS_SECRET", "AXIOM_SEARCH_RERANK", "AXIOM_FIXER_INTERVAL", "AXIOM_QUERY_RUNNER_URL", "credential"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("problems must name %s, got: %v", want, problems)
 		}
@@ -345,7 +345,7 @@ func TestValidateSettingsTeeth(t *testing.T) {
 		"AXIOM_LIBRARY_DATABASE_URL": "postgresql://u:pw@h/lib",
 	}, map[string]string{"AXIOM_WS_SECRET": "env"})
 	joined := strings.Join(problems, "\n")
-	for _, want := range []string{"AXIOM_NOPE", "AXIOM_DATABASE_URL", "AXIOM_SEARCH_RERANK", "AXIOM_DISPATCHER_LEASE", "AXIOM_API_PORT", "out of range", "AXIOM_LIBRARY_DATABASE_URL", "inline credential"} {
+	for _, want := range []string{"AXIOM_NOPE", "AXIOM_DATABASE_URL", "AXIOM_SEARCH_RERANK", "AXIOM_DISPATCHER_LEASE", "AXIOM_API_PORT", "out of range", "AXIOM_LIBRARY_DATABASE_URL", "credential"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("problems must name %s, got: %v", want, problems)
 		}

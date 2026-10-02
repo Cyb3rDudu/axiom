@@ -93,7 +93,13 @@ func TestConfigSetGoodAndBad(t *testing.T) {
 		{"AXIOM_SEARCH_RERANK", "maybe", "not a boolean"},
 		{"AXIOM_STORAGE_LIBRARY_DRIVER", "oracle", "unknown driver"},
 		{"AXIOM_WS_SECRET", "the-ws-secret", "secret"},
-		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://u:pw@h/lib", "inline credential"},
+		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://u:pw@h/lib", "credential"},
+		// the three probe-confirmed leak forms of the credential review:
+		// DSN keyword/value, query parameter, percent-encoded query key.
+		{"AXIOM_LIBRARY_DATABASE_URL", "host=dbhost password=KWVALSECRET user=axiom dbname=lib", "credential"},
+		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://h/lib?password=QSECRET", "credential"},
+		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://h/lib?pass%77ord=PCTSECRET", "credential"},
+		// a bare username is an identity, not a credential — legal.
 	} {
 		exit, out, _ := captureRunTo("config", "set", tc.key, tc.value)
 		if exit != exitFailure {
@@ -102,11 +108,14 @@ func TestConfigSetGoodAndBad(t *testing.T) {
 		if !strings.Contains(out, tc.key) || !strings.Contains(out, tc.wantMention) {
 			t.Fatalf("set %s must name key+reason, got: %s", tc.key, out)
 		}
-		if strings.Contains(out, "the-ws-secret") {
+		if strings.ContainsAny(out, "\x00") || strings.Contains(out, "the-ws-secret") ||
+			strings.Contains(out, "KWVALSECRET") || strings.Contains(out, "QSECRET") || strings.Contains(out, "PCTSECRET") {
 			t.Fatalf("set refusal echoed a secret value: %s", out)
 		}
 	}
-	// the refusals wrote nothing beyond the good row
+	// the refusals wrote nothing beyond the good row — AND the file
+	// bytes stay free of every planted secret (the credential-form
+	// refusals must never have touched the write path).
 	settings, _, err = configstore.Read(path)
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +264,7 @@ func TestConfigGetFlagTeeth(t *testing.T) {
 	// an inline credential on the flag surface is refused like the file
 	// surface (ps/history would carry it)
 	exit, _, errOut = captureRunTo("config", "get", "--effective", "--set", "AXIOM_QUERY_RUNNER_URL=http://u:pw@runner:8012")
-	if exit != exitFailure || !strings.Contains(errOut, "inline credential") {
+	if exit != exitFailure || !strings.Contains(errOut, "credential") {
 		t.Fatalf("credential-bearing --set must exit 1, got %d: %s", exit, errOut)
 	}
 }
@@ -278,9 +287,25 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 	for k, v := range secrets {
 		t.Setenv(k, v)
 	}
+	// Hostile non-secret env values — the credential review's leak
+	// forms: every one of these used to land verbatim in config.sqlite
+	// through import-env; the gate must SKIP them (env keeps owning
+	// them) and neither the file nor any output line may carry the
+	// values. A bare username stays importable (identity, not
+	// credential).
+	hostile := map[string]string{
+		"AXIOM_LIBRARY_DATABASE_URL": "host=dbhost password=KWVALSECRET user=axiom dbname=lib",
+		"AXIOM_OPENSEARCH_URL":       "http://oshost:9200?password=QSECRET",
+	}
+	t.Setenv("AXIOM_QUERY_RUNNER_URL", "postgresql://h/lib?pass%77ord=PCTSECRET")
+	for k, v := range hostile {
+		t.Setenv(k, v)
+	}
+	t.Setenv("AXIOM_ARTIFACT_ROOT", "/tmp/axiom-artifacts")
 	t.Setenv("AXIOM_API_PORT", "8222")
 	t.Setenv("AXIOM_SEARCH_RERANK", "false")
-	t.Setenv("AXIOM_PROCESSOR_URL", "http://legacy-runner:8012") // legacy spelling feeds
+	t.Setenv("AXIOM_PROCESSOR_URL", "http://legacy-runner:8012")                              // legacy spelling feeds
+	t.Setenv("AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL", "postgresql://axiom@localhost:5432/lib") // username-only userinfo: NOT a credential — imports
 
 	before, _, err := config.LoadResolved(nil)
 	if err != nil {
@@ -292,12 +317,28 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 		t.Fatalf("import-env exit = %d, out=%s err=%s", exit, out, errOut)
 	}
 
-	// (c) log sonde: every output line is free of the secret vocabulary.
+	// (c) log sonde: every output line is free of the secret vocabulary
+	// — including the hostile credential forms' VALUES (their keys and
+	// the refusal FORM may appear; the secrets never do).
+	allSecrets := make([]string, 0, len(secrets)+len(hostile)+1)
 	for _, secret := range secrets {
+		allSecrets = append(allSecrets, secret)
+	}
+	for _, secret := range hostile {
+		allSecrets = append(allSecrets, secret)
+	}
+	allSecrets = append(allSecrets, "PCTSECRET")
+	for _, secret := range allSecrets {
 		for _, stream := range []string{out, errOut} {
 			if strings.Contains(stream, secret) {
 				t.Fatalf("import-env output carries a secret value (%q)", secret)
 			}
+		}
+	}
+	// the hostile rows were skipped LOUDLY: each named with its form.
+	for _, key := range []string{"AXIOM_LIBRARY_DATABASE_URL", "AXIOM_OPENSEARCH_URL", "AXIOM_QUERY_RUNNER_URL"} {
+		if !strings.Contains(out, "skipped: "+key) {
+			t.Fatalf("credential row %s must be skipped loudly, got: %s", key, out)
 		}
 	}
 	// (b) replay idempotency at the file level — CONTENT, not counts.
@@ -329,13 +370,31 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 	if len(first.SecretRefs) != len(secrets) {
 		t.Fatalf("secret refs = %v, want one per secret env", first.SecretRefs)
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	// the hostile rows never entered the settings, and the
+	// username-only userinfo DID (identity, not credential).
+	if _, ok := first.Values["AXIOM_LIBRARY_DATABASE_URL"]; ok {
+		t.Fatalf("keyword-credential DSN must not be a settings row: %v", first.Values["AXIOM_LIBRARY_DATABASE_URL"])
 	}
-	for _, secret := range secrets {
-		if strings.Contains(string(b), secret) {
-			t.Fatalf("config.sqlite carries a secret value (%q)", secret)
+	if _, ok := first.Values["AXIOM_OPENSEARCH_URL"]; ok {
+		t.Fatalf("query-credential URL must not be a settings row")
+	}
+	if _, ok := first.Values["AXIOM_QUERY_RUNNER_URL"]; ok {
+		t.Fatalf("percent-encoded credential URL must not be a settings row")
+	}
+	if v, ok := first.Values["AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL"]; !ok || v != "postgresql://axiom@localhost:5432/lib" {
+		t.Fatalf("username-only userinfo must import verbatim, got %q", v)
+	}
+	// the byte scan covers the file AND every existing sidecar
+	// (-wal/-shm); the WAL is the leak path a plain file scan misses.
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue // absent sidecars are fine
+		}
+		for _, secret := range allSecrets {
+			if strings.Contains(string(b), secret) {
+				t.Fatalf("%s carries a secret value (%q)", filepath.Base(p), secret)
+			}
 		}
 	}
 	// the DSN's credential never entered the settings either.
