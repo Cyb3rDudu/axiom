@@ -278,7 +278,9 @@ func validateKV(key, value, stage string) []string {
 	row, known := rowsByKey[key]
 	switch {
 	case !known:
-		return []string{fmt.Sprintf("%s: %s", key, UnknownKeyProblem)}
+		// %q: the key is operator input — quoting kills newline/log
+		// spoofing through a crafted key.
+		return []string{fmt.Sprintf("%q: %s", key, UnknownKeyProblem)}
 	case row.secret:
 		if stage == stageFlag {
 			return []string{fmt.Sprintf("%s: secret keys never ride a command line (history/ps) — keep the value in the environment / OS secret store", key)}
@@ -319,13 +321,14 @@ func ValidateSettings(values, secretRefs map[string]string) []string {
 		row, known := rowsByKey[key]
 		switch {
 		case !known:
-			problems = append(problems, fmt.Sprintf("%s: %s", key, UnknownKeyProblem))
+			problems = append(problems, fmt.Sprintf("%q: %s", key, UnknownKeyProblem))
 		case !row.secret:
-			problems = append(problems, fmt.Sprintf("%s: not a secret key — set the value, not a reference", key))
+			problems = append(problems, fmt.Sprintf("%q: not a secret key — set the value, not a reference", key))
 		case source != configstore.SecretRefSourceEnv:
-			problems = append(problems, fmt.Sprintf("%s: unknown secret-ref source %q (known: %s)", key, source, configstore.SecretRefSourceEnv))
+			problems = append(problems, fmt.Sprintf("%q: unknown secret-ref source %q (known: %s)", key, source, configstore.SecretRefSourceEnv))
 		}
 	}
+	sort.Strings(problems)
 	return problems
 }
 
@@ -338,6 +341,7 @@ func ValidateFlags(flags map[string]string) []string {
 	for key, value := range flags {
 		problems = append(problems, validateKV(key, value, stageFlag)...)
 	}
+	sort.Strings(problems)
 	return problems
 }
 
@@ -355,9 +359,12 @@ func KnownKey(key string) bool {
 }
 
 // SecretRefDrift checks every secret reference in config.sqlite
-// against the environment: a row declaring source=env whose env var is
-// unset has lost its value source — reported as a problem (the
-// reference's teeth: it makes the expectation checkable).
+// against the environment: a row declaring source=env whose value
+// source is gone — reported as a problem (the reference's teeth: it
+// makes the expectation checkable). Pair-aware like the chain: a dual-
+// fed secret key is fed when EITHER spelling is set (the ref was
+// imported under the spelling that fed at import time; migrating the
+// export to the canonical spelling is not drift).
 func SecretRefDrift() []string {
 	path, err := configstore.DefaultPath()
 	if err != nil {
@@ -369,8 +376,17 @@ func SecretRefDrift() []string {
 	}
 	var problems []string
 	for key, source := range settings.SecretRefs {
-		if source == configstore.SecretRefSourceEnv && os.Getenv(key) == "" {
-			problems = append(problems, fmt.Sprintf("%s: secret reference expects the environment to feed it, but %s is unset — the default (empty) applies", key, key))
+		if source != configstore.SecretRefSourceEnv {
+			continue
+		}
+		fed := os.Getenv(key) != ""
+		if !fed {
+			if pair, dual := pairOf(key); dual {
+				fed = os.Getenv(pair[0]) != "" || os.Getenv(pair[1]) != ""
+			}
+		}
+		if !fed {
+			problems = append(problems, fmt.Sprintf("%s: secret reference expects the environment to feed it, but neither it nor its dual-fed sibling is set — the default (empty) applies", key))
 		}
 	}
 	sort.Strings(problems)

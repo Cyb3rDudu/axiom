@@ -513,5 +513,40 @@ func TestDualFedFieldLevelChain(t *testing.T) {
 		if cfg.ProcessorURL != "http://flag-canonical:8012" {
 			t.Fatalf("(iii) ProcessorURL = %q, want the canonical-named flag value", cfg.ProcessorURL)
 		}
+		// (iv) env=canonical vs file row on the LEGACY spelling: the
+		// environment still wins the field (the pair skip is symmetric).
+		os.Setenv("AXIOM_COMPUTE_WORKER_URL", "http://env-canonical:8012")
+		os.Unsetenv("AXIOM_PROCESSOR_URL")
+		fst, err := configstore.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fst.Set("AXIOM_PROCESSOR_URL", "http://file-legacy:8012"); err != nil {
+			t.Fatal(err)
+		}
+		fst.Close()
+		cfg, ch, err = LoadResolved(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ProcessorURL != "http://env-canonical:8012" {
+			t.Fatalf("(iv) ProcessorURL = %q, want the env value — a legacy file row must not beat canonical env", cfg.ProcessorURL)
+		}
+		if e := rowOf(t, EffectiveChain(cfg, ch), "AXIOM_COMPUTE_WORKER_URL"); e.Source != SourceEnv {
+			t.Fatalf("(iv) canonical row must render env, got %+v", e)
+		}
+		// (v) flag=canonical vs env=legacy: the flag wins, source=flag.
+		os.Setenv("AXIOM_PROCESSOR_URL", "http://env-legacy:8012")
+		os.Unsetenv("AXIOM_COMPUTE_WORKER_URL")
+		cfg, ch, err = LoadResolved(map[string]string{"AXIOM_COMPUTE_WORKER_URL": "http://flag-canonical:8012"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ProcessorURL != "http://flag-canonical:8012" {
+			t.Fatalf("(v) ProcessorURL = %q, want the flag value", cfg.ProcessorURL)
+		}
+		if e := rowOf(t, EffectiveChain(cfg, ch), "AXIOM_COMPUTE_WORKER_URL"); e.Source != SourceFlag {
+			t.Fatalf("(v) canonical row must render flag, got %+v", e)
+		}
 	})
 }

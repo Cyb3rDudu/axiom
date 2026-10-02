@@ -17,13 +17,14 @@ is consumed* (`set by`).
 
 ## The resolution chain (F13 #307)
 
-The Go orchestrator resolves every `AXIOM_*` knob through one chain:
+The Go orchestrator's RUNTIME SURFACES — `serve` (every role and the compat boot), `doctor`, `config`, and the legacy KG-mode preambles — resolve the shared `AXIOM_*` vocabulary through one chain:
 
 ```
 --set KEY=VALUE flag  >  environment variable  >  config.sqlite row  >  default
 ```
 
 - Each stage overrides only what it sets; unset stages fall through.
+- Scope: mode-specific knobs outside the shared vocabulary (e.g. `AXIOM_RETENTION_*`) and the debug-bind opt-out stay direct environment reads; the standalone backfill tool binaries under `cmd/` read the environment directly.
 - **Dual-fed pairs resolve per field.** The legacy/canonical spelling
   pairs (`AXIOM_COMPUTE_WORKER_*` vs `AXIOM_PROCESSOR_*`,
   `AXIOM_REPAIR_WORKER_CMD` vs `AXIOM_FIXER_CMD`) are ONE knob each: the
@@ -83,7 +84,8 @@ Hard rules with teeth:
 | `axiom config set KEY VALUE` | Write one override into `config.sqlite` — validated FIRST: unknown key, type violation, value range, vocabulary violation (e.g. an unknown storage driver), secret keys, and inline-credential URLs each exit **1** with the diagnosis and touch nothing. Argument-shape errors exit **2**. |
 | `axiom config unset KEY` | Remove one override (idempotent; unknown keys refused like `set`). |
 | `axiom config validate` | Full consistency pass: env values parse, file rows valid, secret references still have their env source, and the derived role set wires (composition check, network-free). Exit 0 only when everything holds. |
-| `axiom config import-env` | One-shot import of the current environment into `config.sqlite`: non-secrets as `settings` rows, secrets as `secret_refs` (values never enter the file). Validated first — a value the file surface would refuse (type violation, inline credential) refuses the whole import, nothing written. Idempotent — a replay writes the same state. The effective configuration does not move: the environment still owns every imported key until it is cleared; the file row takes over then. |
+| `axiom config import-env` | One-shot import of the current environment into `config.sqlite`: non-secrets as `settings` rows, secrets as `secret_refs` (values never enter the file). Credential-carrying values (inline DSN/URL credentials — a legal environment shape) are SKIPPED loudly, left env-only. Everything else is validated first — a value the file surface would refuse (type violation) refuses the whole import, nothing written. The import lands in ONE transaction. Idempotent — a replay writes the same state. The effective configuration does not move: the environment still owns every imported key until it is cleared; the file row takes over then. |
+| `axiom config unset <KEY>` | Removes one override or secret reference (idempotent; unknown keys refused like `set`). With no `config.sqlite` present it is a no-op success — nothing is created. The write subcommands (`set`, `unset`, `import-env`) take no `--set` (exit 2). |
 | `axiom <command> --set KEY=VALUE …` | One-shot override riding `serve`, `doctor`, and `config` — the flag follows the subcommand and is repeatable (`axiom serve --set AXIOM_API_PORT=8012 all`); the CLI-flag stage of the chain. Same validation teeth as `config set`; secret keys and inline-credential URLs are refused (command lines are visible in history and `ps`). |
 
 `axiom doctor` reports the file as its own `config-file` check: absent = ok

@@ -546,3 +546,115 @@ func TestDoctorProbeHTTPRedactsCredentialQuery(t *testing.T) {
 		t.Fatalf("probe error must show the redaction placeholder, got: %s", err)
 	}
 }
+
+// TestConfigValidateExitsZeroWhenConsistent — the happy path of the
+// exit-code contract (0 only when everything holds) was asserted
+// nowhere; a regression that fails every valid configuration would
+// have gone unnoticed.
+func TestConfigValidateExitsZeroWhenConsistent(t *testing.T) {
+	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_SEARCH_RERANK", "false")
+	t.Setenv("AXIOM_API_PORT", "8222")
+	if exit, out, _ := captureRunTo("config", "validate"); exit != exitOK {
+		t.Fatalf("valid configuration must exit 0, got %d: %s", exit, out)
+	}
+}
+
+// TestImportEnvPositiveRows — the importer's positive shape: specific
+// env-fed values land verbatim in the settings (a mutation that drops
+// every row while keeping the counts line honest goes red here).
+func TestImportEnvPositiveRows(t *testing.T) {
+	path := backedConfig(t)
+	t.Setenv("AXIOM_API_PORT", "8222")
+	t.Setenv("AXIOM_STORAGE_LIBRARY_DRIVER", "sqlite")
+	t.Setenv("AXIOM_SEARCH_RERANK", "false")
+	if exit, out, _ := captureRunTo("config", "import-env"); exit != exitOK {
+		t.Fatalf("import-env exit = %d: %s", exit, out)
+	}
+	s, found, err := configstore.Read(path)
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"AXIOM_API_PORT":               "8222",
+		"AXIOM_STORAGE_LIBRARY_DRIVER": "sqlite",
+		"AXIOM_SEARCH_RERANK":          "false",
+	}
+	if !maps.Equal(s.Values, want) {
+		t.Fatalf("imported rows = %v, want exactly %v", s.Values, want)
+	}
+}
+
+// TestSecretRefDriftIsPairAware — a reference imported under the legacy
+// spelling stays drift-free once the export migrates to the canonical
+// spelling: the chain feeds the FIELD, and the drift check knows the
+// pair.
+func TestSecretRefDriftIsPairAware(t *testing.T) {
+	defer restoreProcessEnv(snapshotEnv())()
+	path := backedConfig(t)
+	st, err := configstore.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSecretRef("AXIOM_PROCESSOR_SOURCE_SECRET", configstore.SecretRefSourceEnv); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	// legacy spelling unset, canonical spelling set: no drift.
+	t.Setenv("AXIOM_COMPUTE_WORKER_SOURCE_SECRET", "fed-via-canonical")
+	if problems := config.SecretRefDrift(); len(problems) != 0 {
+		t.Fatalf("pair-aware drift check must not fire, got %v", problems)
+	}
+	// both spellings unset: drift.
+	os.Unsetenv("AXIOM_COMPUTE_WORKER_SOURCE_SECRET")
+	if problems := config.SecretRefDrift(); len(problems) == 0 {
+		t.Fatal("drift must fire when neither spelling feeds the reference")
+	}
+}
+
+// TestValidateEnvSkipsShadowedLegacySpelling — a legacy value the
+// resolver never reads (canonical sibling set) is dead config, not a
+// silent fallback: validate must not report it.
+func TestValidateEnvSkipsShadowedLegacySpelling(t *testing.T) {
+	t.Setenv("AXIOM_COMPUTE_WORKER_TIMEOUT", "5m")
+	t.Setenv("AXIOM_PROCESSOR_TIMEOUT", "not-a-duration")
+	if problems := config.ValidateEnv(); len(problems) != 0 {
+		t.Fatalf("shadowed legacy value must be skipped, got %v", problems)
+	}
+}
+
+// TestConfigUnsetAbsentFileCreatesNothing — unset with no store is a
+// no-op success, not a store birth.
+func TestConfigUnsetAbsentFileCreatesNothing(t *testing.T) {
+	path := backedConfig(t)
+	exit, out, _ := captureRunTo("config", "unset", "AXIOM_API_PORT")
+	if exit != exitOK || !strings.Contains(out, "nothing to unset") {
+		t.Fatalf("unset on absent file must exit 0 with the no-op note, got %d: %s", exit, out)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("unset must not create config.sqlite")
+	}
+}
+
+// TestWriteSubcommandsRejectSetFlag — --set on the write subcommands
+// would be silently ignored (they write the store, they do not
+// resolve); it is a loud usage error instead.
+func TestWriteSubcommandsRejectSetFlag(t *testing.T) {
+	for _, sub := range []string{"set", "unset", "import-env"} {
+		args := append([]string{"config", sub, "--set", "AXIOM_API_PORT=9999"}, dummyArgsFor(sub)...)
+		exit, _, errOut := captureRunTo(args...)
+		if exit != exitUsage || !strings.Contains(errOut, "does not take --set") {
+			t.Fatalf("config %s --set must exit 2 with the reason, got %d: %s", sub, exit, errOut)
+		}
+	}
+}
+
+func dummyArgsFor(sub string) []string {
+	switch sub {
+	case "set":
+		return []string{"AXIOM_API_PORT", "9999"}
+	case "unset":
+		return []string{"AXIOM_API_PORT"}
+	}
+	return nil
+}

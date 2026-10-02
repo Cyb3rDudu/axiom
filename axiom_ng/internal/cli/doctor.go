@@ -166,12 +166,15 @@ func cmdDoctor(asJSON bool, flags map[string]string) int {
 
 // configFileCheck reports the config.sqlite state for the doctor
 // report: absent (env-only bootstrap — the container path), or present
-// with its shape (rows, refs, path). Secret-ref drift is a fail (a
-// reference declared an env source that is gone).
+// with its shape (rows, refs, path). An unresolvable DEFAULT path is
+// the same env-only state (the runtime deliberately degrades there —
+// readers boot env-only; only writers need a path), reported as ok
+// with the remedy. Secret-ref drift is a fail (a reference declared an
+// env source that is gone).
 func configFileCheck() checkStatus {
 	path, err := configstore.DefaultPath()
 	if err != nil {
-		return checkStatus{Status: "fail", Detail: err.Error()}
+		return checkStatus{Status: "ok", Detail: "no default path (unresolvable home) — env-only bootstrap; set AXIOM_CONFIG_PATH to use a file"}
 	}
 	settings, found, err := configstore.Read(path)
 	if err != nil {

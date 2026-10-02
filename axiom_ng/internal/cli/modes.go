@@ -334,7 +334,7 @@ func runCLIMode(args []string) bool {
 		}
 		cfg, _, err := config.LoadResolved(nil) // the mode preamble rides the full chain (flag > env > file)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: configuration: %v\n", m.prefix, err)
+			fmt.Fprintf(os.Stderr, "%s configuration: %v\n", m.prefix, err)
 			os.Exit(1)
 		}
 		logger := log.New(os.Stderr, m.prefix, log.LstdFlags)

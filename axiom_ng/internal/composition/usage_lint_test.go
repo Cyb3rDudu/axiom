@@ -37,8 +37,6 @@ import (
 //	internal/composition  env ∞   the sanctioned composition root (#298)
 //	internal/baseline     env ∞   F01 scaffolding knobs (test-only package)
 //	internal/cli/cli.go   env 1   debug-bind opt-out (#205 §5; F05 #299)
-//	internal/cli/modes.go env 2   retention-mode env fallbacks (#290;
-//	                              abatement F13 — config store reader)
 //	internal/search/search.go env 1  AXIOM_OS_INDEX dev override — F06 moves
 //	                              it behind config
 //	internal/library/repair exec ∞ the RepairExecutor port's LOCAL binding

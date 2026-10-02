@@ -16,6 +16,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +26,8 @@ import (
 type Entry struct {
 	// Env is the environment key the row resolves from.
 	Env string `json:"env"`
-	// Value is the effective value (secrets redacted by RenderValue).
+	// Value is the effective value (secrets redacted by renderOutput and
+	// the DSN sanitizer).
 	Value any `json:"value"`
 	// Source is "env" when this key produced the shown value, "default"
 	// otherwise — for the single-fed keys that is "is the key set"; for a
@@ -227,9 +229,10 @@ func envOnlySource(row envRow) string {
 	return source
 }
 
-// credentialQueryKeys are the query parameters pgx honors as credentials
-// (pgconn.ParseConfig): a password smuggled as ?password=… is a REAL
-// credential, not a dead string — it must never survive redaction.
+// credentialQueryRe matches the query parameters pgx honors as
+// credentials (pgconn.ParseConfig): a password smuggled as ?password=…
+// is a REAL credential, not a dead string — it must never survive
+// redaction (output) nor pass the write gate (InlineCredential).
 // pgconn DECODES percent-escapes before matching key names (verified:
 // ?pass%77ord=x sets cfg.Password), so the pattern matches each key
 // letter as literal OR percent-encoded — `pass%77ord=` is a credential
@@ -331,7 +334,9 @@ func renderOutput(s string) string {
 // fall back on (a typo'd duration, a non-numeric port). This is the
 // consistency check behind `axiom config validate`; the empty slice
 // means the env combination parses cleanly (role-level consistency is
-// the caller's composition check).
+// the caller's composition check). Dual-fed legacy spellings whose
+// canonical sibling is set are SKIPPED: the resolver never reads them
+// (their value is dead config, not a silent fallback).
 func ValidateEnv() []string {
 	var problems []string
 	for _, row := range envRows {
@@ -339,8 +344,12 @@ func ValidateEnv() []string {
 		if !set || raw == "" {
 			continue
 		}
+		if pair, dual := dualFedEnv[row.field]; dual && row.env == pair[1] && os.Getenv(pair[0]) != "" {
+			continue // shadowed legacy spelling — never read by the loader
+		}
 		problems = append(problems, checkRawValue(row, raw)...)
 	}
+	sort.Strings(problems)
 	return problems
 }
 

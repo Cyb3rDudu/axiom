@@ -27,6 +27,16 @@ func cmdConfig(name string, args []string, flags map[string]string) int {
 		fmt.Fprintf(os.Stderr, "usage: %s config get --effective [--json] | set <KEY> <VALUE> | unset <KEY> | validate | import-env\n", name)
 		return exitUsage
 	}
+	// The write subcommands take no --set: it would be silently
+	// ignored (they write the store, they do not resolve) — a loud
+	// usage error instead (exit 2).
+	if len(flags) > 0 {
+		switch args[0] {
+		case "set", "unset", "import-env":
+			fmt.Fprintf(os.Stderr, "%s config %s does not take --set (it writes config.sqlite directly; --set resolves a run's configuration)\n", name, args[0])
+			return exitUsage
+		}
+	}
 	switch args[0] {
 	case "get":
 		return cmdConfigGet(name, args[1:], flags)
@@ -111,7 +121,7 @@ func cmdConfigSet(name string, args []string) int {
 		fmt.Fprintf(os.Stderr, "%s config set: %v\n", name, err)
 		return exitFailure
 	}
-	fmt.Printf("set %s (config.sqlite; effective after the next start — the running process keeps its resolution)\n", key)
+	fmt.Printf("set %s (config.sqlite; feeds the chain where the environment does not override it — effective after the next start, the running process keeps its resolution)\n", key)
 	return exitOK
 }
 
@@ -125,9 +135,20 @@ func cmdConfigUnset(name string, args []string) int {
 	}
 	key := args[0]
 	if !config.KnownKey(key) {
-		fmt.Printf("invalid: %s: %s\n", key, config.UnknownKeyProblem)
+		fmt.Printf("invalid: %q: %s\n", key, config.UnknownKeyProblem)
 		fmt.Println("configuration invalid — nothing written")
 		return exitFailure
+	}
+	// An ABSENT file is not an error and must not become one by being
+	// created: unset with nothing to remove is a no-op, exit 0.
+	path, err := configstore.DefaultPath()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s config unset: %v\n", name, err)
+		return exitFailure
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		fmt.Printf("config.sqlite absent — nothing to unset (%s)\n", key)
+		return exitOK
 	}
 	st, err := openConfigStore()
 	if err != nil {
