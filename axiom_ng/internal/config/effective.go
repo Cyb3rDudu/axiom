@@ -250,13 +250,23 @@ func envOnlySource(row envRow) string {
 // letter as literal OR percent-encoded — `pass%77ord=` is a credential
 // key exactly like `password=`.
 //
-//	The VALUE class stops at &, whitespace, AND a double quote: Go's
-//	url.Error wraps the URL in quotes (Get "…?password=x" dial …) — a
-//	quote-hungry class would eat the closing quote and mangle the
-//	diagnosis line's shape (value still gone; the quote is cosmetic
-//	but belongs to the engine, not the credential).
+//	The VALUE class stops at &, whitespace, and a BARE double quote:
+//	Go's url.Error wraps the URL in quotes (Get "…?password=x" dial …) —
+//	a quote-hungry class would eat the closing quote and mangle the
+//	diagnosis line's shape. Backslash-escape PAIRS are consumed as part
+//	of the value: url.Error %q-escapes inner quotes (`password=ab\"cd`),
+//	so an escaped quote inside a credential no longer truncates the
+//	match — the whole value is eaten and the WRAPPER's quote still
+//	terminates it.
+//
+//	Named residual (render path only): a credential value containing a
+//	RAW, unescaped double quote (`?password=ab"cd` — an RFC-3986-invalid
+//	spelling; the legal %22 form redacts fully) truncates at the quote
+//	in RAW render contexts (`config get --effective` over an env-carried
+//	URL shows the tail). The write gate refuses every spelling, so this
+//	is render-of-env only, never a stored value.
 var credentialQueryRe = regexp.MustCompile(
-	"(?i)(" + encodableKey("password") + "|" + encodableKey("sslpassword") + "|" + encodableKey("passfile") + ")=[^&\\s\"]*")
+	"(?i)(" + encodableKey("password") + "|" + encodableKey("sslpassword") + "|" + encodableKey("passfile") + ")=(?:\\\\.|[^&\\s\"\\\\])*")
 
 // encodableKey renders key as a regex fragment matching every character
 // as its literal form or its percent-escape (upper- or lowercase hex).

@@ -260,6 +260,24 @@ func TestQueryCredentialsRedacted(t *testing.T) {
 	if g := RedactQueryCredentials("?sslpassword=abc&passfile=/p&other=v"); strings.Contains(g, "abc") || strings.Contains(g, "/p&") {
 		t.Fatalf("sibling credential keys leaked: %s", g)
 	}
+	// Escape-tolerant value class: url.Error %q-escapes inner quotes —
+	// `password=ab\"cd` in free text must redact THROUGH the escaped
+	// pair (whole value eaten, wrapper quote kept).
+	if g := RedactQueryCredentials(`failed: Get "postgres://h/db?password=ab\"cd&x=1": dial`); strings.Contains(g, "ab") || strings.Contains(g, "cd") || !strings.Contains(g, `password=<redacted>&x=1`) {
+		t.Fatalf("escaped-quote credential value survived: %s", g)
+	}
+	// The legal spelling (%22) contains no raw quote — full redaction,
+	// pinned so a future class tweak cannot regress it.
+	if g := RedactQueryCredentials("x?password=a%22b&y=1"); strings.Contains(g, "a%22b") {
+		t.Fatalf("percent-encoded quote value survived: %s", g)
+	}
+	// Pinned residual (named on the regex): in RAW render contexts a
+	// credential value containing a RAW unescaped quote truncates at the
+	// quote — invalid spelling, env-only, write-gate refused. The part
+	// BEFORE the quote is redacted; the tail stays visible today.
+	if g := sanitizeDSN(`postgres://h/db?password=ab"cd&x=1`); !strings.Contains(g, `<redacted>"cd&x=1`) {
+		t.Fatalf("raw-quote render residual changed shape — re-pin or fix: %s", g)
+	}
 }
 
 // URL-valued rows never carry an inline userinfo (review round 3): a
