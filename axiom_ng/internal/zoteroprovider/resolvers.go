@@ -17,6 +17,7 @@ package zoteroprovider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -219,14 +220,80 @@ type olAuthor struct {
 	Name string `json:"name"`
 }
 
+// olStrings tolerates Open Library's polymorphic array fields: plain
+// strings ("publishers": ["Springer Gabler"] — editions/search shapes)
+// and name objects ("publishers": [{"name": "Springer Gabler"}] — the
+// /api/books?jscmd=data shape the ISBN rung decodes; found live in the
+// 0.2.0 release validation, 2026-10-02). null decodes to nil.
+type olStrings []string
+
+func (s *olStrings) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*s = nil
+		return nil
+	}
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*s = olStrings{one}
+		return nil
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return fmt.Errorf("olStrings %s: %w", string(b[:min(len(b), 80)]), err)
+	}
+	out := make(olStrings, 0, len(raw))
+	for _, r := range raw {
+		var str string
+		if err := json.Unmarshal(r, &str); err == nil {
+			out = append(out, str)
+			continue
+		}
+		var named struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(r, &named); err == nil && named.Name != "" {
+			out = append(out, named.Name)
+			continue
+		}
+		return fmt.Errorf("olStrings: unsupported element %s", string(r[:min(len(r), 80)]))
+	}
+	*s = out
+	return nil
+}
+
+// olFlexString tolerates scalar ("publish_date": "Mar 08, 2019" —
+// editions/api-books) and array ("publish_date": ["Mar 08, 2019"] —
+// search.json docs) spellings; the first element wins.
+type olFlexString string
+
+func (s *olFlexString) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*s = ""
+		return nil
+	}
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*s = olFlexString(one)
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal(b, &arr); err == nil {
+		if len(arr) > 0 {
+			*s = olFlexString(arr[0])
+		}
+		return nil
+	}
+	return fmt.Errorf("olFlexString: unsupported value %s", string(b[:min(len(b), 80)]))
+}
+
 type olEdition struct {
-	Title       string     `json:"title"`
-	Subtitle    *string    `json:"subtitle"`
-	Publishers  []string   `json:"publishers"`
-	PublishDate string     `json:"publish_date"`
-	Language    []string   `json:"languages"` // keys: /languages/ger
-	Authors     []olAuthor `json:"authors"`
-	Key         string     `json:"key"` // /books/ISBN...
+	Title       string       `json:"title"`
+	Subtitle    *string      `json:"subtitle"`
+	Publishers  olStrings    `json:"publishers"`
+	PublishDate olFlexString `json:"publish_date"`
+	Language    []string     `json:"languages"` // keys: /languages/ger
+	Authors     []olAuthor   `json:"authors"`
+	Key         string       `json:"key"` // /books/ISBN...
 	Type        struct {
 		Key string `json:"key"`
 	} `json:"type"`
@@ -248,7 +315,7 @@ func olCandidate(e olEdition, confidence float64) library.Candidate {
 			fields.Authors = append(fields.Authors, a.Name)
 		}
 	}
-	if y := olYear(e.PublishDate); y > 0 {
+	if y := olYear(string(e.PublishDate)); y > 0 {
 		fields.Year = &y
 	}
 	return library.Candidate{CandidateID: "open_library:" + strings.TrimPrefix(e.Key, "/books/"), Fields: fields, Confidence: confidence}
@@ -323,13 +390,13 @@ func (o *OpenLibraryAPI) Resolve(ctx context.Context, q library.ResolveQuery) ([
 	query := url.Values{"q": {strings.TrimSpace(q.Title + " " + strings.Join(q.Authors, " "))}, "limit": {"3"}, "fields": {"key,title,subtitle,publishers,publish_date,language,author_name,type"}}
 	var out struct {
 		Docs []struct {
-			Key         string   `json:"key"`
-			Title       string   `json:"title"`
-			Subtitle    *string  `json:"subtitle"`
-			Publishers  []string `json:"publishers"`
-			PublishDate string   `json:"publish_date"`
-			Language    []string `json:"language"`
-			AuthorName  []string `json:"author_name"`
+			Key         string       `json:"key"`
+			Title       string       `json:"title"`
+			Subtitle    *string      `json:"subtitle"`
+			Publishers  olStrings    `json:"publishers"`
+			PublishDate olFlexString `json:"publish_date"`
+			Language    []string     `json:"language"`
+			AuthorName  []string     `json:"author_name"`
 			Type        struct {
 				Key string `json:"key"`
 			} `json:"type"`
@@ -341,7 +408,7 @@ func (o *OpenLibraryAPI) Resolve(ctx context.Context, q library.ResolveQuery) ([
 	var cands []library.Candidate
 	for _, d := range out.Docs {
 		conf := titleSimilarity(q.Title, d.Title)
-		if y := q.Year; y != nil && olYear(d.PublishDate) > 0 && olYear(d.PublishDate) != *y {
+		if y := q.Year; y != nil && olYear(string(d.PublishDate)) > 0 && olYear(string(d.PublishDate)) != *y {
 			conf -= 0.1
 		}
 		if conf <= 0 {

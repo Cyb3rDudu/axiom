@@ -6,6 +6,7 @@ package zoteroprovider
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -228,5 +229,73 @@ func TestResolverJSONShape(t *testing.T) {
 	_, _ = cr.Resolve(context.Background(), library.ResolveQuery{Title: "T", Year: &y})
 	if seenQuery != "filter=from-pub-date%3A2020%2Cuntil-pub-date%3A2020&query.bibliographic=T&rows=3" {
 		t.Fatalf("year-filtered request shape: %s", seenQuery)
+	}
+}
+
+// TestOpenLibraryPolymorphicFieldShapes — the live API shapes found in
+// the 0.2.0 release validation (2026-10-02): /api/books?jscmd=data
+// spells publishers as name objects and search.json spells publish_date
+// as an array. Both must decode (empty beats wrong, but a decode error
+// kills the whole rung — the import reported retryable_failed).
+func TestOpenLibraryPolymorphicFieldShapes(t *testing.T) {
+	// The captured live body of the ISBN rung (jscmd=data).
+	ol := openLibraryStub(t,
+		`{"ISBN:9783658246501":{"key":"/books/OL28220394M","title":"Digitalen Wandel gestalten","publishers":[{"name":"Springer Gabler"}],"publish_date":"Mar 08, 2019","authors":[]}}`,
+		`{}`)
+	cands, err := ol.Resolve(context.Background(), library.ResolveQuery{ISBN: "978-3-658-24650-1"})
+	if err != nil {
+		t.Fatalf("jscmd=data object publishers must decode: %v", err)
+	}
+	if len(cands) != 1 || cands[0].Fields.Publisher != "Springer Gabler" {
+		t.Fatalf("publisher from name object: %+v", cands)
+	}
+
+	// The captured live shape of search.json docs: publish_date is an
+	// array, publishers may be null.
+	ol2 := openLibraryStub(t, `{}`, `{"docs":[
+		{"key":"/works/OL20843964W","title":"Digitalen Wandel gestalten","publishers":null,"publish_date":["Mar 08, 2019"],"type":{"key":"work"}}
+	]}`)
+	cands2, err := ol2.Resolve(context.Background(), library.ResolveQuery{Title: "Digitalen Wandel gestalten"})
+	if err != nil {
+		t.Fatalf("search.json array publish_date must decode: %v", err)
+	}
+	if len(cands2) != 1 || cands2[0].Fields.Year == nil || *cands2[0].Fields.Year != 2019 {
+		t.Fatalf("year from array publish_date: %+v", cands2)
+	}
+	if cands2[0].Fields.Publisher != "" {
+		t.Fatalf("null publishers must stay empty: %+v", cands2[0].Fields)
+	}
+}
+
+// TestOlStringsUnmarshal — the tolerant type's contract, table-driven:
+// string, array of strings, array of name objects, mixed, null.
+func TestOlStringsUnmarshal(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`"Solo"`, []string{"Solo"}},
+		{`["A","B"]`, []string{"A", "B"}},
+		{`[{"name":"A"}]`, []string{"A"}},
+		{`[{"name":"A"},"B"]`, []string{"A", "B"}},
+		{`null`, nil},
+	}
+	for _, c := range cases {
+		var got olStrings
+		if err := json.Unmarshal([]byte(c.in), &got); err != nil {
+			t.Fatalf("%s: %v", c.in, err)
+		}
+		if len(got) != len(c.want) {
+			t.Fatalf("%s: got %v want %v", c.in, got, c.want)
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Fatalf("%s: got %v want %v", c.in, got, c.want)
+			}
+		}
+	}
+	var bad olStrings
+	if err := json.Unmarshal([]byte(`[{"publisher":"A"}]`), &bad); err == nil {
+		t.Fatal("unsupported element must error, not guess")
 	}
 }
