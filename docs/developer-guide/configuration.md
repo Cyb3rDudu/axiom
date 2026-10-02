@@ -112,6 +112,10 @@ cfg-dependent checks skipped honestly.
 
 ## Go — the orchestrator (`axiom_ng`)
 
+Rows below lead with the canonical spelling; where a legacy alias still feeds
+the same knob it is named in the row and tracked in the
+[deprecation schedule](../operations/deprecations.md).
+
 | Env var | Default | Meaning |
 | --- | --- | --- |
 | `AXIOM_ZOTERO_BASE` | `http://localhost:23119/api` | The Zotero local JSON API base. |
@@ -122,11 +126,11 @@ cfg-dependent checks skipped honestly.
 | `AXIOM_OPENSEARCH_PASSWORD` | — | Optional basic-auth password. |
 | `AXIOM_COMPUTE_WORKER_SOURCE_SECRET` | — | Shared HMAC secret for remote source delivery (dispatcher signs, `/api/processor/source` verifies). Empty disables the feature on both sides. Canonical spelling (F10 #304); legacy `AXIOM_PROCESSOR_SOURCE_SECRET` still feeds it (warn-once alias). |
 | `AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL` | `http://127.0.0.1:<APIPort>` | Externally reachable base URL remote compute workers use to pull sources. Canonical spelling (F10 #304); legacy `AXIOM_PROCESSOR_SOURCE_BASE_URL` still feeds it (warn-once alias). `<APIPort>` resolves to the configured `AXIOM_API_PORT` (8011 by default); the URL defaults to loopback (co-located runners). |
-| `AXIOM_COMPUTE_WORKER_URLS` | — | Ordered ingest-runner candidate list, comma-separated, preference order (#207). Canonical spelling (F10 #304); the legacy `AXIOM_PROCESSOR_URLS` below still feeds it — warned once and counted in `/api/health/deprecations`. When set it defines the COMPLETE chain and wins over both legacy variables. A periodic health probe (`AXIOM_RUNNER_HEALTH_INTERVAL`) keeps dead candidates out of the submit path; submit-time failover (transport/5xx → next candidate, 4xx → error) stays as the safety net. |
+| `AXIOM_COMPUTE_WORKER_URLS` | — | Ordered ingest-runner candidate list, comma-separated, preference order (#207). Canonical spelling (F10 #304); the legacy `AXIOM_PROCESSOR_URLS` below still feeds it — warned once and counted in `/api/health/deprecations`. When set it defines the COMPLETE chain and wins over both legacy variables. A periodic health probe (`AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL`) keeps dead candidates out of the submit path; submit-time failover (transport/5xx → next candidate, 4xx → error) stays as the safety net. |
 | `AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL` | `60s` | Interval of the ingest-candidate health probe (#207). Canonical spelling (F10 #304); legacy `AXIOM_RUNNER_HEALTH_INTERVAL` still feeds it (warn-once alias). `<=0` disables the background probe (startup remains best-effort) — a candidate demoted by submit-time failover is then only restored by a successful submit on it, so a preferred runner that recovered is not asked first again until restart. |
 | `AXIOM_COMPUTE_WORKER_URL` | `http://localhost:8012` | Primary ingest-role compute-worker URL (canonical, F10 #304). |
-| `AXIOM_PROCESSOR_URL` | (alias) | Legacy spelling of `AXIOM_COMPUTE_WORKER_URL` — still read through 0.2.x (warn-once alias, ADR 0001 §4). |
-| `AXIOM_INGEST_FALLBACK_URL` | `http://localhost:8012` | Emergency ingest runner when `AXIOM_PROCESSOR_URL` is unreachable (legacy failover pair; folded into the candidate list only when `AXIOM_PROCESSOR_URLS` is unset). |
+| `AXIOM_PROCESSOR_URL` | (alias) | **Legacy** alias of `AXIOM_COMPUTE_WORKER_URL` — still read through 0.2.x (warn-once, counted; see the [deprecation schedule](../operations/deprecations.md) and ADR 0001 §4). |
+| `AXIOM_INGEST_FALLBACK_URL` | `http://localhost:8012` | Emergency ingest runner appended as the last candidate when the chain is built from the singular primary (legacy failover pair; folded into the candidate list only when `AXIOM_COMPUTE_WORKER_URLS` is unset — see precedence below). |
 | `AXIOM_QUERY_RUNNER_URL` | `http://localhost:8012` | Query-role runner for `/v1/embed` + `/v1/rerank` (R4). Defaults to the local runner so retrieval survives a remote outage. |
 | `AXIOM_COMPUTE_WORKER_TIMEOUT` | `300s` | Bounds the **result** fetch and (as the submit floor) the synchronous remote source download inside `POST /v1/process`. Canonical spelling (F10 #304); legacy `AXIOM_PROCESSOR_TIMEOUT` still feeds it (warn-once alias). Remote deployments raise it to cover the runner's download budget. |
 | `AXIOM_COMPUTE_WORKER_NAME` | processor-URL host | Human identity of the compute worker this dispatcher drives; lands in the phase log line and `ingest_jobs.runner_name` at claim time. Canonical spelling (F10 #304); legacy `AXIOM_PROCESSOR_RUNNER_NAME` still feeds it (warn-once alias). |
@@ -185,20 +189,21 @@ Confusing them is the most common config error:
 
 | Pair | Owned by | Scoped to |
 | --- | --- | --- |
-| `AXIOM_PROCESSOR_TIMEOUT` | Go (dispatcher) | **Result-fetch** budget, and as a floor, the submit call's **synchronous source download**. |
+| `AXIOM_COMPUTE_WORKER_TIMEOUT` | Go (dispatcher) | **Result-fetch** budget, and as a floor, the submit call's **synchronous source download**. |
 | `AXIOM_PROCESSOR_SOURCE_TIMEOUT` | Runner | Runner-side **source_download** budget for pulling one `source_url` (default 120s). |
-| `AXIOM_PROCESSOR_URLS` | Go (dispatcher) | **Ordered ingest chain** (#207): comma-separated, preference order; plural wins over the legacy pair below. |
-| `AXIOM_PROCESSOR_URL` | Go (dispatcher) | **Primary ingest** runner (role: processing) — legacy singular; becomes the head of the candidate list when the plural is unset. |
-| `AXIOM_INGEST_FALLBACK_URL` | Go (dispatcher) | **Emergency ingest** runner — legacy; appended as last candidate when distinct. |
+| `AXIOM_COMPUTE_WORKER_URLS` | Go (dispatcher) | **Ordered ingest chain** (#207): comma-separated, preference order; plural wins over the singular below. |
+| `AXIOM_COMPUTE_WORKER_URL` | Go (dispatcher) | **Primary ingest** runner (role: processing) — becomes the head of the candidate list when the plural is unset. |
+| `AXIOM_INGEST_FALLBACK_URL` | Go (dispatcher) | **Emergency ingest** runner — appended as last candidate when distinct. |
 | `AXIOM_QUERY_RUNNER_URL` | Go (dispatcher) | **Query** runner (role: embed/rerank for search). |
 
-> **Precedence (#207):** `AXIOM_PROCESSOR_URLS` (complete chain, wins over
-> everything) → `AXIOM_PROCESSOR_URL` + `AXIOM_INGEST_FALLBACK_URL` (legacy
-> pair, folded into a two-entry chain) → default local runner. The singular
-> variables are deliberately still read — no deprecation yet; a future
-> version may deprecate them consciously.
+> **Precedence (#207):** `AXIOM_COMPUTE_WORKER_URLS` (complete chain, wins over
+> everything) → `AXIOM_COMPUTE_WORKER_URL` + `AXIOM_INGEST_FALLBACK_URL`
+> (folded into a two-entry chain; the legacy `AXIOM_PROCESSOR_URL`/
+> `AXIOM_PROCESSOR_URLS` spellings still feed the same knobs — warned once,
+> counted, see the [deprecation schedule](../operations/deprecations.md)) →
+> default local runner.
 >
-> `AXIOM_PROCESSOR_URL` / `AXIOM_QUERY_RUNNER_URL` / `AXIOM_INGEST_FALLBACK_URL`
+> `AXIOM_COMPUTE_WORKER_URL` / `AXIOM_QUERY_RUNNER_URL` / `AXIOM_INGEST_FALLBACK_URL`
 > all default to `http://localhost:8012` (the local always-on runner). The
 > *role* they fill is what differs, not the address.
 >

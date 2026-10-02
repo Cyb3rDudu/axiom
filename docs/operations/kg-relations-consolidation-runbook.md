@@ -4,22 +4,22 @@
 
 ```bash
 # 1. typing (smallest, no schema change)
-axiom-ng -normalize-entity-types            # dry-run
-axiom-ng -normalize-entity-types --apply
+axiom -normalize-entity-types            # dry-run
+axiom -normalize-entity-types --apply
 
 # 2. relations (the aggregation)
-axiom-ng -consolidate-relations             # dry-run
-axiom-ng -consolidate-relations --apply
+axiom -consolidate-relations             # dry-run
+axiom -consolidate-relations --apply
 
 # 3. aliases (needs migration 0015 applied first — server restart
 #    or migrate; the column is additive + nullable, reads unchanged)
-axiom-ng -bind-flexion-aliases              # dry-run
-axiom-ng -bind-flexion-aliases --apply
+axiom -bind-flexion-aliases              # dry-run
+axiom -bind-flexion-aliases --apply
 
 # 3b. re-point variant edges to survivors + delete self-loops (MUST run
 #     after alias binding, BEFORE the next consolidation)
-axiom-ng -repoint-alias-edges
-axiom-ng -consolidate-relations --apply     # resolves resulting pair duplicates
+axiom -repoint-alias-edges
+axiom -consolidate-relations --apply     # resolves resulting pair duplicates
 ```
 
 ## Blast radius (production dry-runs, 2026-08-20)
@@ -41,8 +41,8 @@ SELECT count(*) FROM (
 ```
 
 ```bash
-axiom-ng -normalize-entity-types  # expect MatchedRows:0 (non-CONCEPT generic forms exhausted)
-axiom-ng -bind-flexion-aliases    # expect Families:0 VariantsLinked:0
+axiom -normalize-entity-types  # expect MatchedRows:0 (non-CONCEPT generic forms exhausted)
+axiom -bind-flexion-aliases    # expect Families:0 VariantsLinked:0
 ```
 
 ## Idempotency + re-sync

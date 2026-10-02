@@ -85,7 +85,7 @@ Notes:
   at firing time anyway.
 - `DEVICE_GLINER=cuda` is load-bearing (CPU GLiNER ≈ 1 h/book, measured).
 - No Zotero mounts: production runners PULL sources from the axiom dispatcher
-  via the job's `source_url` (dispatcher-built from `AXIOM_PROCESSOR_SOURCE_BASE_URL`);
+  via the job's `source_url` (dispatcher-built from `AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL`);
   downloads land in `work_root/.incoming` (`app.py`). `ALLOWED_SOURCE_ROOTS`
   only gates local-path delivery (reference mode) — same pattern the running
   GPU1 container proves.
@@ -97,9 +97,9 @@ Notes:
 The runner is a **passive HTTP server** (`POST /v1/process`, `GET
 /v1/jobs/{id}`, `/v1/health`, `/v1/capabilities`). It never pulls work.
 All pulling lives in the Mac-side dispatcher: it polls `ingest_jobs`,
-leases with SKIP LOCKED, and pushes to `AXIOM_PROCESSOR_URL`. Therefore a
+leases with SKIP LOCKED, and pushes to `AXIOM_COMPUTE_WORKER_URL`. Therefore a
 started wave runner on a NEW port is **inert** until (a) pending jobs
-exist AND (b) a dispatcher's `AXIOM_PROCESSOR_URL` points at it. Neither
+exist AND (b) a dispatcher's `AXIOM_COMPUTE_WORKER_URL` points at it. Neither
 holds before the firing sequence — that IS the isolation.
 
 ### 1.5 Sanctioned dry-run (once, safe)
@@ -166,16 +166,16 @@ attributes books and SKIP LOCKED + claim fencing keep the split exclusive
 
 ```text
 AXIOM_DISPATCHER_ENABLED=true
-AXIOM_PROCESSOR_URL=http://<runner-host>:<port>      # one port per dispatcher/runner pair
-AXIOM_PROCESSOR_RUNNER_NAME=carrier-w9-gpu0|w9-gpu1|w9-a3000
+AXIOM_COMPUTE_WORKER_URL=http://<runner-host>:<port>      # one port per dispatcher/runner pair
+AXIOM_COMPUTE_WORKER_NAME=carrier-w9-gpu0|w9-gpu1|w9-a3000
 AXIOM_DISPATCHER_WORKER_ID=axiom-w9-<n>
 AXIOM_DISPATCHER_CONCURRENCY=1                    # per-GPU serial, TC2 shape
 AXIOM_DISPATCHER_LEASE=5m                         # default, proven
 AXIOM_DISPATCHER_PROFILE=full-rag-v1              # see profile note below
 # Source-pull path (review W1 — without these the runner gets Mac local_paths,
 # rejects them (not under /data) and every job dies 422 SOURCE_NOT_FOUND):
-AXIOM_PROCESSOR_SOURCE_BASE_URL=http://<admin-host>:<port>   # the axiom API host serving /api/processor/source/<jobID>
-AXIOM_PROCESSOR_SOURCE_SECRET=<from the running dispatcher env — never in docs>
+AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL=http://<admin-host>:<port>   # the axiom API host serving /api/processor/source/<jobID>
+AXIOM_COMPUTE_WORKER_SOURCE_SECRET=<from the running dispatcher env — never in docs>
 # Standalone dispatcher processes also need (no defaults):
 AXIOM_DATABASE_URL=<Mac Postgres DSN>
 AXIOM_ARTIFACT_ROOT=<artifact dir — full-rag-v1 extracts images; validation fails without it>
@@ -294,7 +294,7 @@ Since #197 consolidation is a STANDING mechanism, reachable three ways:
 
 ```bash
 # 1) CLI epilogue (unchanged — runbook calls this after the drain):
-AXIOM_DATABASE_URL=<dsn> ./axiom-ng -consolidate-entities
+AXIOM_DATABASE_URL=<dsn> ./axiom -consolidate-entities
 # epilogue: entity consolidation complete: N entities merged, duplicate forms M->0
 
 # 2) REST (loopback-bound write route, admin surface like the other writes):
@@ -329,11 +329,11 @@ reprocessing of a book carries the gate automatically; no rebuild needed:
 
 ```bash
 # Candidate report (deletes NOTHING) — review before every productive drop:
-AXIOM_DATABASE_URL=<dsn> ./axiom-ng -cleanup-frontmatter-kg
+AXIOM_DATABASE_URL=<dsn> ./axiom -cleanup-frontmatter-kg
 # fmgate: frontmatter cleanup DRY RUN: {chunks:.. relations:.. entities:.. mentions:..}
 
 # Execute (once, idempotent; backup first, see backups/ convention):
-AXIOM_DATABASE_URL=<dsn> ./axiom-ng -cleanup-frontmatter-kg --apply
+AXIOM_DATABASE_URL=<dsn> ./axiom -cleanup-frontmatter-kg --apply
 ```
 
 Rules (identical to the persist gate): a relation dies when ALL its evidence
@@ -367,9 +367,8 @@ and pending books untouched.
 
 Stop w9 runners or leave as the new standing ingest fleet (dispatcher
 topology then collapses back to one primary URL + Mac fallback per
-EXTERNAL_RUNNER_DEPLOYMENT §failover). Remove TC2-era exited containers.
-# 171 leftovers (study-minirunner, axiom-study, ~/models) ride the #171
-teardown plan.
+EXTERNAL_RUNNER_DEPLOYMENT §failover). Remove TC2-era exited containers. The #171 leftovers (study-minirunner, axiom-study, ~/models)
+ride the #171 teardown plan.
 
 ---
 

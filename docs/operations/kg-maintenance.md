@@ -25,7 +25,7 @@ line carries the counts, zeros mean nothing to do); `1` = failure, and the
 `MODE FAILED` line states whether the KG is consistent (`transaction rolled
 back`) or partial (multi-pass modes: earlier passes committed; every pass is
 idempotent — re-run). Long mutating passes log a heartbeat line every 30s
-(elapsed, items done/total, current item). Full contract: `axiom-ng -help`.
+(elapsed, items done/total, current item). Full contract: `axiom -help`.
 
 ## Standard chain
 
@@ -35,24 +35,24 @@ Use the same binary and database URL that the server uses.
 export AXIOM_DATABASE_URL='postgresql://...'
 
 # 1. Type role/group nouns as CONCEPT. Dry-run first.
-axiom-ng -normalize-entity-types
-axiom-ng -normalize-entity-types --apply
+axiom -normalize-entity-types
+axiom -normalize-entity-types --apply
 
 # 2. Merge guarded exact-form duplicates. Dry-run first.
-axiom-ng -consolidate-entities
-axiom-ng -consolidate-entities --apply
+axiom -consolidate-entities
+axiom -consolidate-entities --apply
 
 # 3. Bind exact and flexion alias families. Dry-run first.
-axiom-ng -bind-all-aliases
-axiom-ng -bind-all-aliases --apply
+axiom -bind-all-aliases
+axiom -bind-all-aliases --apply
 
 # 4. Repoint relation endpoints from variants to family roots.
 # This command mutates immediately: there is no --apply gate.
-axiom-ng -repoint-alias-edges
+axiom -repoint-alias-edges
 
 # 5. Collapse duplicate relation triples. Dry-run first.
-axiom-ng -consolidate-relations
-axiom-ng -consolidate-relations --apply
+axiom -consolidate-relations
+axiom -consolidate-relations --apply
 ```
 
 The dry-run contract is exact for `-normalize-entity-types`,

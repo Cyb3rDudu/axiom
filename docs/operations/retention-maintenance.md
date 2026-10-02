@@ -13,16 +13,16 @@ ever deletes without an explicit invocation, and the default is the
 
 ```bash
 # dry run (default) — exact removal counts, nothing deleted
-/opt/axiom/bin/axiom-ng -maintenance-retention
+/opt/axiom/bin/axiom -maintenance-retention
 
 # real run
-/opt/axiom/bin/axiom-ng -maintenance-retention --apply
+/opt/axiom/bin/axiom -maintenance-retention --apply
 
 # job retention age override (default 14 days)
-AXIOM_RETENTION_JOB_DAYS=30 /opt/axiom/bin/axiom-ng -maintenance-retention --apply
+AXIOM_RETENTION_JOB_DAYS=30 /opt/axiom/bin/axiom -maintenance-retention --apply
 
 # execution form overrides (#290)
-/opt/axiom/bin/axiom-ng -maintenance-retention --apply --timeout=4h --batch=10
+/opt/axiom/bin/axiom -maintenance-retention --apply --timeout=4h --batch=10
 # or via env: AXIOM_RETENTION_TIMEOUT=4h, AXIOM_RETENTION_BATCH=10
 # (an explicit flag WINS over the env var; --timeout 4h with a space
 # works too)

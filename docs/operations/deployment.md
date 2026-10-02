@@ -207,7 +207,7 @@ Two transport layers in sequence masked one problem during a mass run:
    signature at the container layer (`--network=host` fixes it).
 
 **Operating rule:** dispatcher↔runner bulk flows (result JSON, artifact bodies)
-require **direct LAN reachability in both directions** — `AXIOM_PROCESSOR_URL`
+require **direct LAN reachability in both directions** — `AXIOM_COMPUTE_WORKER_URL`
 to the runner host port, and the runner's `source_url` base pointing at the
 dispatcher's LAN address. A tunnel works for the control plane and is the
 fallback when no direct path exists (accepting the throughput penalty).
@@ -221,7 +221,7 @@ On the dispatcher host:
 
 ```bash
 export AXIOM_DISPATCHER_ENABLED=true
-export AXIOM_PROCESSOR_URL=http://<runner-host>:<port>   # direct LAN — see transport rule
+export AXIOM_COMPUTE_WORKER_URL=http://<runner-host>:<port>   # direct LAN — see transport rule
 ```
 
 The dispatcher negotiates capabilities against the remote runner at startup and
@@ -237,15 +237,15 @@ extension). Configure on the dispatcher side:
 
 ```bash
 # Shared HMAC secret (dispatcher signs, .../source verifies). Empty = feature off on both sides.
-export AXIOM_PROCESSOR_SOURCE_SECRET='<random-hex>'
+export AXIOM_COMPUTE_WORKER_SOURCE_SECRET='<random-hex>'
 # Base URL the runner uses to reach the dispatcher — NOT 127.0.0.1 (the runner resolves on its own host):
-export AXIOM_PROCESSOR_SOURCE_BASE_URL=http://<dispatcher-lan-ip>:<dispatcher-port>
+export AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL=http://<dispatcher-lan-ip>:<dispatcher-port>
 # The dispatcher must listen on a reachable interface:
 export AXIOM_BIND_ADDR=0.0.0.0
 # POST /v1/process waits for the synchronous download; the result budget floors the submit call:
-export AXIOM_PROCESSOR_TIMEOUT=180s
+export AXIOM_COMPUTE_WORKER_TIMEOUT=180s
 # Note the near-identical pair (different scope):
-#   AXIOM_PROCESSOR_TIMEOUT        — DISPATCHER-side result-fetch budget
+#   AXIOM_COMPUTE_WORKER_TIMEOUT   — DISPATCHER-side result-fetch budget
 #   AXIOM_PROCESSOR_SOURCE_TIMEOUT — RUNNER-side source-download budget (default 120s)
 ```
 
@@ -263,13 +263,13 @@ the ACK (contract §18/§19 test 13).
 With multiple runners, every log line and every job row must say which runner
 produced it.
 
-**Where the label is set:** `AXIOM_PROCESSOR_RUNNER_NAME` is read by the
+**Where the label is set:** `AXIOM_COMPUTE_WORKER_NAME` is read by the
 **dispatcher** (the Go side), not by the runner — the Python runner never
 consumes it, so exporting it on the GPU host is a silent no-op. You run one
 dispatcher instance per runner, and each dispatcher names its runner:
 
 ```bash
-export AXIOM_PROCESSOR_RUNNER_NAME=<runner-label>
+export AXIOM_COMPUTE_WORKER_NAME=<runner-label>
 ```
 
 The label lands in the phase log line (`phases[ok]: runner=<label> job=…`) and
@@ -285,7 +285,7 @@ FROM ingest_jobs WHERE status = 'completed' GROUP BY 1;
 
 GPU sampler per runner (30-s cadence), label first so lines stay attributable
 after log merge. This sampler runs **on the runner host** and is pure
-attribution — it does not read `AXIOM_PROCESSOR_RUNNER_NAME`:
+attribution — it does not read `AXIOM_COMPUTE_WORKER_NAME`:
 
 ```bash
 nohup sh -c 'while true; do echo "<runner-label> $(date +%s) $(nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader)"; sleep 30; done' \

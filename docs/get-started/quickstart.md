@@ -26,7 +26,7 @@ owns state, queue, search index        does conversion, chunking, ML
 
 Both run on loopback for a first test. To spread compute across machines (e.g.
 retrieval on a local runner, heavy processing on a remote GPU), set
-`AXIOM_PROCESSOR_URLS` to an ordered candidate list — e.g.
+`AXIOM_COMPUTE_WORKER_URLS` to an ordered candidate list — e.g.
 `http://gpu-host:19542,http://127.0.0.1:8012` (remote GPU first, local floor
 last). The health probe skips unreachable candidates automatically, so the
 same env file works at home and on the road. Details:
@@ -37,9 +37,9 @@ same env file works at home and on the road. Details:
 
 ```bash
 python3.11 -m venv .venv        # Python 3.11+ required (pyproject floor)
-# installing the project itself ships BOTH packages (canonical +
-# axiom_ng_runner alias) and the console script — requirements alone do
-# not put the module on the path (F10 layout)
+# installing the project itself ships the module and the console
+# script — requirements alone do not put the module on the path (F10
+# layout; the legacy module alias is covered in the rename map)
 .venv/bin/pip install -r axiom-compute-worker/requirements.txt ./axiom-compute-worker
 export AXIOM_PROCESSOR_COMPUTE=reference
 export AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS=<path-to-zotero-storage>  # the `storage` folder of your Zotero data dir
@@ -54,10 +54,10 @@ Wait for `Uvicorn running on http://127.0.0.1:8537`.
 export AXIOM_ZOTERO_BASE=http://localhost:23119/api
 export AXIOM_DATABASE_URL=postgres://<user>:<pass>@localhost:5432/<db>
 export AXIOM_OPENSEARCH_URL=http://localhost:9200
-export AXIOM_PROCESSOR_URL=http://127.0.0.1:8537
+export AXIOM_COMPUTE_WORKER_URL=http://127.0.0.1:8537
 export AXIOM_DISPATCHER_ENABLED=true
 
-cd axiom_ng && go run ./cmd/axiom-ng
+cd axiom_ng && go run ./cmd/axiom serve all
 ```
 
 The dispatcher checks Zotero is reachable and the runner is contract-compatible.
@@ -78,7 +78,7 @@ index.
 | --- | --- | --- |
 | `Zotero local API not reachable` | Local API disabled or Zotero closed | Enable Settings → Advanced → Local API; keep Zotero running. |
 | Jobs stuck or fail on a source error | Runner cannot read the Zotero storage path | Point `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS` at the real Zotero storage folder and restart the runner. |
-| Runner never picks up work | URL/compute mismatch between dispatcher and runner | Use the same `AXIOM_PROCESSOR_URL` on both sides (loopback same host is simplest). |
+| Runner never picks up work | URL/compute mismatch between dispatcher and runner | Point the dispatcher's `AXIOM_COMPUTE_WORKER_URL` at the runner's actual port (loopback same host is simplest). |
 
 More patterns: [Troubleshooting](../operations/troubleshooting.md).
 

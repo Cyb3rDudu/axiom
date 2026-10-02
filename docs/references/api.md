@@ -46,7 +46,7 @@ every rejected request.
 The response is always HTTP `200`. `ok` is false when any registered checker
 fails; `checks` contains `ok`, an error string, or `unknown` for each dependency.
 A fully wired process checks Zotero, PostgreSQL, the query runner, and the ingest
-runner. `build` carries the version banner and must match `axiom-ng --version`.
+runner. `build` carries the version banner and must match `axiom --version`.
 `contextual` (#262) is `active` or `degraded_no_sync` while contextual rules
 are configured (omitted otherwise): `degraded_no_sync` means the DB had no
 sync state at boot — the rules are inactive (everything citable) and the
@@ -579,7 +579,7 @@ shutdown.
 
 This route is for runners, not interactive clients. The dispatcher signs the
 ASCII string `jobID|exp` with HMAC-SHA256 using
-`AXIOM_PROCESSOR_SOURCE_SECRET`; `sig` is the lowercase hexadecimal digest.
+`AXIOM_COMPUTE_WORKER_SOURCE_SECRET`; `sig` is the lowercase hexadecimal digest.
 The server verifies, in order:
 
 1. source delivery is configured;

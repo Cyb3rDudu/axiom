@@ -100,7 +100,7 @@ retries, a box hotter than its real capacity. Retired:
   meet the budget. A stray legacy agent left over from the migration cannot
   over-claim — it simply idles.
 - **GPU-rich needs no topology change:** list the runners in
-  `AXIOM_PROCESSOR_URLS` and the lanes derive (3 runners × capacity 1 = 3
+  `AXIOM_COMPUTE_WORKER_URLS` and the lanes derive (3 runners × capacity 1 = 3
   lanes). A runner added mid-run raises the budget on the next restart.
 - **Lane proof during a batch run:**
   `psql -c "SELECT DISTINCT claimed_by FROM ingest_jobs WHERE status IN ('claimed','processing') AND lease_until > now();"`
@@ -392,20 +392,21 @@ source secret, DeepSeek keys) live ONLY there — never in `/tmp` (the reboot
 wiped /tmp and took the secret with it), never inline in plists.
 
 - `rag.env` — shared: `AXIOM_DATABASE_URL`, `AXIOM_OPENSEARCH_URL`,
-  `AXIOM_PROCESSOR_SOURCE_BASE_URL`, `AXIOM_PROCESSOR_SOURCE_SECRET`
+  `AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL`, `AXIOM_COMPUTE_WORKER_SOURCE_SECRET`
 - `rag-api.env` — instance: `AXIOM_API_PORT=8011`, `AXIOM_BIND_ADDR`,
   `AXIOM_DISPATCHER_ENABLED=0`
 - `rag-dispatch-gpuN.env` — per dispatcher: port 8013+,
   `AXIOM_DISPATCHER_ENABLED=1`, worker id,
   `AXIOM_DISPATCHER_PROFILE` (the empty-profile trap: assert non-empty!)
-- Ingest runner selection (#207): `AXIOM_PROCESSOR_URLS` = ordered candidate
+- Ingest runner selection (#207): `AXIOM_COMPUTE_WORKER_URLS` = ordered candidate
   list (e.g. `http://<carrier-host>:<port>,http://127.0.0.1:8012` — Carrier
   first, local floor last). The SAME env file works at home and on the
   road: without the Carrier, the health probe skips it and ingest runs
   locally — no reconfiguration, no failover timeout per submit.
   The legacy pair `AXIOM_PROCESSOR_URL` + `AXIOM_INGEST_FALLBACK_URL` keeps
-  working (folded into a two-entry chain); plural wins when both are set.
-  Optional: `AXIOM_RUNNER_HEALTH_INTERVAL` (default 60s).
+  working (folded into a two-entry chain); plural wins when both are set
+  (legacy spellings: [deprecation schedule](deprecations.md)).
+  Optional: `AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL` (default 60s).
 - `runner.env` — `AXIOM_PROCESSOR_COMPUTE=real`, `AXIOM_PROCESSOR_PORT=8012`
 
 Operational traps with env files (first two hit during the v0.1.11
@@ -422,7 +423,7 @@ production install, 2026-08-23):
 2. **Port changes can span multiple env files.** The API port appears not
    only in `rag-api.env` (`AXIOM_API_PORT`) but also — if the source-pull
    path is active — in `rag.env`
-   (`AXIOM_PROCESSOR_SOURCE_BASE_URL=http://<host>:<api-port>`). Changing
+   (`AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL=http://<host>:<api-port>`). Changing
    only the former silently breaks remote-runner source fetches (404 on
    every dispatcher job). After any port change:
    `grep -rn <old-port> ~/.config/axiom/` must come back empty (comments
@@ -449,7 +450,7 @@ non-secret settings, and `--key` stays a per-event argument.
 ## Debug vs production (DoD core, #205 §5)
 
 - Production artifacts are release-built, version-stamped, checksummed.
-  `axiom-ng --version` AND `/api/health` (field `build`) must report the
+  `axiom --version` AND `/api/health` (field `build`) must report the
   same banner. If the banner says `debug build`, it is NOT production.
 - A debug build REFUSES to bind ports 8011–8015
   (`AXIOM_ALLOW_DEBUG_BIND=1` opts out for local dev). The 2026-08-23
