@@ -95,7 +95,7 @@ func confinementViolations(perPkg map[string][]string) []string {
 
 // TestConfigstoreConfinedToConfigAndCli — the standing gate.
 func TestConfigstoreConfinedToConfigAndCli(t *testing.T) {
-	perPkg, err := scanImports("../..")
+	perPkg, err := scanImports("../../..") // the module root (this package sits three levels deep)
 	if err != nil {
 		t.Fatalf("configstore lint scan failed (fail closed): %v", err)
 	}

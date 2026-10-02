@@ -143,33 +143,28 @@ var dualFedEnv = map[string][2]string{
 // Effective renders the resolved view of cfg: one Entry per env row, in
 // table order. Secrets are redacted; the DSN is projected without its
 // credential part so operators can still see WHERE the process points.
+// Source truth here is the env-only view (env > default); the full
+// chain (flag > env > file > default) renders through EffectiveChain.
 func Effective(cfg Config) []Entry {
+	return render(cfg, envOnlySource)
+}
+
+// EffectiveChain renders the resolved view with full-chain provenance
+// (F13 #307): source flag | env | file | default per key, the Chain
+// built by LoadResolved.
+func EffectiveChain(cfg Config, ch Chain) []Entry {
+	return render(cfg, ch.stage)
+}
+
+// render is the shared row renderer; source decides each row's stage
+// label.
+func render(cfg Config, source func(envRow) string) []Entry {
 	v := reflect.ValueOf(cfg)
 	out := make([]Entry, 0, len(envRows))
 	for _, row := range envRows {
 		f := v.FieldByName(row.field)
 		if !f.IsValid() {
 			panic(fmt.Sprintf("config: effective table field %q missing on Config — table and struct drifted", row.field))
-		}
-		source := "default"
-		if _, set := os.LookupEnv(row.env); set {
-			source = "env"
-		}
-		// Dual-fed fields (F08 #302, generalized F10 #304): the generic
-		// per-key LookupEnv lied twice on these (with both set, the legacy
-		// row rendered the canonical VALUE under source=env; with only
-		// legacy set, the canonical row rendered the legacy value under
-		// source=default). The pair table above tells the resolver's truth.
-		if pair, dual := dualFedEnv[row.field]; dual {
-			canonicalSet := os.Getenv(pair[0]) != ""
-			legacySet := os.Getenv(pair[1]) != ""
-			fed := (row.env == pair[0] && canonicalSet) ||
-				(row.env == pair[1] && legacySet && !canonicalSet)
-			if fed {
-				source = "env"
-			} else {
-				source = "default"
-			}
 		}
 		var value any
 		switch {
@@ -196,9 +191,37 @@ func Effective(cfg Config) []Entry {
 		default:
 			value = f.Interface()
 		}
-		out = append(out, Entry{Env: row.env, Value: value, Source: source})
+		out = append(out, Entry{Env: row.env, Value: value, Source: source(row)})
 	}
 	return out
+}
+
+// envOnlySource is the env-only stage truth (the pre-F13 view): a set
+// environment key reads env, everything else default — dual-fed fields
+// from the resolver's truth (a shadowed legacy spelling renders
+// default).
+func envOnlySource(row envRow) string {
+	source := SourceDefault
+	if _, set := os.LookupEnv(row.env); set {
+		source = SourceEnv
+	}
+	// Dual-fed fields (F08 #302, generalized F10 #304): the generic
+	// per-key LookupEnv lied twice on these (with both set, the legacy
+	// row rendered the canonical VALUE under source=env; with only
+	// legacy set, the canonical row rendered the legacy value under
+	// source=default). The pair table above tells the resolver's truth.
+	if pair, dual := dualFedEnv[row.field]; dual {
+		canonicalSet := os.Getenv(pair[0]) != ""
+		legacySet := os.Getenv(pair[1]) != ""
+		fed := (row.env == pair[0] && canonicalSet) ||
+			(row.env == pair[1] && legacySet && !canonicalSet)
+		if fed {
+			source = SourceEnv
+		} else {
+			source = SourceDefault
+		}
+	}
+	return source
 }
 
 // credentialQueryKeys are the query parameters pgx honors as credentials
@@ -271,37 +294,48 @@ func stripURLUserinfo(s string) string {
 // means the env combination parses cleanly (role-level consistency is
 // the caller's composition check).
 func ValidateEnv() []string {
-	cfg := Config{}
 	var problems []string
 	for _, row := range envRows {
 		raw, set := os.LookupEnv(row.env)
 		if !set || raw == "" {
 			continue
 		}
-		kind := reflect.ValueOf(cfg).FieldByName(row.field).Kind()
-		var err error
-		switch kind {
-		case reflect.Int, reflect.Int64:
-			if reflect.ValueOf(cfg).FieldByName(row.field).Type() == durationType {
-				_, err = time.ParseDuration(raw)
-			} else {
-				_, err = strconv.Atoi(raw)
-			}
-		case reflect.Bool:
-			if !boolRecognized(raw) {
-				err = fmt.Errorf("not a boolean (the loader reads only 1/true/yes and 0/false/no)")
-			}
-		case reflect.String, reflect.Slice:
-			// free-form; nothing to re-parse
+		problems = append(problems, checkRawValue(row, raw)...)
+	}
+	return problems
+}
+
+// checkRawValue validates one non-empty raw value against its table
+// row's target kind — the shared rules behind ValidateEnv, the
+// config.sqlite validation (ValidateSettings), and the --set flag
+// validation (ValidateFlags). A problem names the key, the value, and
+// what the loader would do (fall back silently / abort at start).
+func checkRawValue(row envRow, raw string) []string {
+	cfg := Config{}
+	var problems []string
+	kind := reflect.ValueOf(cfg).FieldByName(row.field).Kind()
+	var err error
+	switch kind {
+	case reflect.Int, reflect.Int64:
+		if reflect.ValueOf(cfg).FieldByName(row.field).Type() == durationType {
+			_, err = time.ParseDuration(raw)
+		} else {
+			_, err = strconv.Atoi(raw)
 		}
-		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s=%q: %v (loader falls back to the default silently)", row.env, raw, err))
+	case reflect.Bool:
+		if !boolRecognized(raw) {
+			err = fmt.Errorf("not a boolean (the loader reads only 1/true/yes and 0/false/no)")
 		}
-		// Vocabulary keys: values the loader would silently fall back on
-		// are not parse errors but WORD errors — same reporting channel.
-		if row.env == "AXIOM_STORAGE_LIBRARY_DRIVER" && raw != "" && raw != "postgres" && raw != "sqlite" {
-			problems = append(problems, fmt.Sprintf("%s=%q: unknown driver (known: postgres, sqlite) — the composition aborts at start", row.env, raw))
-		}
+	case reflect.String, reflect.Slice:
+		// free-form; nothing to re-parse
+	}
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("%s=%q: %v (loader falls back to the default silently)", row.env, raw, err))
+	}
+	// Vocabulary keys: values the loader would silently fall back on
+	// are not parse errors but WORD errors — same reporting channel.
+	if row.env == "AXIOM_STORAGE_LIBRARY_DRIVER" && raw != "" && raw != "postgres" && raw != "sqlite" {
+		problems = append(problems, fmt.Sprintf("%s=%q: unknown driver (known: postgres, sqlite) — the composition aborts at start", row.env, raw))
 	}
 	return problems
 }
