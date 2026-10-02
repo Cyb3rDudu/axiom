@@ -188,7 +188,7 @@ var cliModes = []cliMode{
 		// a re-run resumes — hence modeMultiPass on failure.
 		run: func(logger *log.Logger, apply bool, rp *repo.Repo, args []string) {
 			age := repo.RetentionJobMinAgeDefault
-			if v := os.Getenv("AXIOM_RETENTION_JOB_DAYS"); v != "" {
+			if v := config.ModeEnv("AXIOM_RETENTION_JOB_DAYS"); v != "" {
 				if d, err := strconv.Atoi(v); err == nil && d > 0 {
 					age = time.Duration(d) * 24 * time.Hour
 				} else {
@@ -314,7 +314,9 @@ func envOrFlag(args []string, env, flag string) string {
 	if v := flagValue(args, flag); v != "" {
 		return v
 	}
-	return os.Getenv(env)
+	// the env fallback reads through the sanctioned config package
+	// (F13 usage-lint abatement — cli files stay env-free)
+	return config.ModeEnv(env)
 }
 
 // runCLIMode dispatches args[1] to a registered mode and reports whether
@@ -330,7 +332,11 @@ func runCLIMode(args []string) bool {
 		if args[1] != m.flag {
 			continue
 		}
-		cfg := config.Load()
+		cfg, _, err := config.LoadResolved(nil) // the mode preamble rides the full chain (flag > env > file)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: configuration: %v\n", m.prefix, err)
+			os.Exit(1)
+		}
 		logger := log.New(os.Stderr, m.prefix, log.LstdFlags)
 		repo.SetKGProgressLogger(logger.Printf)
 		apply := m.apply && hasFlag(args[2:], "--apply")

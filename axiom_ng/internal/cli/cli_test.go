@@ -25,6 +25,22 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/db"
 )
 
+// TestMain pins the config store location to an ABSENT path for the
+// whole package (F13 #307): the runtime surfaces resolve through the
+// flag > env > file chain, and a config.sqlite on the test host must
+// never leak into these witnesses. Tests that want a file override
+// with t.Setenv("AXIOM_CONFIG_PATH", …).
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "axiom-cli-test-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(dir)
+	os.Setenv("AXIOM_CONFIG_PATH", dir+"/absent/config.sqlite")
+	os.Exit(m.Run())
+}
+
 func TestServeRefusesUnextractedRoles(t *testing.T) {
 	// F09 (#303) made the store slice real; bogus/missing roles stay
 	// usage errors (exit 2).
@@ -264,12 +280,6 @@ func TestConfigValidateCatchesHalfWiring(t *testing.T) {
 	}
 }
 
-func TestConfigSetRefusesUntilF13(t *testing.T) {
-	if exit := serveTo(&strings.Builder{}, []string{"config", "set", "a", "b"}); exit != exitUsage {
-		t.Fatalf("config set exit = %d, want 2", exit)
-	}
-}
-
 func TestDoctorChecksLogic(t *testing.T) {
 	ossrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -282,7 +292,7 @@ func TestDoctorChecksLogic(t *testing.T) {
 		t.Setenv("AXIOM_DATABASE_URL", "")
 		t.Setenv("AXIOM_OPENSEARCH_URL", ossrv.URL)
 		t.Setenv("AXIOM_ARTIFACT_ROOT", dir)
-		rep := runDoctor(config.Load())
+		rep := runDoctor(nil)
 		if rep.OK {
 			t.Fatal("doctor must not be ok without a database")
 		}
@@ -298,7 +308,7 @@ func TestDoctorChecksLogic(t *testing.T) {
 		t.Setenv("AXIOM_DATABASE_URL", "postgresql://nope@127.0.0.1:1/db?sslmode=disable&connect_timeout=1")
 		t.Setenv("AXIOM_OPENSEARCH_URL", ossrv.URL)
 		t.Setenv("AXIOM_ARTIFACT_ROOT", dir)
-		rep := runDoctor(config.Load())
+		rep := runDoctor(nil)
 		if rep.Checks["database"].Status != "fail" {
 			t.Fatalf("database check must fail on unreachable DSN: %+v", rep.Checks["database"])
 		}
@@ -309,7 +319,7 @@ func TestDoctorChecksLogic(t *testing.T) {
 
 	t.Run("disabled opensearch is ok", func(t *testing.T) {
 		t.Setenv("AXIOM_OPENSEARCH_URL", "")
-		rep := runDoctor(config.Load())
+		rep := runDoctor(nil)
 		if rep.Checks["opensearch"].Status != "ok" || !strings.Contains(rep.Checks["opensearch"].Detail, "disabled") {
 			t.Fatalf("set-empty OS URL is the documented disabled state: %+v", rep.Checks["opensearch"])
 		}
@@ -317,14 +327,14 @@ func TestDoctorChecksLogic(t *testing.T) {
 
 	t.Run("missing artifact root fails", func(t *testing.T) {
 		t.Setenv("AXIOM_ARTIFACT_ROOT", "")
-		rep := runDoctor(config.Load())
+		rep := runDoctor(nil)
 		if rep.Checks["artifact-root"].Status != "fail" {
 			t.Fatalf("artifact-root: %+v", rep.Checks["artifact-root"])
 		}
 	})
 
 	t.Run("json serializes", func(t *testing.T) {
-		rep := runDoctor(config.Load())
+		rep := runDoctor(nil)
 		if _, err := json.Marshal(rep); err != nil {
 			t.Fatal(err)
 		}

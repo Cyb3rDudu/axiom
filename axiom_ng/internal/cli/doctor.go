@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config"
+	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config/configstore"
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/version"
 	"github.com/jackc/pgx/v5"
 )
@@ -41,9 +42,13 @@ type schemaInfo struct {
 	Latest     string `json:"latest"`
 }
 
-// runDoctor collects every check against cfg. All checks run (a red
-// report names every problem, not just the first).
-func runDoctor(cfg config.Config) doctorReport {
+// runDoctor collects every check against the resolved configuration
+// (flag > env > config.sqlite > default — F13 #307). All checks run (a
+// red report names every problem, not just the first); when the chain
+// itself refuses (broken config.sqlite, invalid --set), the
+// cfg-dependent checks degrade to skipped-honestly instead of probing
+// against a zero configuration.
+func runDoctor(flags map[string]string) doctorReport {
 	rep := doctorReport{
 		Binary: map[string]string{
 			"banner":     version.Banner(),
@@ -54,12 +59,31 @@ func runDoctor(cfg config.Config) doctorReport {
 		Checks: map[string]checkStatus{},
 	}
 
+	cfg, _, chainErr := config.LoadResolved(flags)
+	if chainErr != nil {
+		// the chain refused: the config checks report it, everything that
+		// needs a resolved Config is skipped honestly.
+		rep.Checks["config"] = checkStatus{Status: "fail", Detail: chainErr.Error()}
+		rep.Checks["config-file"] = checkStatus{Status: "fail", Detail: chainErr.Error()}
+		for _, name := range []string{"database", "opensearch", "artifact-root"} {
+			rep.Checks[name] = checkStatus{Status: "fail", Detail: "skipped — configuration unresolved"}
+		}
+		rep.OK = false
+		rep.Problems = append(rep.Problems, "config: "+chainErr.Error())
+		return rep
+	}
+
 	// config: env combination parses cleanly (silent-fallback detector).
 	if problems := config.ValidateEnv(); len(problems) > 0 {
 		rep.Checks["config"] = checkStatus{Status: "fail", Detail: fmt.Sprintf("env values the loader would silently ignore: %v", problems)}
 	} else {
 		rep.Checks["config"] = checkStatus{Status: "ok"}
 	}
+
+	// config-file: the config.sqlite side of the chain — absent is the
+	// documented env-only bootstrap (ok, not a gap); present means valid
+	// rows (LoadResolved proved it) + the secret-ref drift check.
+	rep.Checks["config-file"] = configFileCheck()
 
 	// database: reachability + migration ledger.
 	if cfg.DatabaseURL == "" {
@@ -110,8 +134,8 @@ func runDoctor(cfg config.Config) doctorReport {
 	return rep
 }
 
-func cmdDoctor(asJSON bool) int {
-	rep := runDoctor(config.Load())
+func cmdDoctor(asJSON bool, flags map[string]string) int {
+	rep := runDoctor(flags)
 	if asJSON {
 		out, err := json.MarshalIndent(rep, "", "  ")
 		if err != nil {
@@ -120,7 +144,7 @@ func cmdDoctor(asJSON bool) int {
 		fmt.Println(string(out))
 	} else {
 		fmt.Println("binary:  ", rep.Binary["banner"])
-		for _, name := range []string{"config", "database", "opensearch", "artifact-root"} {
+		for _, name := range []string{"config", "config-file", "database", "opensearch", "artifact-root"} {
 			c := rep.Checks[name]
 			line := fmt.Sprintf("%-14s %s", name+":", c.Status)
 			if c.Detail != "" {
@@ -138,6 +162,29 @@ func cmdDoctor(asJSON bool) int {
 		return exitOK
 	}
 	return exitFailure
+}
+
+// configFileCheck reports the config.sqlite state for the doctor
+// report: absent (env-only bootstrap — the container path), or present
+// with its shape (rows, refs, path). Secret-ref drift is a fail (a
+// reference declared an env source that is gone).
+func configFileCheck() checkStatus {
+	path, err := configstore.DefaultPath()
+	if err != nil {
+		return checkStatus{Status: "fail", Detail: err.Error()}
+	}
+	settings, found, err := configstore.Read(path)
+	if err != nil {
+		return checkStatus{Status: "fail", Detail: err.Error()}
+	}
+	if !found {
+		return checkStatus{Status: "ok", Detail: "absent — env-only bootstrap (the container path; config set/import-env creates it)"}
+	}
+	if drift := config.SecretRefDrift(); len(drift) > 0 {
+		return checkStatus{Status: "fail", Detail: fmt.Sprintf("secret references without their env source: %v", drift)}
+	}
+	return checkStatus{Status: "ok", Detail: fmt.Sprintf("%d settings, %d secret references (%s)",
+		len(settings.Values), len(settings.SecretRefs), path)}
 }
 
 // probeDatabase opens a bounded connection and reads the migration

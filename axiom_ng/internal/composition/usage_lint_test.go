@@ -64,12 +64,12 @@ var packageExecAllowance = map[string]int{
 var fileEnvAllowance = map[string]int{
 	"internal/search/search.go": 1, // AXIOM_OS_INDEX override; F06 target
 	// internal/cli is the operator command surface (F05 #299) — counted
-	// per file, not package-wide: the debug-bind opt-out (cli.go) and the
-	// retention mode's env fallbacks (modes.go, pre-F05 surface). A NEW
-	// env read anywhere else in cli goes red. Abatement: F13 moves the
-	// config surface into its store-backed reader.
-	"internal/cli/cli.go":   1,
-	"internal/cli/modes.go": 2,
+	// per file, not package-wide. cli.go's debug-bind opt-out (#205 §5)
+	// is the remaining counted read; modes.go's retention env fallbacks
+	// moved behind config.ModeEnv with F13's store-backed reader
+	// (#307) — the modes.go allowance is retired to zero (dropped from
+	// this map) and a NEW env read anywhere in cli goes red.
+	"internal/cli/cli.go": 1,
 }
 
 // discoveryImports: import paths that ARE service discovery (a domain

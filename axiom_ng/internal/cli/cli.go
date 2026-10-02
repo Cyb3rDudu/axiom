@@ -40,19 +40,44 @@ import (
 // cmd/axiom-ng), -help gained the canonical command block ahead of the
 // legacy mode text, and unknown argv is now a usage error (exit 2)
 // instead of falling through to a server boot.
+//
+// --set KEY=VALUE (repeatable) is the CLI-flag stage of the F13 #307
+// resolution chain (flag > env > config.sqlite > default), honored by
+// serve, doctor, and config — validated once here against the AXIOM_*
+// vocabulary (unknown key / bad value / secret key = loud exit). The
+// legacy KG mode flags never see it (their own flag surface is frozen).
 func Run(name string, args []string) int {
 	if len(args) < 2 {
-		return serve(name, config.Load(), nil) // no-arg: the compat boot = serve all
+		cfg, code := loadRuntime(name, nil)
+		if code != exitOK {
+			return code
+		}
+		return serve(name, cfg, nil) // no-arg: the compat boot = serve all
 	}
 	switch args[1] {
 	case "serve":
-		return cmdServe(name, args[2:])
+		flags, rest, err := config.ParseSetFlags(args[2:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			return exitUsage
+		}
+		return cmdServe(name, rest, flags)
 	case "version":
 		return cmdVersion(hasFlag(args[2:], "--json"))
 	case "doctor":
-		return cmdDoctor(hasFlag(args[2:], "--json"))
+		flags, rest, err := config.ParseSetFlags(args[2:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			return exitUsage
+		}
+		return cmdDoctor(hasFlag(rest, "--json"), flags)
 	case "config":
-		return cmdConfig(name, args[2:])
+		flags, rest, err := config.ParseSetFlags(args[2:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			return exitUsage
+		}
+		return cmdConfig(name, rest, flags)
 	case "--version":
 		return cmdVersion(false)
 	case "-help", "--help", "help":
@@ -72,6 +97,18 @@ func Run(name string, args []string) int {
 	}
 }
 
+// loadRuntime resolves the full chain (flag > env > config.sqlite >
+// default) for the runtime surfaces. A broken file or flag is a LOUD
+// one-line diagnosis + exit 1 — never a silent boot on defaults.
+func loadRuntime(name string, flags map[string]string) (config.Config, int) {
+	cfg, _, err := config.LoadResolved(flags)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: configuration: %v\n", name, err)
+		return config.Config{}, exitFailure
+	}
+	return cfg, exitOK
+}
+
 // Exit codes (the contract documented in the package comment).
 const (
 	exitOK      = 0
@@ -84,9 +121,9 @@ const (
 // `library` the Library slice (Zotero provider + import ladder + sync
 // mirror, F07); `store` stays vocabulary-only until F09 — it refuses
 // loudly instead of fake-splitting.
-func cmdServe(name string, args []string) int {
+func cmdServe(name string, args []string, flags map[string]string) int {
 	if len(args) != 1 {
-		fmt.Fprintf(os.Stderr, "usage: %s serve all|api|library|store\n", name)
+		fmt.Fprintf(os.Stderr, "usage: %s serve [--set KEY=VALUE]... all|api|library|store\n", name)
 		return exitUsage
 	}
 	var roles []composition.Role
@@ -95,9 +132,17 @@ func cmdServe(name string, args []string) int {
 	case "all":
 		// nil = Full: the config-derived full stack, byte-identical to the
 		// pre-F05 boot (RolesFromConfig inside).
-		cfg = config.Load()
+		var code int
+		cfg, code = loadRuntime(name, flags)
+		if code != exitOK {
+			return code
+		}
 	case "api":
-		cfg = apiServeConfig(config.Load(), func(note string) {
+		base, code := loadRuntime(name, flags)
+		if code != exitOK {
+			return code
+		}
+		cfg = apiServeConfig(base, func(note string) {
 			fmt.Fprintln(os.Stderr, name+": note: "+note)
 		})
 		// F11 #305: in the split topology (AXIOM_LIBRARY_URL/
@@ -121,7 +166,11 @@ func cmdServe(name string, args []string) int {
 		// this slice in the split topology — AXIOM_FIXER_INVOKER_ENABLED=1
 		// arms the supervised repair-worker loop HERE (the api arm keeps
 		// its documented "no loops" contract and suppresses the env).
-		cfg = config.Load()
+		var code int
+		cfg, code = loadRuntime(name, flags)
+		if code != exitOK {
+			return code
+		}
 		roles = libraryRoles()
 	case "store":
 		// F09 #303: the Store slice is real — the processing/retrieval
@@ -130,7 +179,11 @@ func cmdServe(name string, args []string) int {
 		// entirely for this role set). Intake is revision-only (POST
 		// /api/v1/store/ingest); the legacy sync lane simply has no
 		// driver in this process.
-		cfg = apiServeConfig(config.Load(), func(note string) {
+		base, code := loadRuntime(name, flags)
+		if code != exitOK {
+			return code
+		}
+		cfg = apiServeConfig(base, func(note string) {
 			fmt.Fprintln(os.Stderr, name+": note: "+note)
 		})
 		if cfg.LibraryImportProviders != "" {
@@ -320,11 +373,18 @@ Commands:
                                 secret values
   config get --effective [--json]
                                 resolved config with source per key
-                                (precedence: flag > env > default; flags
-                                arrive with F13)
-  config validate               env combination consistency check
-  config set                    arrives with F13 (persistent store) — no
-                                pseudo-store before that
+                                (precedence: --set flag > env > config.sqlite
+                                > default)
+  config set <KEY> <VALUE>      write one override into config.sqlite
+                                (validated first: unknown key/type error,
+                                secret keys refused)
+  config unset <KEY>            remove one override (idempotent)
+  config validate               env + file + wiring consistency check
+  config import-env             one-shot: import the current environment
+                                into config.sqlite (secrets as references
+                                only, never values)
+  --set KEY=VALUE               one-shot override for serve/doctor/config
+                                (the CLI-flag stage of the chain)
   (KG mode flags)               the legacy one-shot modes (#244) keep
                                 working: -cleanup-frontmatter-kg,
                                 -consolidate-relations, … (see -help output

@@ -19,6 +19,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config/configstore"
@@ -259,3 +260,82 @@ func ValidateFlags(flags map[string]string) []string {
 // knobs (AXIOM_RETENTION_*) are not part of the envRows vocabulary and
 // stay env-only; the read itself lives where env reads live.
 func ModeEnv(key string) string { return os.Getenv(key) }
+
+// KnownKey reports whether key is part of the AXIOM_* vocabulary (the
+// set/unset teeth: unknown keys are refused, never ignored).
+func KnownKey(key string) bool {
+	_, ok := rowsByKey[key]
+	return ok
+}
+
+// SecretRefDrift checks every secret reference in config.sqlite
+// against the environment: a row declaring source=env whose env var is
+// unset has lost its value source — reported as a problem (the
+// reference's teeth: it makes the expectation checkable).
+func SecretRefDrift() []string {
+	path, err := configstore.DefaultPath()
+	if err != nil {
+		return nil // no path resolvable → no refs to check
+	}
+	settings, found, err := configstore.Read(path)
+	if err != nil || !found {
+		return nil // read problems surface through LoadResolved
+	}
+	var problems []string
+	for key, source := range settings.SecretRefs {
+		if source == "env" && os.Getenv(key) == "" {
+			problems = append(problems, fmt.Sprintf("%s: secret reference expects the environment to feed it, but %s is unset — the default (empty) applies", key, key))
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// EnvImportRows maps the environment onto file rows for the one-shot
+// importer: every key the environment FEEDS becomes a settings row
+// (non-secret) or a secret reference (secret keys — never values).
+// Dual-fed fields import only the spelling that feeds the value (the
+// shadowed spelling would drift into the file as dead config); the
+// set-empty-disable key imports its empty value (a meaningful state).
+// Values are read ONCE — no secret value ever leaves this function.
+func EnvImportRows() (values, secretRefs map[string]string) {
+	values = map[string]string{}
+	secretRefs = map[string]string{}
+	fed := func(key string) (string, bool) {
+		v, ok := os.LookupEnv(key)
+		if !ok {
+			return "", false
+		}
+		if v == "" && !emptyDisablesKeys[key] {
+			return "", false // set-but-empty is unset semantics for this key
+		}
+		return v, true
+	}
+	for _, row := range envRows {
+		if pair, dual := dualFedEnv[row.field]; dual {
+			if row.env == pair[0] {
+				// the canonical spelling feeds → import it, skip the legacy row
+				if v, ok := fed(pair[0]); ok {
+					importRow(row, v, values, secretRefs)
+				}
+			} else if _, canFed := fed(pair[0]); !canFed {
+				if v, ok := fed(pair[1]); ok {
+					importRow(row, v, values, secretRefs)
+				}
+			}
+			continue
+		}
+		if v, ok := fed(row.env); ok {
+			importRow(row, v, values, secretRefs)
+		}
+	}
+	return values, secretRefs
+}
+
+func importRow(row envRow, value string, values, secretRefs map[string]string) {
+	if row.secret {
+		secretRefs[row.env] = "env" // reference only — the value stays put
+		return
+	}
+	values[row.env] = value
+}
