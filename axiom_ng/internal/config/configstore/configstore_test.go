@@ -9,6 +9,7 @@ package configstore
 import (
 	"context"
 	"database/sql"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,8 +26,9 @@ func openStore(t *testing.T, path string) *Store {
 	return st
 }
 
-// TestRoundtripSetUnsetSecretRef — settings upsert, unset idempotency,
-// secret-ref rows, and the Settings read-back shape.
+// TestRoundtripSetUnsetSecretRef — settings upsert, unset idempotency
+// (including the secret-ref side), secret-ref rows, and the read-back
+// shape through the package's own Read.
 func TestRoundtripSetUnsetSecretRef(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.sqlite")
 	st := openStore(t, path)
@@ -43,14 +45,19 @@ func TestRoundtripSetUnsetSecretRef(t *testing.T) {
 	if err := st.SetSecretRef("AXIOM_WS_SECRET", "env"); err != nil {
 		t.Fatalf("secret ref: %v", err)
 	}
-	got, err := st.Settings()
-	if err != nil {
-		t.Fatalf("settings: %v", err)
+	readBack := func() Settings {
+		t.Helper()
+		got, found, err := Read(path)
+		if err != nil || !found {
+			t.Fatalf("read back: found=%v err=%v", found, err)
+		}
+		return got
 	}
-	if want := map[string]string{"AXIOM_API_PORT": "9999", "AXIOM_STORAGE_LIBRARY_DRIVER": "sqlite"}; !equalMaps(got.Values, want) {
+	got := readBack()
+	if want := map[string]string{"AXIOM_API_PORT": "9999", "AXIOM_STORAGE_LIBRARY_DRIVER": "sqlite"}; !maps.Equal(got.Values, want) {
 		t.Fatalf("values = %v, want %v", got.Values, want)
 	}
-	if want := map[string]string{"AXIOM_WS_SECRET": "env"}; !equalMaps(got.SecretRefs, want) {
+	if want := map[string]string{"AXIOM_WS_SECRET": "env"}; !maps.Equal(got.SecretRefs, want) {
 		t.Fatalf("secret refs = %v, want %v", got.SecretRefs, want)
 	}
 
@@ -60,12 +67,18 @@ func TestRoundtripSetUnsetSecretRef(t *testing.T) {
 	if err := st.Unset("AXIOM_API_PORT"); err != nil { // idempotent
 		t.Fatalf("unset again: %v", err)
 	}
-	got, err = st.Settings()
-	if err != nil {
-		t.Fatalf("settings after unset: %v", err)
-	}
+	got = readBack()
 	if _, ok := got.Values["AXIOM_API_PORT"]; ok {
 		t.Fatalf("unset key survived: %v", got.Values)
+	}
+	// unset clears the secret-ref side too — a surviving reference would
+	// drift the moment the env var clears.
+	if err := st.Unset("AXIOM_WS_SECRET"); err != nil {
+		t.Fatalf("unset ref: %v", err)
+	}
+	got = readBack()
+	if _, ok := got.SecretRefs["AXIOM_WS_SECRET"]; ok {
+		t.Fatalf("unset must remove the secret reference: %v", got.SecretRefs)
 	}
 
 	if err := st.SetSecretRef("AXIOM_WS_SECRET", "keychain"); err == nil {
@@ -94,23 +107,28 @@ func TestReadAbsentFileCreatesNothing(t *testing.T) {
 	}
 }
 
-// TestOpenIdempotentAndVersioned — second Open adopts the file; the
-// ledger carries the applied migration; rows survive the reopen.
-func TestOpenIdempotentAndVersioned(t *testing.T) {
+// TestOpenIdempotentRowsSurvive — second Open adopts the file; the
+// ledger carries the applied migration (read off the write handle —
+// no production API exposes it); rows survive the reopen.
+func TestOpenIdempotentRowsSurvive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.sqlite")
 	st := openStore(t, path)
 	if err := st.Set("AXIOM_BIND_ADDR", "0.0.0.0"); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	n, latest, err := st.Version()
-	if err != nil {
-		t.Fatalf("version: %v", err)
+	var n int
+	var latest sql.NullString
+	if err := st.db.QueryRow(`SELECT count(*), max(version) FROM config_schema_migrations`).Scan(&n, &latest); err != nil {
+		t.Fatalf("ledger: %v", err)
 	}
-	if n != 1 || !strings.Contains(latest, "0001") {
-		t.Fatalf("version = %d/%q, want 1 applied, latest 0001_*", n, latest)
+	if n != 1 || !strings.Contains(latest.String, "0001") {
+		t.Fatalf("ledger = %d/%q, want 1 applied, latest 0001_*", n, latest.String)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+	if _, err := Open(path); err != nil {
+		t.Fatalf("second open must adopt: %v", err)
 	}
 	s, found, err := Read(path)
 	if err != nil {
@@ -118,6 +136,23 @@ func TestOpenIdempotentAndVersioned(t *testing.T) {
 	}
 	if !found || s.Values["AXIOM_BIND_ADDR"] != "0.0.0.0" {
 		t.Fatalf("rows must survive reopen, got found=%v %v", found, s.Values)
+	}
+}
+
+// TestEnsureFileCreatedSemantics — the claim flag Open's cleanup keys
+// on: the first exclusive claim creates (created=true), a second
+// adopts (created=false). A deterministic failed-setup witness would
+// need a fault-injection seam between create and migrate; the flag's
+// truth is what the removal decides on, and that is pinned here.
+func TestEnsureFileCreatedSemantics(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.sqlite")
+	created, err := ensureFile(path)
+	if err != nil || !created {
+		t.Fatalf("first claim must create, got created=%v err=%v", created, err)
+	}
+	created, err = ensureFile(path)
+	if err != nil || created {
+		t.Fatalf("second claim must adopt, got created=%v err=%v", created, err)
 	}
 }
 
@@ -219,21 +254,12 @@ func TestDefaultPathOverride(t *testing.T) {
 		t.Fatalf("override path = %q err=%v", p, err)
 	}
 	t.Setenv("AXIOM_CONFIG_PATH", "")
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir on this host — the default-path shape is untestable here")
+	}
 	p, err = DefaultPath()
 	if err != nil || p != home+"/.axiom-ng/config.sqlite" {
 		t.Fatalf("default path = %q err=%v", p, err)
 	}
-}
-
-func equalMaps(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
 }

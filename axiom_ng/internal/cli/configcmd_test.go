@@ -9,8 +9,10 @@ package cli
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -87,9 +89,11 @@ func TestConfigSetGoodAndBad(t *testing.T) {
 	}{
 		{"AXIOM_NO_SUCH_KEY", "x", "unknown key"},
 		{"AXIOM_API_PORT", "eighty", "falls back"},
+		{"AXIOM_API_PORT", "70000", "out of range"},
 		{"AXIOM_SEARCH_RERANK", "maybe", "not a boolean"},
 		{"AXIOM_STORAGE_LIBRARY_DRIVER", "oracle", "unknown driver"},
 		{"AXIOM_WS_SECRET", "the-ws-secret", "secret"},
+		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://u:pw@h/lib", "inline credential"},
 	} {
 		exit, out, _ := captureRunTo("config", "set", tc.key, tc.value)
 		if exit != exitFailure {
@@ -196,6 +200,43 @@ func findRowLine(out, key string) string {
 	return ""
 }
 
+// TestConfigUsageArityAndDanglingSet — the exit-2 teeth: wrong arity on
+// the config subcommands and a dangling --set anywhere in Run are
+// usage errors, not runtime failures.
+func TestConfigUsageArityAndDanglingSet(t *testing.T) {
+	backedConfig(t)
+	for _, args := range [][]string{
+		{"config", "set", "AXIOM_API_PORT"},
+		{"config", "set"},
+		{"config", "unset"},
+		{"config", "get"},
+		{"config", "get", "--effective", "--bogus"},
+		{"serve", "--set"},
+		{"doctor", "--set"},
+		{"config", "--set"},
+	} {
+		exit, _, _ := captureRunTo(args...)
+		if exit != exitUsage {
+			t.Fatalf("%v must exit 2, got %d", args, exit)
+		}
+	}
+}
+
+// TestGarbageConfigFileRefusesLoudly — a non-SQLite file at
+// AXIOM_CONFIG_PATH makes the chain refuse loudly (exit 1 with a
+// diagnosis) — never a silent boot on defaults.
+func TestGarbageConfigFileRefusesLoudly(t *testing.T) {
+	path := backedConfig(t)
+	if err := os.WriteFile(path, []byte("this is not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer restoreProcessEnv(snapshotEnv())()
+	exit, _, errOut := captureRunTo("config", "get", "--effective")
+	if exit != exitFailure || !strings.Contains(errOut, "config sqlite") {
+		t.Fatalf("garbage file must exit 1 with a diagnosis, got %d: %s", exit, errOut)
+	}
+}
+
 // TestConfigGetFlagTeeth — a bad --set key/value on get is exit 1 with
 // the diagnosis (the chain validates before resolving).
 func TestConfigGetFlagTeeth(t *testing.T) {
@@ -210,6 +251,12 @@ func TestConfigGetFlagTeeth(t *testing.T) {
 	}
 	if strings.Contains(errOut, "AXIOM_WS_SECRET=x") {
 		t.Fatal("the refusal must not echo the flagged pair verbatim beyond the key name")
+	}
+	// an inline credential on the flag surface is refused like the file
+	// surface (ps/history would carry it)
+	exit, _, errOut = captureRunTo("config", "get", "--effective", "--set", "AXIOM_QUERY_RUNNER_URL=http://u:pw@runner:8012")
+	if exit != exitFailure || !strings.Contains(errOut, "inline credential") {
+		t.Fatalf("credential-bearing --set must exit 1, got %d: %s", exit, errOut)
 	}
 }
 
@@ -253,7 +300,7 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 			}
 		}
 	}
-	// (b) replay idempotency at the file level.
+	// (b) replay idempotency at the file level — CONTENT, not counts.
 	first, found, err := configstore.Read(path)
 	if err != nil || !found {
 		t.Fatalf("read after import: %v", err)
@@ -266,21 +313,17 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Values) != len(second.Values) || len(first.SecretRefs) != len(second.SecretRefs) {
-		t.Fatalf("replay must be idempotent: %d/%d then %d/%d", len(first.Values), len(first.SecretRefs), len(second.Values), len(second.SecretRefs))
+	if !maps.Equal(first.Values, second.Values) || !maps.Equal(first.SecretRefs, second.SecretRefs) {
+		t.Fatalf("replay must be idempotent: %v/%v then %v/%v", first.Values, first.SecretRefs, second.Values, second.SecretRefs)
 	}
-	for k, v := range first.Values {
-		if second.Values[k] != v {
-			t.Fatalf("replay changed %s", k)
-		}
-	}
-	// (a) effective identical: env owns the keys, the file shadows nothing.
+	// (a) effective identical: env owns the keys, the file shadows
+	// nothing — the WHOLE configuration, not a spot check.
 	after, _, err := config.LoadResolved(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.APIPort != before.APIPort || after.SearchRerank != before.SearchRerank || after.ProcessorURL != before.ProcessorURL {
-		t.Fatalf("effective moved across import: %+v vs %+v", before, after)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("effective moved across import:\n%+v\nvs\n%+v", before, after)
 	}
 	// secrets as references only; values never in the file bytes.
 	if len(first.SecretRefs) != len(secrets) {
@@ -298,6 +341,53 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 	// the DSN's credential never entered the settings either.
 	if v, ok := first.Values["AXIOM_DATABASE_URL"]; ok {
 		t.Fatalf("secret-valued key must not be a settings row, got %q", v)
+	}
+}
+
+// TestImportEnvValidatesBeforeWrite — the importer validates the mapped
+// rows against the file surface's rules FIRST: a value the file would
+// refuse (here: a type violation the env carries) refuses the whole
+// import — exit 1, nothing written, no file created.
+func TestImportEnvValidatesBeforeWrite(t *testing.T) {
+	path := backedConfig(t)
+	defer restoreProcessEnv(snapshotEnv())()
+	t.Setenv("AXIOM_API_PORT", "not-a-port")
+	exit, out, _ := captureRunTo("config", "import-env")
+	if exit != exitFailure || !strings.Contains(out, "AXIOM_API_PORT") {
+		t.Fatalf("invalid env must refuse the import, got %d: %s", exit, out)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("a refused import must create nothing, stat err = %v", err)
+	}
+}
+
+// TestUnsetRemovesSecretRef — unset clears the secret-ref side too:
+// import-env creates the reference, config unset removes it, and the
+// drift check is clean afterwards (a surviving ref would fail the
+// next doctor the moment the env var clears).
+func TestUnsetRemovesSecretRef(t *testing.T) {
+	path := backedConfig(t)
+	defer restoreProcessEnv(snapshotEnv())()
+	t.Setenv("AXIOM_WS_SECRET", "ws-secret-value-abc")
+	if exit, out, errOut := captureRunTo("config", "import-env"); exit != exitOK {
+		t.Fatalf("seed import failed: %d %s %s", exit, out, errOut)
+	}
+	settings, found, err := configstore.Read(path)
+	if err != nil || !found || len(settings.SecretRefs) != 1 {
+		t.Fatalf("import must create the ref, found=%v err=%v refs=%v", found, err, settings.SecretRefs)
+	}
+	if exit, _, _ := captureRunTo("config", "unset", "AXIOM_WS_SECRET"); exit != exitOK {
+		t.Fatal("unset of a secret-ref key failed")
+	}
+	settings, _, err = configstore.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := settings.SecretRefs["AXIOM_WS_SECRET"]; ok {
+		t.Fatalf("unset must remove the secret reference, got %v", settings.SecretRefs)
+	}
+	if drift := config.SecretRefDrift(); len(drift) != 0 {
+		t.Fatalf("drift after unset: %v", drift)
 	}
 }
 

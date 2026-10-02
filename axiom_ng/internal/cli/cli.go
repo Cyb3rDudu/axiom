@@ -56,26 +56,23 @@ func Run(name string, args []string) int {
 	}
 	switch args[1] {
 	case "serve":
-		flags, rest, err := config.ParseSetFlags(args[2:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
-			return exitUsage
+		flags, rest, code := splitSetFlags(name, args[2:])
+		if code != exitOK {
+			return code
 		}
 		return cmdServe(name, rest, flags)
 	case "version":
 		return cmdVersion(hasFlag(args[2:], "--json"))
 	case "doctor":
-		flags, rest, err := config.ParseSetFlags(args[2:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
-			return exitUsage
+		flags, rest, code := splitSetFlags(name, args[2:])
+		if code != exitOK {
+			return code
 		}
 		return cmdDoctor(hasFlag(rest, "--json"), flags)
 	case "config":
-		flags, rest, err := config.ParseSetFlags(args[2:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
-			return exitUsage
+		flags, rest, code := splitSetFlags(name, args[2:])
+		if code != exitOK {
+			return code
 		}
 		return cmdConfig(name, rest, flags)
 	case "--version":
@@ -95,6 +92,18 @@ func Run(name string, args []string) int {
 		fmt.Fprintf(os.Stderr, "%s: unknown command %q\n\n%s", name, args[1], help(name))
 		return 2
 	}
+}
+
+// splitSetFlags parses the --set stage for one dispatch case and
+// reports the usage error itself (three dispatch sites, one shape).
+func splitSetFlags(name string, args []string) (flags map[string]string, rest []string, code int) {
+	var err error
+	flags, rest, err = config.ParseSetFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		return nil, nil, exitUsage
+	}
+	return flags, rest, exitOK
 }
 
 // loadRuntime resolves the full chain (flag > env > config.sqlite >

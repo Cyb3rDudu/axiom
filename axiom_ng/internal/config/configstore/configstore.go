@@ -75,11 +75,12 @@ var runtimeTables = map[string]bool{
 	"config_schema_migrations": true,
 }
 
-// secretRefSources is the closed source vocabulary for secret_refs
-// rows. "env": the value is expected from the process environment (the
-// OS-secret-store path arrives with a later step; the reference, not
-// the value, is what the file records).
-var secretRefSources = map[string]bool{"env": true}
+// SecretRefSourceEnv is the one secret-ref source today: the value is
+// expected from the process environment (the OS-secret-store path
+// arrives with a later step; the reference, not the value, is what the
+// file records). Shared with the config layer's validation so the
+// vocabulary lives in exactly one place.
+const SecretRefSourceEnv = "env"
 
 // Settings is the file's complete content.
 type Settings struct {
@@ -120,41 +121,14 @@ func Read(path string) (Settings, bool, error) {
 		}
 		return Settings{}, false, fmt.Errorf("config sqlite: %w", err)
 	}
-	s := Settings{Values: map[string]string{}, SecretRefs: map[string]string{}}
+	var s Settings
 	err := withDB(path, func(ctx context.Context, db *sql.DB) error {
 		if err := checkRuntimeOnly(ctx, db); err != nil {
 			return err
 		}
-		rows, err := db.QueryContext(ctx, `SELECT key, value FROM settings`)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var k, v string
-			if err := rows.Scan(&k, &v); err != nil {
-				rows.Close()
-				return err
-			}
-			s.Values[k] = v
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		rows.Close()
-		rows, err = db.QueryContext(ctx, `SELECT key, source FROM secret_refs`)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var k, src string
-			if err := rows.Scan(&k, &src); err != nil {
-				rows.Close()
-				return err
-			}
-			s.SecretRefs[k] = src
-		}
-		return rows.Err()
+		var err error
+		s, err = readAll(ctx, db)
+		return err
 	})
 	if err != nil {
 		return Settings{}, true, fmt.Errorf("config sqlite: read %s: %w", path, err)
@@ -182,12 +156,23 @@ func Open(path string) (*Store, error) {
 	if strings.ContainsAny(abs, "?#%") {
 		return nil, fmt.Errorf("config sqlite: path %q contains URL-significant characters (?/#/%%) that would corrupt the file DSN", abs)
 	}
-	if err := ensureFile(abs); err != nil {
+	created, err := ensureFile(abs)
+	if err != nil {
 		return nil, fmt.Errorf("config sqlite: %w", err)
+	}
+	// A file THIS call created is removed again when any later setup
+	// step fails — a half-initialized config.sqlite would poison every
+	// later boot with "no such table" until removed by hand. An ADOPTED
+	// file (pre-existing, or a concurrent creator's) is never removed.
+	fail := func(err error) (*Store, error) {
+		if created {
+			_ = os.Remove(abs)
+		}
+		return nil, err
 	}
 	db, err := sql.Open("sqlite", dsn(abs))
 	if err != nil {
-		return nil, fmt.Errorf("config sqlite: open: %w", err)
+		return fail(fmt.Errorf("config sqlite: open: %w", err))
 	}
 	db.SetMaxOpenConns(1) // one writer slot — no intra-process contention
 	st := &Store{db: db}
@@ -195,15 +180,15 @@ func Open(path string) (*Store, error) {
 	defer cancel()
 	if err := st.assertPragmas(ctx); err != nil {
 		_ = st.Close()
-		return nil, fmt.Errorf("config sqlite: pragma assert: %w", err)
+		return fail(fmt.Errorf("config sqlite: pragma assert: %w", err))
 	}
 	if err := checkRuntimeOnly(ctx, st.db); err != nil {
 		_ = st.Close()
-		return nil, fmt.Errorf("config sqlite: %w", err)
+		return fail(fmt.Errorf("config sqlite: %w", err))
 	}
 	if err := st.migrate(ctx); err != nil {
 		_ = st.Close()
-		return nil, fmt.Errorf("config sqlite: migrate: %w", err)
+		return fail(fmt.Errorf("config sqlite: migrate: %w", err))
 	}
 	return st, nil
 }
@@ -222,39 +207,29 @@ func (s *Store) Set(key, value string) error {
 	return err
 }
 
-// Unset removes one override row (absent key: no-op — unset is
-// idempotent by contract).
+// Unset removes one key from BOTH tables — an override row and a
+// secret reference (absent key: no-op — unset is idempotent by
+// contract). Without the ref delete, `config unset` on an imported
+// secret key would report success while leaving a reference that
+// drifts the moment the env var clears.
 func (s *Store) Unset(key string) error {
-	_, err := s.db.Exec(`DELETE FROM settings WHERE key = ?`, key)
+	if _, err := s.db.Exec(`DELETE FROM settings WHERE key = ?`, key); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`DELETE FROM secret_refs WHERE key = ?`, key)
 	return err
 }
 
 // SetSecretRef writes (upserts) one secret REFERENCE row — the source
 // the value is expected from; the value itself never enters the file.
 func (s *Store) SetSecretRef(key, source string) error {
-	if !secretRefSources[source] {
-		return fmt.Errorf("config sqlite: unknown secret-ref source %q (known: env)", source)
+	if source != SecretRefSourceEnv {
+		return fmt.Errorf("config sqlite: unknown secret-ref source %q (known: %s)", source, SecretRefSourceEnv)
 	}
 	_, err := s.db.Exec(`INSERT INTO secret_refs (key, source, updated_at) VALUES (?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET source = excluded.source, updated_at = excluded.updated_at`,
 		key, source, dm03Now())
 	return err
-}
-
-// Settings returns the file's complete current content through the
-// write handle.
-func (s *Store) Settings() (Settings, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), busyTimeout)
-	defer cancel()
-	return readAll(ctx, s.db)
-}
-
-// Version returns the applied-migration count and latest version name
-// (the doctor / validate detail line).
-func (s *Store) Version() (int, string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), busyTimeout)
-	defer cancel()
-	return version(ctx, s.db)
 }
 
 // checkRuntimeOnly enforces the Fachdaten-never rule: every table in
@@ -297,22 +272,24 @@ func dsn(path string) string {
 
 // ensureFile creates the file atomically when absent (F12 pattern):
 // exclusive O_CREATE|O_EXCL claim — the file either did not exist (we
-// own it, 0600) or already exists (adopt). rename(2) was rejected for
-// the same reason as in F12: it silently replaces a concurrently
-// created file.
-func ensureFile(path string) error {
+// own it, 0600, created=true) or already exists (adopt, created=false).
+// rename(2) was rejected for the same reason as in F12: it silently
+// replaces a concurrently created file. The created flag lets Open
+// clean up ITS OWN failed creation without ever touching an adopted
+// file.
+func ensureFile(path string) (created bool, err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create dir %s: %w", dir, err)
+		return false, fmt.Errorf("create dir %s: %w", dir, err)
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
-			return nil // concurrent creator won — adopt its file
+			return false, nil // concurrent creator won — adopt its file
 		}
-		return fmt.Errorf("atomic create: %w", err)
+		return false, fmt.Errorf("atomic create: %w", err)
 	}
-	return f.Close()
+	return true, f.Close()
 }
 
 // assertPragmas proves the operating rules took effect — read back from
@@ -356,15 +333,6 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		var exists bool
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM config_schema_migrations WHERE version = ?)`, name,
-		).Scan(&exists); err != nil {
-			return err
-		}
-		if exists {
-			continue
-		}
 		sqlText, err := schemaFS.ReadFile(name)
 		if err != nil {
 			return err
@@ -372,6 +340,23 @@ func (s *Store) migrate(ctx context.Context) error {
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
+		}
+		// The exists-check rides INSIDE the write transaction: two
+		// simultaneous first-boot writers cannot both apply a migration
+		// (_txlock=immediate serializes them; the loser sees the winner's
+		// ledger row and skips instead of dying on the UNIQUE violation).
+		var exists bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM config_schema_migrations WHERE version = ?)`, name,
+		).Scan(&exists); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if exists {
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			continue
 		}
 		if _, err := tx.Exec(string(sqlText)); err != nil {
 			_ = tx.Rollback()
@@ -440,17 +425,6 @@ func readAll(ctx context.Context, db *sql.DB) (Settings, error) {
 	}
 	rows.Close()
 	return s, nil
-}
-
-// version reads the migration ledger's count + latest entry.
-func version(ctx context.Context, db *sql.DB) (int, string, error) {
-	var n int
-	var latest sql.NullString
-	if err := db.QueryRowContext(ctx,
-		`SELECT count(*), max(version) FROM config_schema_migrations`).Scan(&n, &latest); err != nil {
-		return 0, "", err
-	}
-	return n, latest.String, nil
 }
 
 // dm03Now renders the fixed UTC microsecond-aligned timestamp (the

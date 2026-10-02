@@ -35,7 +35,9 @@ var emptyDisablesKeys = map[string]bool{"AXIOM_OPENSEARCH_URL": true}
 
 // Chain is the per-key provenance of one resolved configuration: which
 // stage fed each key (flag > env > file > default). The zero Chain
-// renders the env-only view.
+// renders the provenance-free view — every key default; the env-only
+// truth (set-vs-default per the loader's own semantics) lives in
+// envOnlySource, a deliberately different rule (see its comment).
 type Chain struct {
 	// Flag: keys fed by a --set flag.
 	Flag map[string]bool
@@ -72,6 +74,20 @@ var rowsByKey = func() map[string]envRow {
 // tables, secret VALUES, unknown keys, unparseable values — is a loud
 // error, never a silent fall-back-to-defaults.
 //
+// Field-level decision (dual-fed pairs): the chain binds the LOGICAL
+// knob — flag > env > file holds per FIELD, and the resolver's
+// canonical-over-legacy spelling precedence breaks ties WITHIN one
+// stage, never across stages. Materialization is therefore pair-aware:
+// a file row on either spelling of a pair is skipped when the
+// environment owns the other spelling (env beats file per field), and
+// a --set naming either spelling materializes onto the CANONICAL key
+// (the flag beats env and file per field).
+//
+// An unresolvable DEFAULT path (no home dir, no override) degrades to
+// the env-only bootstrap instead of aborting — the pre-F13 boot worked
+// without $HOME and the chain must not regress that. Writers (config
+// set / import-env) keep the loud path error: they NEED a path.
+//
 // Contract: ONE resolution per process (every runtime surface resolves
 // exactly once at its entry). Materialized values persist in the
 // process environment by design — a second LoadResolved in the same
@@ -80,11 +96,14 @@ var rowsByKey = func() map[string]envRow {
 func LoadResolved(flags map[string]string) (Config, Chain, error) {
 	path, err := configstore.DefaultPath()
 	if err != nil {
-		return Config{}, Chain{}, err
+		path = "" // no resolvable default path → env-only bootstrap
 	}
-	settings, found, err := configstore.Read(path)
-	if err != nil {
-		return Config{}, Chain{}, err
+	settings, found := configstore.Settings{}, false
+	if path != "" {
+		settings, found, err = configstore.Read(path)
+		if err != nil {
+			return Config{}, Chain{}, err
+		}
 	}
 	if found {
 		if problems := ValidateSettings(settings.Values, settings.SecretRefs); len(problems) > 0 {
@@ -100,22 +119,64 @@ func LoadResolved(flags map[string]string) (Config, Chain, error) {
 		File:   map[string]bool{},
 		envSet: snapshotEnvStages(),
 	}
-	for key, value := range settings.Values {
-		if ch.envSet[key] {
-			continue // the environment owns this key — env beats file
+	// File stage. Legacy spellings of dual-fed pairs materialize FIRST,
+	// canonical spellings (and single-fed keys) SECOND — when the file
+	// carries both spellings of a pair the canonical row lands last and
+	// owns the field deterministically (the resolver's own spelling
+	// rule). A pair whose EITHER spelling the environment owns is
+	// skipped entirely: materializing the file's spelling of the other
+	// row would let file beat env across spellings.
+	for _, canonicalPass := range []bool{false, true} {
+		for key, value := range settings.Values {
+			pair, dual := pairOf(key)
+			if dual && (key == pair[0]) != canonicalPass {
+				continue
+			}
+			if ch.envSet[key] || (dual && (ch.envSet[pair[0]] || ch.envSet[pair[1]])) {
+				continue // the environment owns this key or its field
+			}
+			if err := os.Setenv(key, value); err != nil {
+				return Config{}, Chain{}, fmt.Errorf("config: materialize %s: %w", key, err)
+			}
+			ch.File[key] = true
 		}
-		if err := os.Setenv(key, value); err != nil {
-			return Config{}, Chain{}, fmt.Errorf("config: materialize %s: %w", key, err)
-		}
-		ch.File[key] = true
 	}
-	for key, value := range flags {
-		if err := os.Setenv(key, value); err != nil {
-			return Config{}, Chain{}, fmt.Errorf("config: materialize flag %s: %w", key, err)
+	// Flag stage. A flag naming EITHER spelling of a pair owns the whole
+	// field: the value materializes onto the CANONICAL key, so the
+	// resolver's spelling rule cannot invert flag > env across spellings.
+	// Legacy-named flags apply first — a canonical-named flag on the same
+	// pair deterministically wins when both are set.
+	for _, canonicalPass := range []bool{false, true} {
+		for key, value := range flags {
+			pair, dual := pairOf(key)
+			if dual && (key == pair[0]) != canonicalPass {
+				continue
+			}
+			target := key
+			if dual {
+				target = pair[0]
+			}
+			if err := os.Setenv(target, value); err != nil {
+				return Config{}, Chain{}, fmt.Errorf("config: materialize flag %s: %w", key, err)
+			}
+			ch.Flag[target] = true
+			if target != key {
+				ch.Flag[key] = true
+			}
 		}
-		ch.Flag[key] = true
 	}
 	return Load(), ch, nil
+}
+
+// pairOf returns the dual-fed (canonical, legacy) env pair key
+// participates in, if any — the pair-aware materialization's lookup.
+func pairOf(key string) (pair [2]string, dual bool) {
+	row, known := rowsByKey[key]
+	if !known {
+		return [2]string{}, false
+	}
+	p, dual := dualFedEnv[row.field]
+	return p, dual
 }
 
 // snapshotEnvStages records which keys the environment feeds BEFORE any
@@ -168,7 +229,9 @@ func (ch Chain) stage(row envRow) string {
 // "--set K=V" and "--set=K=V" shapes) and returns the flag pairs plus
 // the remaining arguments in order. Syntax errors (a dangling --set, a
 // token without '=') are reported; KEY-level validation is
-// ValidateFlags.
+// ValidateFlags. A pair naming BOTH spellings of a dual-fed field
+// resolves to the canonical-named flag (LoadResolved materializes the
+// legacy one first).
 func ParseSetFlags(args []string) (map[string]string, []string, error) {
 	flags := map[string]string{}
 	var rest []string
@@ -197,60 +260,82 @@ func ParseSetFlags(args []string) (map[string]string, []string, error) {
 	return flags, rest, nil
 }
 
+// UnknownKeyProblem is the shared unknown-key refusal — the teeth
+// text of set/unset/flag validation in one place.
+const UnknownKeyProblem = "unknown key (not part of the AXIOM_* vocabulary — refused, never silently ignored)"
+
+// Stage labels parameterizing validateKV's messages.
+const (
+	stageFile = "config.sqlite"
+	stageFlag = "--set"
+)
+
+// validateKV runs the shared per-key rules for the value-carrying
+// stages — config.sqlite rows and --set flags. The environment
+// deliberately does NOT route here: credentials legitimately live in
+// the environment, and env empties follow the loader's own semantics.
+func validateKV(key, value, stage string) []string {
+	row, known := rowsByKey[key]
+	switch {
+	case !known:
+		return []string{fmt.Sprintf("%s: %s", key, UnknownKeyProblem)}
+	case row.secret:
+		if stage == stageFlag {
+			return []string{fmt.Sprintf("%s: secret keys never ride a command line (history/ps) — keep the value in the environment / OS secret store", key)}
+		}
+		return []string{fmt.Sprintf("%s: secret keys carry references, never values — the value stays in the OS secret store / environment", key)}
+	case value == "" && !emptyDisablesKeys[key]:
+		if stage == stageFlag {
+			return []string{fmt.Sprintf("%s: empty value is unset semantics here", key)}
+		}
+		return []string{fmt.Sprintf("%s: empty value is unset semantics here — unset the key instead", key)}
+	}
+	problems := checkRawValue(row, value)
+	// No credentials on the value-carrying surfaces: a URL with inline
+	// userinfo (scheme://user:pass@host) is a credential the operator
+	// typed — config.sqlite (and ps/history for --set) must never hold
+	// it. The credential-free URL is the storable form; the credential
+	// rides the environment / OS secret store (the render side already
+	// strips userinfo from every OUTPUT — this keeps it out of the
+	// INPUT).
+	if stripURLUserinfo(value) != value {
+		problems = append(problems, fmt.Sprintf("%s: carries an inline credential (userinfo) — store the credential-free URL in %s and feed the credential via env / OS secret store", key, stage))
+	}
+	return problems
+}
+
 // ValidateSettings checks config.sqlite rows against the vocabulary:
-// known key, parseable value, no secret VALUES (references only),
-// legal secret-ref sources, and no empty values where empty is unset
-// semantics. The shared per-value rules live in checkRawValue.
+// known key, parseable value, no secret VALUES (references only), no
+// inline credentials, legal secret-ref sources, and no empty values
+// where empty is unset semantics. The shared per-value rules live in
+// validateKV/checkRawValue.
 func ValidateSettings(values, secretRefs map[string]string) []string {
 	var problems []string
 	for key, value := range values {
-		row, known := rowsByKey[key]
-		switch {
-		case !known:
-			problems = append(problems, fmt.Sprintf("%s: unknown key (not part of the AXIOM_* vocabulary — refused, never silently ignored)", key))
-			continue
-		case row.secret:
-			problems = append(problems, fmt.Sprintf("%s: secret keys carry references, never values — the value stays in the OS secret store / environment", key))
-			continue
-		case value == "" && !emptyDisablesKeys[key]:
-			problems = append(problems, fmt.Sprintf("%s: empty value is unset semantics here — unset the key instead", key))
-			continue
-		}
-		problems = append(problems, checkRawValue(row, value)...)
+		problems = append(problems, validateKV(key, value, stageFile)...)
 	}
 	for key, source := range secretRefs {
 		row, known := rowsByKey[key]
 		switch {
 		case !known:
-			problems = append(problems, fmt.Sprintf("%s: unknown key (not part of the AXIOM_* vocabulary)", key))
+			problems = append(problems, fmt.Sprintf("%s: %s", key, UnknownKeyProblem))
 		case !row.secret:
 			problems = append(problems, fmt.Sprintf("%s: not a secret key — set the value, not a reference", key))
-		case source != "env":
-			problems = append(problems, fmt.Sprintf("%s: unknown secret-ref source %q (known: env)", key, source))
+		case source != configstore.SecretRefSourceEnv:
+			problems = append(problems, fmt.Sprintf("%s: unknown secret-ref source %q (known: %s)", key, source, configstore.SecretRefSourceEnv))
 		}
 	}
 	return problems
 }
 
-// ValidateFlags checks --set pairs: known key, parseable value — and
-// refuses SECRET keys outright (a command line is visible in shell
-// history and process listings; secrets stay in the environment).
+// ValidateFlags checks --set pairs: known key, parseable value, no
+// inline credentials — and refuses SECRET keys outright (a command
+// line is visible in shell history and process listings; secrets stay
+// in the environment).
 func ValidateFlags(flags map[string]string) []string {
 	var problems []string
 	for key, value := range flags {
-		row, known := rowsByKey[key]
-		switch {
-		case !known:
-			problems = append(problems, fmt.Sprintf("%s: unknown key (not part of the AXIOM_* vocabulary — refused, never silently ignored)", key))
-			continue
-		case row.secret:
-			problems = append(problems, fmt.Sprintf("%s: secret keys never ride a command line (history/ps) — keep the value in the environment / OS secret store", key))
-			continue
-		case value == "" && !emptyDisablesKeys[key]:
-			problems = append(problems, fmt.Sprintf("%s: empty value is unset semantics here", key))
-			continue
-		}
-		problems = append(problems, checkRawValue(row, value)...)
+		problems = append(problems, validateKV(key, value, stageFlag)...)
 	}
 	return problems
 }
@@ -283,7 +368,7 @@ func SecretRefDrift() []string {
 	}
 	var problems []string
 	for key, source := range settings.SecretRefs {
-		if source == "env" && os.Getenv(key) == "" {
+		if source == configstore.SecretRefSourceEnv && os.Getenv(key) == "" {
 			problems = append(problems, fmt.Sprintf("%s: secret reference expects the environment to feed it, but %s is unset — the default (empty) applies", key, key))
 		}
 	}
@@ -334,7 +419,7 @@ func EnvImportRows() (values, secretRefs map[string]string) {
 
 func importRow(row envRow, value string, values, secretRefs map[string]string) {
 	if row.secret {
-		secretRefs[row.env] = "env" // reference only — the value stays put
+		secretRefs[row.env] = configstore.SecretRefSourceEnv // reference only — the value stays put
 		return
 	}
 	values[row.env] = value

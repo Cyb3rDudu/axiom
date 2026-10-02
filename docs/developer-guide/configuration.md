@@ -24,6 +24,14 @@ The Go orchestrator resolves every `AXIOM_*` knob through one chain:
 ```
 
 - Each stage overrides only what it sets; unset stages fall through.
+- **Dual-fed pairs resolve per field.** The legacy/canonical spelling
+  pairs (`AXIOM_COMPUTE_WORKER_*` vs `AXIOM_PROCESSOR_*`,
+  `AXIOM_REPAIR_WORKER_CMD` vs `AXIOM_FIXER_CMD`) are ONE knob each: the
+  chain binds the logical knob — a `config.sqlite` row on either
+  spelling never out-ranks an environment value on the other, and a
+  `--set` on either spelling wins the whole field. Spelling precedence
+  (canonical over legacy) breaks ties *within* one stage only; when
+  `--set` names both spellings, the canonical-named flag wins.
 - **Env-only is the fully supported path**: without a `config.sqlite`, every
   boot resolves exactly as before (the container story — no file needed, none
   created).
@@ -57,6 +65,12 @@ Hard rules with teeth:
 - **No secret values, ever.** `config set` refuses secret keys; `import-env`
   stores secrets as references; the inspection tests prove zero secret bytes
   in the file, its WAL sidecar, and every output line.
+- **No inline credentials on the file/flag surfaces.** `config set` and
+  `--set` refuse URL values carrying userinfo (`scheme://user:pass@host`):
+  the credential-free URL is the storable form, the credential rides the
+  environment (or OS secret store) — the one surface where credentials
+  legitimately live. `import-env` therefore also refuses to import such a
+  value until the credential is stripped from it.
 - A **present-but-invalid file** (unknown key, unparseable value, secret
   value) refuses startup with a diagnosis — never a silent fall-back to
   defaults.
@@ -66,11 +80,11 @@ Hard rules with teeth:
 | Command | Effect |
 | --- | --- |
 | `axiom config get --effective [--json]` | One row per key: effective value (secrets redacted, DSN credential-free) and the source column `flag`/`env`/`file`/`default`. |
-| `axiom config set KEY VALUE` | Write one override into `config.sqlite` — validated FIRST: unknown key, type violation, vocabulary violation (e.g. an unknown storage driver), and secret keys each exit **1** with the diagnosis and touch nothing. Argument-shape errors exit **2**. |
+| `axiom config set KEY VALUE` | Write one override into `config.sqlite` — validated FIRST: unknown key, type violation, value range, vocabulary violation (e.g. an unknown storage driver), secret keys, and inline-credential URLs each exit **1** with the diagnosis and touch nothing. Argument-shape errors exit **2**. |
 | `axiom config unset KEY` | Remove one override (idempotent; unknown keys refused like `set`). |
 | `axiom config validate` | Full consistency pass: env values parse, file rows valid, secret references still have their env source, and the derived role set wires (composition check, network-free). Exit 0 only when everything holds. |
-| `axiom config import-env` | One-shot import of the current environment into `config.sqlite`: non-secrets as `settings` rows, secrets as `secret_refs` (values never enter the file). Idempotent — a replay writes the same state. The effective configuration does not move: the environment still owns every imported key until it is cleared; the file row takes over then. |
-| `axiom --set KEY=VALUE …` | One-shot override on `serve`, `doctor`, and `config` (repeatable) — the CLI-flag stage of the chain. Same validation teeth as `config set`; secret keys are refused (command lines are visible in history and `ps`). |
+| `axiom config import-env` | One-shot import of the current environment into `config.sqlite`: non-secrets as `settings` rows, secrets as `secret_refs` (values never enter the file). Validated first — a value the file surface would refuse (type violation, inline credential) refuses the whole import, nothing written. Idempotent — a replay writes the same state. The effective configuration does not move: the environment still owns every imported key until it is cleared; the file row takes over then. |
+| `axiom <command> --set KEY=VALUE …` | One-shot override riding `serve`, `doctor`, and `config` — the flag follows the subcommand and is repeatable (`axiom serve --set AXIOM_API_PORT=8012 all`); the CLI-flag stage of the chain. Same validation teeth as `config set`; secret keys and inline-credential URLs are refused (command lines are visible in history and `ps`). |
 
 `axiom doctor` reports the file as its own `config-file` check: absent = ok
 (the env-only bootstrap), present = shape summary, broken = fail with the

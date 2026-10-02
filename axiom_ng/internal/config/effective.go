@@ -337,6 +337,14 @@ func checkRawValue(row envRow, raw string) []string {
 	if row.env == "AXIOM_STORAGE_LIBRARY_DRIVER" && raw != "" && raw != "postgres" && raw != "sqlite" {
 		problems = append(problems, fmt.Sprintf("%s=%q: unknown driver (known: postgres, sqlite) — the composition aborts at start", row.env, raw))
 	}
+	// Value RANGE: a syntactically valid port outside 1..65535 parses
+	// fine and dies at bind time — flagged here so every surface (env,
+	// file, --set) refuses it before the listener does.
+	if row.env == "AXIOM_API_PORT" {
+		if p, perr := strconv.Atoi(raw); perr == nil && (p < 1 || p > 65535) {
+			problems = append(problems, fmt.Sprintf("%s=%q: out of range (1-65535) — the listener cannot bind it", row.env, raw))
+		}
+	}
 	return problems
 }
 

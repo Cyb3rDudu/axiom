@@ -7,6 +7,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,12 +18,35 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom_ng/internal/config/configstore"
 )
 
+// TestMain pins the chain's file location to an ABSENT path for the
+// whole package (the internal/cli shape): a config.sqlite on the test
+// host must never leak into these witnesses, and a future LoadResolved
+// call without its own override reads nothing instead of the operator's
+// machine state. Chain tests that want a file pin their own path.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "axiom-config-test-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(dir)
+	os.Setenv("AXIOM_CONFIG_PATH", dir+"/absent/config.sqlite")
+	os.Exit(m.Run())
+}
+
 // withRestoredEnv snapshots and restores the process environment around
-// fn — LoadResolved materializes into it by design.
+// fn — LoadResolved materializes into it by design, so the restore also
+// UNSETS keys the wrapped run created (a materialized file/flag value
+// must not masquerade as env in the next test).
 func withRestoredEnv(t *testing.T, fn func()) {
 	t.Helper()
 	snapshot := os.Environ()
 	restore := func() {
+		inSnapshot := map[string]bool{}
+		for _, kv := range snapshot {
+			k, _, _ := strings.Cut(kv, "=")
+			inSnapshot[k] = true
+		}
 		for _, kv := range snapshot {
 			k, _, _ := strings.Cut(kv, "=")
 			os.Unsetenv(k)
@@ -30,6 +54,12 @@ func withRestoredEnv(t *testing.T, fn func()) {
 		for _, kv := range snapshot {
 			k, v, _ := strings.Cut(kv, "=")
 			os.Setenv(k, v)
+		}
+		for _, kv := range os.Environ() {
+			k, _, _ := strings.Cut(kv, "=")
+			if !inSnapshot[k] {
+				os.Unsetenv(k)
+			}
 		}
 	}
 	defer restore()
@@ -162,12 +192,15 @@ func TestPrecedenceMutationSonde(t *testing.T) {
 			t.Fatal(err)
 		}
 		os.Unsetenv("AXIOM_BIND_ADDR") // fresh process: no stale materialization
-		cfg, _, err = LoadResolved(nil)
+		cfg, ch, err = LoadResolved(nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if cfg.BindAddr != defaultBindAddr {
 			t.Fatalf("cutting the file must expose the default, got %q", cfg.BindAddr)
+		}
+		if e := rowOf(t, EffectiveChain(cfg, ch), "AXIOM_BIND_ADDR"); e.Source != SourceDefault {
+			t.Fatalf("the default cut must render source=default, got %+v", e)
 		}
 	})
 }
@@ -231,6 +264,28 @@ func TestInvalidFileRefusesResolution(t *testing.T) {
 	})
 }
 
+// TestLoadResolvedNoHomeIsEnvOnly — an unresolvable default path (no
+// home dir, no override) must NOT abort the boot: the chain degrades
+// to the env-only bootstrap, the pre-F13 no-HOME behavior (writers
+// keep the loud error; doctor's config-file check keeps reporting it).
+func TestLoadResolvedNoHomeIsEnvOnly(t *testing.T) {
+	withRestoredEnv(t, func() {
+		t.Setenv("AXIOM_CONFIG_PATH", "") // un-pin: exercise the DEFAULT path
+		t.Setenv("HOME", "")              // darwin/linux: UserHomeDir errors
+		t.Setenv("AXIOM_API_PORT", "8123")
+		cfg, ch, err := LoadResolved(nil)
+		if err != nil {
+			t.Fatalf("no-home boot must stay env-only, got %v", err)
+		}
+		if cfg.APIPort != 8123 {
+			t.Fatalf("APIPort = %d, want the env value", cfg.APIPort)
+		}
+		if len(ch.File) != 0 {
+			t.Fatalf("no path → no file provenance, got %v", ch.File)
+		}
+	})
+}
+
 // TestParseSetFlags — both --set shapes, ordering, and syntax teeth.
 func TestParseSetFlags(t *testing.T) {
 	flags, rest, err := ParseSetFlags([]string{"serve", "--set", "AXIOM_API_PORT=9001", "--set=AXIOM_BIND_ADDR=0.0.0.0", "api"})
@@ -251,18 +306,20 @@ func TestParseSetFlags(t *testing.T) {
 	}
 }
 
-// TestValidateFlagsTeeth — unknown key, type violation, secret refusal
-// (the good cases ride the precedence sonde).
+// TestValidateFlagsTeeth — unknown key, type violation, value range,
+// inline credential, secret refusal (the good cases ride the precedence
+// sonde).
 func TestValidateFlagsTeeth(t *testing.T) {
 	problems := ValidateFlags(map[string]string{
-		"AXIOM_NOPE":           "x",
-		"AXIOM_API_PORT":       "eighty",
-		"AXIOM_WS_SECRET":      "s3cret",
-		"AXIOM_SEARCH_RERANK":  "maybe",
-		"AXIOM_FIXER_INTERVAL": "5mins",
+		"AXIOM_NOPE":             "x",
+		"AXIOM_API_PORT":         "eighty",
+		"AXIOM_WS_SECRET":        "s3cret",
+		"AXIOM_SEARCH_RERANK":    "maybe",
+		"AXIOM_FIXER_INTERVAL":   "5mins",
+		"AXIOM_QUERY_RUNNER_URL": "http://u:pw@runner:8012",
 	})
 	joined := strings.Join(problems, "\n")
-	for _, want := range []string{"AXIOM_NOPE", "AXIOM_API_PORT", "AXIOM_WS_SECRET", "AXIOM_SEARCH_RERANK", "AXIOM_FIXER_INTERVAL"} {
+	for _, want := range []string{"AXIOM_NOPE", "AXIOM_API_PORT", "AXIOM_WS_SECRET", "AXIOM_SEARCH_RERANK", "AXIOM_FIXER_INTERVAL", "AXIOM_QUERY_RUNNER_URL", "inline credential"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("problems must name %s, got: %v", want, problems)
 		}
@@ -270,26 +327,34 @@ func TestValidateFlagsTeeth(t *testing.T) {
 	if problems := ValidateFlags(map[string]string{"AXIOM_API_PORT": "9001", "AXIOM_SEARCH_RERANK": "false"}); len(problems) != 0 {
 		t.Fatalf("valid flags must pass, got %v", problems)
 	}
+	if problems := ValidateFlags(map[string]string{"AXIOM_API_PORT": "70000"}); len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "out of range") {
+		t.Fatalf("out-of-range port must be refused, got %v", problems)
+	}
 }
 
 // TestValidateSettingsTeeth — file-row rules: unknown key, secret
-// value, empty-as-unset, legal empty only for the set-empty-disable
-// key.
+// value, empty-as-unset, value range, inline credential, legal empty
+// only for the set-empty-disable key.
 func TestValidateSettingsTeeth(t *testing.T) {
 	problems := ValidateSettings(map[string]string{
-		"AXIOM_NOPE":             "x",
-		"AXIOM_DATABASE_URL":     "postgresql://u:p@h/db",
-		"AXIOM_API_PORT":         "",
-		"AXIOM_DISPATCHER_LEASE": "5x",
+		"AXIOM_NOPE":                 "x",
+		"AXIOM_DATABASE_URL":         "postgresql://u:p@h/db",
+		"AXIOM_SEARCH_RERANK":        "",
+		"AXIOM_DISPATCHER_LEASE":     "5x",
+		"AXIOM_API_PORT":             "99999",
+		"AXIOM_LIBRARY_DATABASE_URL": "postgresql://u:pw@h/lib",
 	}, map[string]string{"AXIOM_WS_SECRET": "env"})
 	joined := strings.Join(problems, "\n")
-	for _, want := range []string{"AXIOM_NOPE", "AXIOM_DATABASE_URL", "AXIOM_API_PORT", "AXIOM_DISPATCHER_LEASE"} {
+	for _, want := range []string{"AXIOM_NOPE", "AXIOM_DATABASE_URL", "AXIOM_SEARCH_RERANK", "AXIOM_DISPATCHER_LEASE", "AXIOM_API_PORT", "out of range", "AXIOM_LIBRARY_DATABASE_URL", "inline credential"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("problems must name %s, got: %v", want, problems)
 		}
 	}
 	if problems := ValidateSettings(map[string]string{"AXIOM_OPENSEARCH_URL": ""}, nil); len(problems) != 0 {
 		t.Fatalf("the set-empty disable row is legal, got %v", problems)
+	}
+	if problems := ValidateSettings(map[string]string{"AXIOM_LIBRARY_DATABASE_URL": "postgresql://h/lib"}, nil); len(problems) != 0 {
+		t.Fatalf("a credential-free DSN is a legal file row, got %v", problems)
 	}
 	if problems := ValidateSettings(nil, map[string]string{"AXIOM_WS_SECRET": "keychain"}); len(problems) == 0 {
 		t.Fatal("unknown ref source must be a problem")
@@ -381,6 +446,72 @@ func TestDualFedChainStages(t *testing.T) {
 		}
 		if cfg.ProcessorURL != "http://file:8012" {
 			t.Fatalf("ProcessorURL = %q, want the file row", cfg.ProcessorURL)
+		}
+	})
+}
+
+// TestDualFedFieldLevelChain — the probe matrix pinning the
+// field-level decision: the chain (flag > env > file) binds the LOGICAL
+// knob on dual-fed pairs; the canonical-over-legacy spelling rule
+// breaks ties WITHIN a stage, never across stages. (i) env on the
+// legacy spelling beats a file row on the canonical one; (ii) a --set
+// on the legacy spelling beats env on the canonical one (materialized
+// onto the canonical key, source=flag); (iii) --set naming both
+// spellings resolves to the canonical-named flag.
+func TestDualFedFieldLevelChain(t *testing.T) {
+	withRestoredEnv(t, func() {
+		path := fileBackedConfig(t)
+		st, err := configstore.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		if err := st.Set("AXIOM_COMPUTE_WORKER_URL", "http://file-canonical:8012"); err != nil {
+			t.Fatal(err)
+		}
+
+		// (i) env=legacy vs file=canonical: the ENVIRONMENT wins the field.
+		os.Setenv("AXIOM_PROCESSOR_URL", "http://env-legacy:8012")
+		cfg, ch, err := LoadResolved(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ProcessorURL != "http://env-legacy:8012" {
+			t.Fatalf("(i) ProcessorURL = %q, want the env value", cfg.ProcessorURL)
+		}
+		entries := EffectiveChain(cfg, ch)
+		if e := rowOf(t, entries, "AXIOM_COMPUTE_WORKER_URL"); e.Source != SourceDefault {
+			t.Fatalf("(i) shadowed canonical file row must render default, got %+v", e)
+		}
+		if e := rowOf(t, entries, "AXIOM_PROCESSOR_URL"); e.Source != SourceEnv {
+			t.Fatalf("(i) legacy row must render env, got %+v", e)
+		}
+
+		// (ii) env=canonical vs --set legacy: the FLAG wins the field.
+		os.Unsetenv("AXIOM_PROCESSOR_URL")
+		os.Setenv("AXIOM_COMPUTE_WORKER_URL", "http://env-canonical:8012")
+		cfg, ch, err = LoadResolved(map[string]string{"AXIOM_PROCESSOR_URL": "http://flag-legacy:8012"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ProcessorURL != "http://flag-legacy:8012" {
+			t.Fatalf("(ii) ProcessorURL = %q, want the flag value", cfg.ProcessorURL)
+		}
+		if e := rowOf(t, EffectiveChain(cfg, ch), "AXIOM_COMPUTE_WORKER_URL"); e.Source != SourceFlag {
+			t.Fatalf("(ii) canonical row must render flag, got %+v", e)
+		}
+
+		// (iii) --set on both spellings: the canonical-named flag wins.
+		os.Unsetenv("AXIOM_COMPUTE_WORKER_URL")
+		cfg, _, err = LoadResolved(map[string]string{
+			"AXIOM_PROCESSOR_URL":      "http://flag-legacy:8012",
+			"AXIOM_COMPUTE_WORKER_URL": "http://flag-canonical:8012",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ProcessorURL != "http://flag-canonical:8012" {
+			t.Fatalf("(iii) ProcessorURL = %q, want the canonical-named flag value", cfg.ProcessorURL)
 		}
 	})
 }

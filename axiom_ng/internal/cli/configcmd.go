@@ -115,8 +115,9 @@ func cmdConfigSet(name string, args []string) int {
 	return exitOK
 }
 
-// cmdConfigUnset — remove one override row (idempotent; unknown
-// vocabulary keys are refused with the same teeth as set).
+// cmdConfigUnset — remove one override row or secret reference
+// (idempotent; unknown vocabulary keys are refused with the same teeth
+// as set).
 func cmdConfigUnset(name string, args []string) int {
 	if len(args) != 1 {
 		fmt.Fprintf(os.Stderr, "usage: %s config unset <KEY>\n", name)
@@ -124,7 +125,7 @@ func cmdConfigUnset(name string, args []string) int {
 	}
 	key := args[0]
 	if !config.KnownKey(key) {
-		fmt.Printf("invalid: %s: unknown key (not part of the AXIOM_* vocabulary — refused, never silently ignored)\n", key)
+		fmt.Printf("invalid: %s: %s\n", key, config.UnknownKeyProblem)
 		fmt.Println("configuration invalid — nothing written")
 		return exitFailure
 	}
@@ -188,17 +189,28 @@ func cmdConfigValidate(flags map[string]string) int {
 // cmdConfigImportEnv — the one-shot importer: every key the environment
 // feeds becomes a file row (non-secrets as values, secrets as env
 // REFERENCES — no secret value ever enters the file or this command's
-// output). Idempotent: upserts, a replay reports the same state. The
-// effective configuration does not move: the env still owns every
-// imported key until it is cleared (the file row takes over then).
+// output). The import is validated FIRST: a value the file surface
+// would refuse (type violation, inline credential) refuses the whole
+// import writing nothing — the file must never become the durable copy
+// of a value the chain would reject at the next boot. Idempotent:
+// upserts, a replay reports the same state. The effective
+// configuration does not move: the env still owns every imported key
+// until it is cleared (the file row takes over then).
 func cmdConfigImportEnv(name string) int {
+	values, refs := config.EnvImportRows()
+	if problems := config.ValidateSettings(values, refs); len(problems) > 0 {
+		for _, p := range problems {
+			fmt.Println("invalid:", p)
+		}
+		fmt.Println("configuration invalid — nothing written")
+		return exitFailure
+	}
 	st, err := openConfigStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s config import-env: %v\n", name, err)
 		return exitFailure
 	}
 	defer st.Close()
-	values, refs := config.EnvImportRows()
 	keys := make([]string, 0, len(values))
 	for k := range values {
 		keys = append(keys, k)
