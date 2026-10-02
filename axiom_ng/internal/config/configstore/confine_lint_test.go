@@ -37,7 +37,11 @@ var configstoreImporters = map[string]bool{
 }
 
 // scanImports parses every production .go file under root and returns,
-// per package, its direct import paths.
+// per package, its direct import paths. Dot-directories are skipped
+// wholesale: they are hidden/transient state (another package's probe
+// trees — composition's blank-import witness creates .blankprobe-N
+// under the module root WHILE tests run in parallel — never real
+// packages; scanning them races the runner for no signal).
 func scanImports(root string) (map[string][]string, error) {
 	out := map[string][]string{}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -45,8 +49,11 @@ func scanImports(root string) (map[string][]string, error) {
 			return err
 		}
 		if d.IsDir() {
+			if strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
 			switch d.Name() {
-			case "testdata", ".git", "vendor", "dist":
+			case "testdata", "vendor", "dist":
 				return filepath.SkipDir
 			}
 			return nil
@@ -136,5 +143,26 @@ func TestConfigstoreConfinementCatchesPlantedImports(t *testing.T) {
 	// Legal shape 2: the CLI operator surface.
 	if v := probe("internal/cli"); len(v) != 0 {
 		t.Fatalf("internal/cli importing configstore is legal, got %v", v)
+	}
+	// Legal shape 3: a HIDDEN directory (the transient .blankprobe-N trees
+	// another package's tests create under the module root mid-run) is
+	// skipped wholesale — the standing gate must not race parallel tests.
+	{
+		root := t.TempDir()
+		dir := filepath.Join(root, ".blankprobe-race")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "planted.go"),
+			[]byte("package main\n\nimport _ \""+modulePath+"/internal/config/configstore\"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		perPkg, err := scanImports(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v := confinementViolations(perPkg); len(v) != 0 {
+			t.Fatalf("hidden dot-directory probe trees must be skipped, got %v", v)
+		}
 	}
 }
