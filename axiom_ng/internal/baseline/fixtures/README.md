@@ -18,7 +18,10 @@ Three fixture kinds live here:
 - **Non-gating reference:** `live_row_counts_freeze_day.txt` — freeze-day
   row counts of axiom_dev, documentation only. Its runtime twin
   `live_row_counts.txt` lands in the actual dir, excluded from the
-  determinism self-check.
+  determinism self-check. The file's header carries the live suite's
+  corpus-stamp stanza (#347): `corpus-stamp:db|kg|os` machine lines —
+  exact counts asserted before any value assertion, single source; a
+  deliberate refresh updates the stanza and the guard follows.
 
 Rule for deliberate updates: a fixture diff must land in the SAME PR as
 the behavior change and be review-visible; CI runs the suite without

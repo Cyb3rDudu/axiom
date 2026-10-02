@@ -1,5 +1,21 @@
 # axiom_dev row counts on freeze day (2026-09-21, tag v0.1.18 / 4704656)
 # NON-GATING live inventory — dev may drift; deltas get documented in #295.
+# The rows below are the historical freeze-day n_live_tup ESTIMATES.
+#
+# CORPUS STAMP (#347, gating for live golden runs) — the machine lines
+# below are the single source the drift precheck asserts BEFORE any value
+# assertion. EXACT counts (rows above may differ by estimate noise):
+#   db: ingest_jobs is deliberately not stamped — the suite's own ingest
+#       probe writes job rows; the non-gating inventory tracks them.
+#   kg: roots count + mention sum = stable fingerprint of the materialized
+#       kg_entity_roots the KG goldens serve from.
+#   os: doc count of the EFFECTIVE index — freeze bits hardcode
+#       axiom-ng-chunks-v1; AXIOM_BASELINE_EXPECT_BUILD runs honor
+#       AXIOM_OS_INDEX and must be at parity with the same corpus.
+# A deliberate refresh tracks PRODUCTION corpus freezes, never dev drift.
+# corpus-stamp:db: zotero_documents=369 processing_snapshots=361
+# corpus-stamp:kg: kg_entity_roots=142175 kg_root_mentions=320399
+# corpus-stamp:os: index_docs=57724
 kg_entity_roots                            142175
 kg_relation_evidence_docs                  78367
 kg_relation_triples                        75262
