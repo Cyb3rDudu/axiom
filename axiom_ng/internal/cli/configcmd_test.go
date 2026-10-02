@@ -554,6 +554,12 @@ func TestDoctorProbeHTTPRedactsCredentialQuery(t *testing.T) {
 	if !strings.Contains(err.Error(), config.RedactedValue) {
 		t.Fatalf("probe error must show the redaction placeholder, got: %s", err)
 	}
+	// The closing quote of Go's url.Error wrapper survives the redaction
+	// (the value class stops at a double quote — the wrapper's shape is
+	// the engine's, not the credential's).
+	if !strings.Contains(err.Error(), `password=`+config.RedactedValue+`":`) {
+		t.Fatalf("redaction must keep the url.Error quote/colon boundary, got: %s", err)
+	}
 }
 
 // TestConfigValidateExitsZeroWhenConsistent — the happy path of the
@@ -614,7 +620,7 @@ func TestSecretRefDriftIsPairAware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetSecretRef("AXIOM_PROCESSOR_SOURCE_SECRET", configstore.SecretRefSourceEnv); err != nil {
+	if err := st.SetAll(nil, map[string]string{"AXIOM_PROCESSOR_SOURCE_SECRET": configstore.SecretRefSourceEnv}); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()

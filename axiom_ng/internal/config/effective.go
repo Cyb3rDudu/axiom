@@ -249,8 +249,14 @@ func envOnlySource(row envRow) string {
 // ?pass%77ord=x sets cfg.Password), so the pattern matches each key
 // letter as literal OR percent-encoded — `pass%77ord=` is a credential
 // key exactly like `password=`.
+//
+//	The VALUE class stops at &, whitespace, AND a double quote: Go's
+//	url.Error wraps the URL in quotes (Get "…?password=x" dial …) — a
+//	quote-hungry class would eat the closing quote and mangle the
+//	diagnosis line's shape (value still gone; the quote is cosmetic
+//	but belongs to the engine, not the credential).
 var credentialQueryRe = regexp.MustCompile(
-	"(?i)(" + encodableKey("password") + "|" + encodableKey("sslpassword") + "|" + encodableKey("passfile") + ")=[^&\\s]*")
+	"(?i)(" + encodableKey("password") + "|" + encodableKey("sslpassword") + "|" + encodableKey("passfile") + ")=[^&\\s\"]*")
 
 // encodableKey renders key as a regex fragment matching every character
 // as its literal form or its percent-escape (upper- or lowercase hex).
@@ -305,6 +311,13 @@ var credentialKeywordRe = regexp.MustCompile(
 //
 // The return value names the FORM for the refusal message — never any
 // part of the value. Empty return = no credential found.
+//
+// Residual scope, named: the vocabulary is the credential keys the
+// LOADERS honor (password/sslpassword/passfile). Other query
+// parameters (a bearer ?token=…, an ?api_key=…) are ordinary values
+// to this gate — writable and rendered — because no loader feeds them
+// into a credential; if one ever does, its key joins this vocabulary
+// the same day.
 //
 // Deliberate over-match: a free-text value containing a
 // credential-shaped fragment (say a filter listing `notes,password=x,todo`)

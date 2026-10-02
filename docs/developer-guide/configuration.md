@@ -46,6 +46,10 @@ The Go orchestrator's RUNTIME SURFACES — `serve` (every role and the compat bo
   fragment** (e.g. a filter listing `password=…`): the rule is
   render-symmetric, whatever `config get --effective` would redact is never
   a legal stored form; such values keep riding the environment.
+  The credential vocabulary is the keys the loaders honor
+  (`password`/`sslpassword`/`passfile`); other query parameters
+  (e.g. a bearer `?token=…`) are ordinary values — writable and
+  rendered — until a loader ever treats one as a credential.
 - One resolution per process: `axiom serve`, `doctor`, and `config` resolve
   once at entry; child processes inherit the resolved environment.
 - The **KG legacy mode flags** do not read `--set`; they resolve through the

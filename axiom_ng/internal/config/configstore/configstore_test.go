@@ -45,7 +45,7 @@ func TestRoundtripSetUnsetSecretRef(t *testing.T) {
 	if err := st.Set("AXIOM_API_PORT", "9999"); err != nil { // upsert
 		t.Fatalf("set again: %v", err)
 	}
-	if err := st.SetSecretRef("AXIOM_WS_SECRET", "env"); err != nil {
+	if err := st.SetAll(nil, map[string]string{"AXIOM_WS_SECRET": SecretRefSourceEnv}); err != nil {
 		t.Fatalf("secret ref: %v", err)
 	}
 	readBack := func() Settings {
@@ -84,7 +84,7 @@ func TestRoundtripSetUnsetSecretRef(t *testing.T) {
 		t.Fatalf("unset must remove the secret reference: %v", got.SecretRefs)
 	}
 
-	if err := st.SetSecretRef("AXIOM_WS_SECRET", "keychain"); err == nil {
+	if err := st.SetAll(nil, map[string]string{"AXIOM_WS_SECRET": "keychain"}); err == nil {
 		t.Fatalf("unknown secret-ref source must be refused")
 	}
 }
@@ -198,8 +198,13 @@ func TestRuntimeOnlyRefusesForeignTables(t *testing.T) {
 // values); the file bytes — and the WAL sidecar's bytes — contain none
 // of a planted secret vocabulary. The store itself is vocabulary-dumb
 // (the secret-key refusal lives in the config layer above — it owns
-// the AXIOM_* vocabulary); this sonde pins what every sanctioned write
-// path produces, including the import-env flow's ref rows.
+// the AXIOM_* vocabulary). Scope, honestly: this sonde pins the
+// SANCTIONED write shapes and proves the byte scanner non-vacuous (the
+// positive control); write-PATH falsifiability — that a leaking
+// sanctioned path goes red — lives at the CLI layer
+// (TestConfigSetGoodAndBad's after-state check and the hostile-form
+// byte scan in TestImportEnvIdempotentEffectiveIdenticalAndSecretFree,
+// verified red when the gate is removed).
 func TestFileCarriesZeroSecretBytes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.sqlite")
@@ -218,10 +223,12 @@ func TestFileCarriesZeroSecretBytes(t *testing.T) {
 	if err := st.Set("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200"); err != nil {
 		t.Fatal(err)
 	}
+	refs := map[string]string{}
 	for _, refKey := range []string{"AXIOM_WS_SECRET", "AXIOM_OPENSEARCH_PASSWORD", "AXIOM_COMPUTE_WORKER_SOURCE_SECRET", "AXIOM_DATABASE_URL"} {
-		if err := st.SetSecretRef(refKey, "env"); err != nil {
-			t.Fatal(err)
-		}
+		refs[refKey] = SecretRefSourceEnv
+	}
+	if err := st.SetAll(nil, refs); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := st.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 		t.Fatalf("checkpoint: %v", err)

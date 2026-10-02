@@ -115,7 +115,15 @@ func DefaultPath() (string, error) {
 // Read loads the settings from path. An ABSENT file is the documented
 // env-only bootstrap: empty settings, found=false, no file created. A
 // PRESENT file is read through the runtime-only table check — a file
-// with foreign (domain) tables is refused loudly, never half-read.
+// with foreign (domain) tables is refused loudly, never half-read —
+// and an uninitialized leftover reads as empty (see readAll). Race
+// honesty: the engine handle opens read-write (mode=ro cannot join a
+// live WAL), so a file deleted between the stat and the open can be
+// re-created as an empty database — which then reads as uninitialized
+// (empty, self-healing), never as a stale configuration. The
+// "creates nothing" guarantee is exact for the absent-file path;
+// the delete-mid-read window degrades to the same env-equivalent
+// empty state.
 func Read(path string) (Settings, bool, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
@@ -265,18 +273,6 @@ func (s *Store) Unset(key string) error {
 		return err
 	}
 	return tx.Commit()
-}
-
-// SetSecretRef writes (upserts) one secret REFERENCE row — the source
-// the value is expected from; the value itself never enters the file.
-func (s *Store) SetSecretRef(key, source string) error {
-	if source != SecretRefSourceEnv {
-		return fmt.Errorf("config sqlite: unknown secret-ref source %q (known: %s)", source, SecretRefSourceEnv)
-	}
-	_, err := s.db.Exec(`INSERT INTO secret_refs (key, source, updated_at) VALUES (?, ?, ?)
-		ON CONFLICT(key) DO UPDATE SET source = excluded.source, updated_at = excluded.updated_at`,
-		key, source, dm03Now())
-	return err
 }
 
 // checkRuntimeOnly enforces the Fachdaten-never rule: every table and
