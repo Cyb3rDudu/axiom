@@ -45,6 +45,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -53,7 +54,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 // busyTimeout is the SQLite-side wait a competing writer (another
@@ -121,8 +122,12 @@ func Read(path string) (Settings, bool, error) {
 		}
 		return Settings{}, false, fmt.Errorf("config sqlite: %w", err)
 	}
+	abs, err := checkPath(path)
+	if err != nil {
+		return Settings{}, true, err
+	}
 	var s Settings
-	err := withDB(path, func(ctx context.Context, db *sql.DB) error {
+	err = withDB(abs, func(ctx context.Context, db *sql.DB) error {
 		if err := checkRuntimeOnly(ctx, db); err != nil {
 			return err
 		}
@@ -142,53 +147,60 @@ type Store struct {
 }
 
 // Open atomically creates (exclusive O_EXCL claim, 0600) or adopts the
-// config.sqlite file, asserts the operating pragmas, and applies the
-// embedded migrations. Idempotent: a second Open against the same file
-// is a normal open.
+// config.sqlite file, switches the journal to WAL under busy handling,
+// asserts the operating pragmas, and applies the embedded migrations.
+// Idempotent: a second Open against the same file is a normal open.
+// ADOPTED files are tightened to 0600 (a pre-existing weaker permission
+// is below the file's contract). A setup failure never unlinks the
+// file — between this process's create and its failure another process
+// may have adopted and opened it, and unlinking would divert its writes
+// to a dead inode; instead an abandoned file reads as UNINITIALIZED
+// (see Read) and the next successful writer migrates it.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("config sqlite: path is required")
 	}
-	abs, err := filepath.Abs(path)
+	abs, err := checkPath(path)
 	if err != nil {
-		return nil, fmt.Errorf("config sqlite: %w", err)
-	}
-	if strings.ContainsAny(abs, "?#%") {
-		return nil, fmt.Errorf("config sqlite: path %q contains URL-significant characters (?/#/%%) that would corrupt the file DSN", abs)
+		return nil, err
 	}
 	created, err := ensureFile(abs)
 	if err != nil {
 		return nil, fmt.Errorf("config sqlite: %w", err)
 	}
-	// A file THIS call created is removed again when any later setup
-	// step fails — a half-initialized config.sqlite would poison every
-	// later boot with "no such table" until removed by hand. An ADOPTED
-	// file (pre-existing, or a concurrent creator's) is never removed.
-	fail := func(err error) (*Store, error) {
-		if created {
-			_ = os.Remove(abs)
+	if !created { // adopted: enforce the restrictive permission
+		if fi, serr := os.Stat(abs); serr == nil && fi.Mode().Perm() != 0o600 {
+			_ = os.Chmod(abs, 0o600)
 		}
-		return nil, err
 	}
-	db, err := sql.Open("sqlite", dsn(abs))
+	db, err := sql.Open("sqlite", dsn(abs, true))
 	if err != nil {
-		return fail(fmt.Errorf("config sqlite: open: %w", err))
+		return nil, fmt.Errorf("config sqlite: open: %w", err)
 	}
 	db.SetMaxOpenConns(1) // one writer slot — no intra-process contention
 	st := &Store{db: db}
 	ctx, cancel := context.WithTimeout(context.Background(), busyTimeout)
 	defer cancel()
+	// The WAL switch runs POST-connect under explicit busy retry: as a
+	// connection-opening DSN pragma it races parallel first-openers with
+	// SQLITE_BUSY (the journal-mode change takes locks the busy handler
+	// does not cover on that path — measured: parallel `config set`
+	// processes failed 7/96 on a fresh file's first boot).
+	if err := setWAL(ctx, db); err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("config sqlite: journal_mode: %w", err)
+	}
 	if err := st.assertPragmas(ctx); err != nil {
 		_ = st.Close()
-		return fail(fmt.Errorf("config sqlite: pragma assert: %w", err))
+		return nil, fmt.Errorf("config sqlite: pragma assert: %w", err)
 	}
 	if err := checkRuntimeOnly(ctx, st.db); err != nil {
 		_ = st.Close()
-		return fail(fmt.Errorf("config sqlite: %w", err))
+		return nil, fmt.Errorf("config sqlite: %w", err)
 	}
 	if err := st.migrate(ctx); err != nil {
 		_ = st.Close()
-		return fail(fmt.Errorf("config sqlite: migrate: %w", err))
+		return nil, fmt.Errorf("config sqlite: migrate: %w", err)
 	}
 	return st, nil
 }
@@ -198,26 +210,70 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // Set writes (upserts) one non-secret override row.
 func (s *Store) Set(key, value string) error {
-	if key == "" {
-		return fmt.Errorf("config sqlite: empty key")
+	return s.SetAll(map[string]string{key: value}, nil)
+}
+
+// SetAll writes values and secret references in ONE transaction — a
+// crash or failure mid-import never leaves a partial file state (the
+// import either lands completely or not at all). Keys are written in
+// sorted order for deterministic replay.
+func (s *Store) SetAll(values, secretRefs map[string]string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
 	}
-	_, err := s.db.Exec(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-		key, value, dm03Now())
-	return err
+	defer tx.Rollback() // no-op after Commit
+	for _, key := range sortedKeysOf(values) {
+		if key == "" {
+			return fmt.Errorf("config sqlite: empty key")
+		}
+		if _, err := tx.Exec(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+			key, values[key], dm03Now()); err != nil {
+			return err
+		}
+	}
+	for _, key := range sortedKeysOf(secretRefs) {
+		if secretRefs[key] != SecretRefSourceEnv {
+			return fmt.Errorf("config sqlite: unknown secret-ref source %q (known: %s)", secretRefs[key], SecretRefSourceEnv)
+		}
+		if _, err := tx.Exec(`INSERT INTO secret_refs (key, source, updated_at) VALUES (?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET source = excluded.source, updated_at = excluded.updated_at`,
+			key, secretRefs[key], dm03Now()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// sortedKeysOf returns the map's keys in sorted order.
+func sortedKeysOf[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // Unset removes one key from BOTH tables — an override row and a
 // secret reference (absent key: no-op — unset is idempotent by
-// contract). Without the ref delete, `config unset` on an imported
-// secret key would report success while leaving a reference that
-// drifts the moment the env var clears.
+// contract) — in ONE transaction. Without the ref delete, `config
+// unset` on an imported secret key would report success while leaving
+// a reference that drifts the moment the env var clears.
 func (s *Store) Unset(key string) error {
-	if _, err := s.db.Exec(`DELETE FROM settings WHERE key = ?`, key); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`DELETE FROM secret_refs WHERE key = ?`, key)
-	return err
+	defer tx.Rollback() // no-op after Commit
+	if _, err := tx.Exec(`DELETE FROM settings WHERE key = ?`, key); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM secret_refs WHERE key = ?`, key); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SetSecretRef writes (upserts) one secret REFERENCE row — the source
@@ -232,13 +288,14 @@ func (s *Store) SetSecretRef(key, source string) error {
 	return err
 }
 
-// checkRuntimeOnly enforces the Fachdaten-never rule: every table in
-// the file must be part of the runtime-only vocabulary (or the
-// engine's own sqlite_* namespace). A foreign table — a Library or
+// checkRuntimeOnly enforces the Fachdaten-never rule: every table and
+// VIEW in the file must be part of the runtime-only vocabulary (or the
+// engine's own sqlite_* namespace) — a view over domain data smuggles
+// the data just as well as a table. A foreign object — a Library or
 // Store schema smuggled in, or config pointed at a domain database —
 // is refused by name.
 func checkRuntimeOnly(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table'`)
+	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type IN ('table', 'view')`)
 	if err != nil {
 		return err
 	}
@@ -263,11 +320,69 @@ func checkRuntimeOnly(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// dsn builds the modernc DSN: pragmas ride the DSN so every connection
-// carries them; _txlock makes every BEGIN an IMMEDIATE one.
-func dsn(path string) string {
-	return fmt.Sprintf("file:%s?_pragma=busy_timeout(%d)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_txlock=immediate",
+// checkPath normalizes and guards the file path: URL-significant
+// characters (?/#/%) would silently reinterpret the DSN (a "?" turns
+// the rest into DSN parameters and the engine opens a DIFFERENT file).
+// Both the read and the write path route through this guard.
+func checkPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("config sqlite: %w", err)
+	}
+	if strings.ContainsAny(abs, "?#%") {
+		return "", fmt.Errorf("config sqlite: path %q contains URL-significant characters (?/#/%%) that would corrupt the file DSN", abs)
+	}
+	return abs, nil
+}
+
+// dsn builds the modernc DSN: busy_timeout and foreign_keys ride the
+// DSN so every connection carries them; _txlock makes every BEGIN on
+// the write handle an IMMEDIATE one. journal_mode deliberately does
+// NOT ride the DSN — the WAL switch takes locks the busy handler does
+// not cover on the connection-open path (parallel first-openers fail
+// with SQLITE_BUSY); it runs post-connect in setWAL under retry. The
+// read DSN omits _txlock (one-shot autocommit reads need no write
+// slot).
+func dsn(path string, write bool) string {
+	d := fmt.Sprintf("file:%s?_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)",
 		path, busyTimeout.Milliseconds())
+	if write {
+		d += "&_txlock=immediate"
+	}
+	return d
+}
+
+// setWAL switches the journal to WAL, retrying on SQLITE_BUSY for up
+// to busyTimeout — the measured parallel-first-boot failure mode. The
+// pragma's result row IS the new mode; a non-busy failure or a mode
+// that did not take is a loud error.
+func setWAL(ctx context.Context, db *sql.DB) error {
+	deadline := time.Now().Add(busyTimeout)
+	for {
+		var mode string
+		err := db.QueryRowContext(ctx, `PRAGMA journal_mode=WAL`).Scan(&mode)
+		if err == nil && mode == "wal" {
+			return nil
+		}
+		if err == nil {
+			err = fmt.Errorf("journal_mode is %q, want wal", mode)
+		}
+		if isBusy(err) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		return err
+	}
+}
+
+// isBusy reports whether err is SQLITE_BUSY (primary code 5, extended
+// codes included) — the retryable lock conflict.
+func isBusy(err error) bool {
+	var se *sqlite.Error
+	if errors.As(err, &se) {
+		return se.Code()&0xff == 5 // SQLITE_BUSY primary code
+	}
+	return false
 }
 
 // ensureFile creates the file atomically when absent (F12 pattern):
@@ -293,7 +408,9 @@ func ensureFile(path string) (created bool, err error) {
 }
 
 // assertPragmas proves the operating rules took effect — read back from
-// the engine's own state, never trusted from the DSN string alone.
+// the engine's own state, never trusted from the DSN string alone. The
+// journal mode is asserted by setWAL's own read-back; here it re-checks
+// the persisted state so a flipped-back journal cannot pass silently.
 func (s *Store) assertPragmas(ctx context.Context) error {
 	var mode string
 	var fk, busy int
@@ -377,7 +494,7 @@ func (s *Store) migrate(ctx context.Context) error {
 // withDB opens the file (no create), runs fn on a short-lived handle,
 // and always closes — the read path's one-shot shape.
 func withDB(path string, fn func(context.Context, *sql.DB) error) error {
-	db, err := sql.Open("sqlite", dsn(path))
+	db, err := sql.Open("sqlite", dsn(path, false))
 	if err != nil {
 		return err
 	}
@@ -387,9 +504,38 @@ func withDB(path string, fn func(context.Context, *sql.DB) error) error {
 	return fn(ctx, db)
 }
 
-// readAll reads both tables off an open handle.
+// readAll reads both tables off an open handle. The UNINITIALIZED
+// shape — no settings and no secret_refs table with an empty (or
+// absent) migration ledger, the leftover of a crashed first write —
+// reads as empty, env-equivalent: booting against it behaves like the
+// env-only path, and the next writer migrates it. A file whose ledger
+// claims applied migrations but whose runtime tables are gone is
+// CORRUPT, not uninitialized: loud.
 func readAll(ctx context.Context, db *sql.DB) (Settings, error) {
 	s := Settings{Values: map[string]string{}, SecretRefs: map[string]string{}}
+	var runtimeTables int
+	if err := db.QueryRowContext(ctx,
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('settings', 'secret_refs')`).Scan(&runtimeTables); err != nil {
+		return s, err
+	}
+	if runtimeTables == 0 {
+		var ledgerExists bool
+		if err := db.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'config_schema_migrations')`).Scan(&ledgerExists); err != nil {
+			return s, err
+		}
+		applied := 0
+		if ledgerExists {
+			if err := db.QueryRowContext(ctx,
+				`SELECT count(*) FROM config_schema_migrations`).Scan(&applied); err != nil {
+				return s, err
+			}
+		}
+		if applied == 0 {
+			return s, nil // uninitialized — reads empty, next writer migrates
+		}
+		return s, fmt.Errorf("settings/secret_refs missing but %d migrations applied — the file is corrupt, not uninitialized", applied)
+	}
 	rows, err := db.QueryContext(ctx, `SELECT key, value FROM settings`)
 	if err != nil {
 		return s, err

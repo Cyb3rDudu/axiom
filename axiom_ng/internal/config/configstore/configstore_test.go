@@ -9,10 +9,13 @@ package configstore
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -297,5 +300,136 @@ func TestDefaultPathOverride(t *testing.T) {
 	p, err = DefaultPath()
 	if err != nil || p != home+"/.axiom-ng/config.sqlite" {
 		t.Fatalf("default path = %q err=%v", p, err)
+	}
+}
+
+// TestParallelFirstOpenAllSucceed — the measured failure mode: parallel
+// `config set` processes against a FRESH file (the reviewer measured
+// 7/96 failing on SQLITE_BUSY from the connection-open journal-mode
+// pragma). The WAL switch now runs post-connect under busy retry —
+// every goroutine's Open+Set+Close must succeed.
+func TestParallelFirstOpenAllSucceed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.sqlite")
+	const workers, rounds = 8, 6
+	var wg sync.WaitGroup
+	errs := make(chan error, workers*rounds)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for r := 0; r < rounds; r++ {
+				st, err := Open(path)
+				if err != nil {
+					errs <- fmt.Errorf("worker %d round %d: %w", w, r, err)
+					return
+				}
+				if err := st.Set(fmt.Sprintf("AXIOM_API_PORT"), strconv.Itoa(9000+w)); err != nil {
+					errs <- fmt.Errorf("worker %d round %d set: %w", w, r, err)
+					st.Close()
+					return
+				}
+				if _, _, err := Read(path); err != nil {
+					errs <- fmt.Errorf("worker %d round %d read: %w", w, r, err)
+					st.Close()
+					return
+				}
+				st.Close()
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if t.Failed() {
+		t.Fatal("parallel first-open must be busy-safe (post-connect WAL switch with retry)")
+	}
+}
+
+// TestUninitializedFileReadsEmptyAndSelfHeals — a first-write crash
+// leftover (a zero-byte or ledger-only file) is NOT a poisoned boot:
+// Read treats it as empty (env-equivalent), and the next Open migrates
+// it into a working store.
+func TestUninitializedFileReadsEmptyAndSelfHeals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.sqlite")
+	if err := os.WriteFile(path, nil, 0o600); err != nil { // 0-byte crash leftover
+		t.Fatal(err)
+	}
+	s, found, err := Read(path)
+	if err != nil || !found {
+		t.Fatalf("0-byte file must read empty/found=true, got err=%v found=%v", err, found)
+	}
+	if !s.Empty() {
+		t.Fatalf("0-byte file carries no rows, got %v", s)
+	}
+	st, err := Open(path) // the next writer heals it
+	if err != nil {
+		t.Fatalf("heal open: %v", err)
+	}
+	if err := st.Set("AXIOM_API_PORT", "8012"); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	s, _, err = Read(path)
+	if err != nil || s.Values["AXIOM_API_PORT"] != "8012" {
+		t.Fatalf("healed store must work, got err=%v values=%v", err, s.Values)
+	}
+}
+
+// TestAdoptedFileTightenedTo0600 — a pre-existing weaker permission is
+// below the file's contract; Open tightens it.
+func TestAdoptedFileTightenedTo0600(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.sqlite")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("adopted file mode = %v, want 0600", fi.Mode().Perm())
+	}
+}
+
+// TestReadRejectsURLSignificantPathChars — the read path carries the
+// same guard as the write path: a PRESENT file whose path contains a
+// "?" must not be opened (the DSN would silently redirect to a
+// different file).
+func TestReadRejectsURLSignificantPathChars(t *testing.T) {
+	dir := t.TempDir()
+	weird := filepath.Join(dir, "a?b.sqlite")
+	if err := os.WriteFile(weird, nil, 0o600); err != nil { // present at the literal name
+		t.Fatal(err)
+	}
+	if _, _, err := Read(weird); err == nil {
+		t.Fatal("read must reject ? in the path of a present file")
+	}
+}
+
+// TestSetAllIsAtomic — a failing row (unknown secret-ref source) aborts
+// the WHOLE batch: no partial import state survives.
+func TestSetAllIsAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.sqlite")
+	st := openStore(t, path)
+	if err := st.SetAll(
+		map[string]string{"AXIOM_API_PORT": "8012"},
+		map[string]string{"AXIOM_WS_SECRET": "keychain"}, // unknown source
+	); err == nil {
+		t.Fatal("unknown ref source must fail the batch")
+	}
+	st.Close()
+	s, _, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Values) != 0 || len(s.SecretRefs) != 0 {
+		t.Fatalf("a failed SetAll must leave NO partial state, got %v %v", s.Values, s.SecretRefs)
 	}
 }

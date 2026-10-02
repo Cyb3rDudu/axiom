@@ -224,17 +224,10 @@ func cmdConfigImportEnv(name string) int {
 		return exitFailure
 	}
 	defer st.Close()
-	for _, k := range sortedKeys(clean) {
-		if err := st.Set(k, clean[k]); err != nil {
-			fmt.Fprintf(os.Stderr, "%s config import-env: %v\n", name, err)
-			return exitFailure
-		}
-	}
-	for _, k := range sortedKeys(refs) {
-		if err := st.SetSecretRef(k, refs[k]); err != nil {
-			fmt.Fprintf(os.Stderr, "%s config import-env: %v\n", name, err)
-			return exitFailure
-		}
+	// ONE transaction: the import lands completely or not at all.
+	if err := st.SetAll(clean, refs); err != nil {
+		fmt.Fprintf(os.Stderr, "%s config import-env: %v\n", name, err)
+		return exitFailure
 	}
 	for _, s := range skipped {
 		fmt.Println("skipped:", s)
