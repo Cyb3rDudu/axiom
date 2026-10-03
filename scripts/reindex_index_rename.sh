@@ -26,6 +26,9 @@
 # Env: AXIOM_OPENSEARCH_URL (default http://127.0.0.1:9200),
 #      AXIOM_OPENSEARCH_USERNAME / AXIOM_OPENSEARCH_PASSWORD (optional).
 #      Source a credential env file first if the cluster requires auth.
+#      Passwords containing whitespace are not representable in the netrc
+#      form (they fail loudly at the reachability check); the URL must
+#      carry a scheme (http:// or https://).
 
 set -euo pipefail
 
@@ -44,7 +47,7 @@ if [ -n "${AXIOM_OPENSEARCH_USERNAME:-}" ]; then
     # credentials via a 0600 netrc file, never in argv (ps-visible)
     NETRC="$(mktemp)"
     chmod 600 "$NETRC"
-    OS_HOST="$(printf '%s' "$OS_URL" | sed -E 's#^[a-zA-Z]+://([^/:]+).*#\1#')"
+    OS_HOST="$(printf '%s' "$OS_URL" | sed -E 's#^[a-zA-Z]+://([^/@]+@)?([^/:]+).*#\2#')"
     printf 'machine %s login %s password %s\n' "$OS_HOST" \
         "$AXIOM_OPENSEARCH_USERNAME" "${AXIOM_OPENSEARCH_PASSWORD:-}" >"$NETRC"
     CURL+=(--netrc-file "$NETRC")
@@ -77,7 +80,7 @@ if ! "${CURL[@]}" -m 600 -XPOST "$OS_URL/_reindex?wait_for_completion=true" -H '
     # HTTP 200 can still carry per-doc failures or a timeout flag —
     # the copy must be exact
     cleanup_partial
-    die "_reindex failed or reported per-doc failures (partial target deleted — safe to rerun)"
+    die "_reindex failed or reported per-doc failures (target cleanup attempted — safe to rerun; an existing target is refused loudly)"
 fi
 
 # make the copied docs visible to count/_search before parity checks
@@ -87,7 +90,7 @@ old_n="$("${CURL[@]}" -m 30 "$OS_URL/$OLD_INDEX/_count" | jq -r .count)"
 new_n="$("${CURL[@]}" -m 30 "$OS_URL/$NEW_INDEX/_count" | jq -r .count)"
 [ "$new_n" = "$old_n" ] || {
     cleanup_partial
-    die "count mismatch: $new_n/$old_n (partial target deleted — safe to rerun)"
+    die "count mismatch: $new_n/$old_n (target cleanup attempted — safe to rerun; an existing target is refused loudly)"
 }
 note "counts match: $new_n/$old_n"
 
@@ -99,13 +102,13 @@ probe_id="$("${CURL[@]}" -m 30 "$OS_URL/$OLD_INDEX/_search" -H 'Content-Type: ap
     -d '{"size":1,"query":{"match_all":{}}}' | jq -r '.hits.hits[0]._id // empty')"
 [ -n "$probe_id" ] || {
     cleanup_partial
-    die "could not read a probe doc id from $OLD_INDEX — is the legacy index empty? (partial target deleted — safe to rerun)"
+    die "could not read a probe doc id from $OLD_INDEX — is the legacy index empty? (target cleanup attempted — safe to rerun; an existing target is refused loudly)"
 }
 old_src="$("${CURL[@]}" -m 30 "$OS_URL/$OLD_INDEX/_doc/$probe_id" | jq -S '._source')"
 new_src="$("${CURL[@]}" -m 30 "$OS_URL/$NEW_INDEX/_doc/$probe_id" | jq -S '._source // empty')"
 [ -n "$old_src" ] && [ "$old_src" = "$new_src" ] || {
     cleanup_partial
-    die "spot-doc mismatch for _id $probe_id — copy not byte-preserving (partial target deleted — safe to rerun)"
+    die "spot-doc mismatch for _id $probe_id — copy not byte-preserving (target cleanup attempted — safe to rerun; an existing target is refused loudly)"
 }
 note "spot doc parity ok (_id $probe_id, _source equal)"
 

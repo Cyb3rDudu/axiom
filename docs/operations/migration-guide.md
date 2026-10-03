@@ -119,7 +119,7 @@ schedule.
 | release assets `axiom-ng-<version>-<os>-<arch>`, `axiom-runner-<gen>-*` | `axiom-<version>-<os>-<arch>`, `axiom-compute-worker-<gen>-*` | releases ship the alias names alongside the canonical ones |
 | launchd label `com.axiom.runner` | `com.axiom.compute-worker` | **operator-side switch** — see [deployment](#launchd-macos) below |
 | Make target `make runner` | `make compute-worker` | warns and still builds |
-| default index `axiom-ng-chunks-v1` | `axiom-chunks-v1` (#352) | byte-preserving `_reindex` via `scripts/reindex_index_rename.sh` (no re-chunking, no re-embedding); rollback = `AXIOM_OS_INDEX` + restart; old index deleted after soak |
+| default index `axiom-ng-chunks-v1` | `axiom-chunks-v1` (#352) | byte-preserving `_reindex` via `scripts/reindex_index_rename.sh` (no re-chunking, no re-embedding); boot the canonical default only after the window script reported DONE; rollback = `AXIOM_OS_INDEX` + restart; old index deleted after soak |
 
 ### Environment variables
 
