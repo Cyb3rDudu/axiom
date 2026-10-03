@@ -511,7 +511,7 @@ Dazu fürs Chunking mit Bildern **Pflicht**: `AXIOM_ARTIFACT_ROOT=<dir>`
 Remote-Runner — die Source-URL-Konfiguration aus Schritt 3 (Secret +
 Bind-Adresse + Base-URL).
 
-Binary bauen (aus `axiom_ng/`): `go build -o <bin> ./cmd/axiom/` —
+Binary bauen (aus `axiom/`): `go build -o <bin> ./cmd/axiom/` —
 die folgende `axiom`-Invokation setzt es voraus.
 
 ```bash

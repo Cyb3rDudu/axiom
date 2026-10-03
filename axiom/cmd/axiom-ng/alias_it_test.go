@@ -74,7 +74,11 @@ func TestIT_AliasWarnsExactlyOnce(t *testing.T) {
 // exit; commands used here all terminate).
 func runCapture(t *testing.T, bin string, args ...string) string {
 	t.Helper()
-	out, err := exec.Command(bin, args...).CombinedOutput()
+	// Hermetic HOME: the exec'd binary runs cli.Run → statehome.Migrate;
+	// a real $HOME would migrate the developer's actual state root (#352).
+	cmd := exec.Command(bin, args...)
+	cmd.Env = append(os.Environ(), "HOME="+t.TempDir())
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if _, alive := err.(*exec.ExitError); !alive {
 			t.Fatalf("run %s %v: %v\n%s", bin, args, err, out)
@@ -94,6 +98,7 @@ func TestIT_AliasHealthCounterAndReadiness(t *testing.T) {
 
 	cmd := exec.Command(alias) // no-arg = the compat full boot, db-less → api-only
 	cmd.Env = append(os.Environ(),
+		"HOME="+t.TempDir(), // hermetic: never migrate the real state root
 		"AXIOM_DATABASE_URL=",
 		"AXIOM_ZOTERO_BASE=http://127.0.0.1:9", // fast refuse: the zotero check reports unhealthy, the boot proceeds
 		fmt.Sprintf("AXIOM_API_PORT=%d", port),

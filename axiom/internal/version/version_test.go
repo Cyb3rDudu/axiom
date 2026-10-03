@@ -6,6 +6,18 @@ func env(v string) func(string) string { return func(string) string { return v }
 
 // #205 §5: refuse = non-release build AND production port AND no explicit
 // opt-out. Boundary ports: 8010/8016 free, 8011/8015 production range.
+// #352 identity witness: the dev-default banner, literally. The other
+// banner pins in the tree are self-referential (they compare against
+// Banner() output), so a drifted product name would pass them; this
+// literal goes red if the legacy "axiom-ng" prefix (or any format
+// drift) comes back. Release builds override via -ldflags, not here.
+func TestBannerDefaultLiteral(t *testing.T) {
+	want := "axiom dev (commit none, debug build)"
+	if got := Banner(); got != want {
+		t.Fatalf("default banner = %q, want %q", got, want)
+	}
+}
+
 func TestDebugBindRefused(t *testing.T) {
 	cases := []struct {
 		name string

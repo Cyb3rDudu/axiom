@@ -20,8 +20,8 @@ RUN pip uninstall -y onnxruntime 2>&1 | tail -1 && pip install --no-cache-dir on
 RUN python -c "import onnxruntime as ort; assert 'CUDAExecutionProvider' in ort.get_available_providers(), ort.get_available_providers()" || (echo 'CUDA EP MISSING' && exit 1)
 
 # Copy the study PoC harnesses (feasibility tooling only; NOT product code).
-COPY axiom_ng/cmd/ /study/cmd/
-COPY axiom_ng/docs/research/ /study/docs/research/
+COPY axiom/cmd/ /study/cmd/
+COPY axiom/docs/research/ /study/docs/research/
 ENV ORT_DYLIB=/opt/onnxruntime/lib/libonnxruntime.so.1.29.0
 ENV PATH=/usr/local/go/bin:$PATH
 ENV CGO_ENABLED=1

@@ -3,7 +3,7 @@
 # Triggered on docs(...) commits (paths: docs/**).
 #
 # Mandatory rules (dudu, 2026-08-15): English content only; product name
-# "axiom" everywhere in prose/titles/nav. Code path names (axiom_ng/,
+# "axiom" everywhere in prose/titles/nav. Code path names (axiom/,
 # compute-worker pointing vars move with F10 (#304): canonical
 # AXIOM_COMPUTE_WORKER_* with legacy aliases; the worker's own
 # AXIOM_PROCESSOR_* contract stays frozen through 0.2.x (#304).

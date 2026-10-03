@@ -99,3 +99,32 @@ func TestMigrateIdempotentAfterMigration(t *testing.T) {
 		t.Fatalf("stray legacy dir must stay untouched when both roots exist (%v)", err)
 	}
 }
+
+// Legacy path exists as a SYMLINK (already migrated by an earlier run,
+// or operator-pre-created): not a real directory → not ours to touch.
+// The migration must no-op — neither creating the canonical root nor
+// rewiring the legacy link (statehome.go: !fi.IsDir() branch).
+func TestMigrateLegacySymlinkIsNoOp(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, "state-elsewhere")
+	legacy := filepath.Join(home, ".axiom-ng")
+	canonical := filepath.Join(home, ".axiom")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := migrate(legacy, canonical); err != nil {
+		t.Fatalf("symlink-legacy migration failed: %v", err)
+	}
+	if _, err := os.Lstat(canonical); !os.IsNotExist(err) {
+		t.Fatalf("canonical root must not be created when legacy is a symlink, stat err: %v", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(legacy); err != nil {
+		t.Fatalf("legacy symlink must stay resolvable: %v", err)
+	} else if want, _ := filepath.EvalSymlinks(target); resolved != want {
+		t.Fatalf("legacy symlink must still resolve to its original target %s, got %s", want, resolved)
+	}
+}

@@ -201,6 +201,7 @@ func runMode(t *testing.T, bin, dsn string, args ...string) string {
 	defer cancel()
 	c := exec.CommandContext(runCtx, bin, args...)
 	c.Env = append(os.Environ(),
+		"HOME="+t.TempDir(), // hermetic: never migrate the real state root
 		"AXIOM_DATABASE_URL="+dsn,
 		"AXIOM_ALLOW_DEBUG_BIND=1",
 		fmt.Sprintf("AXIOM_API_PORT=%d", port),
@@ -333,7 +334,7 @@ func TestIT_ModeFailExitCodeAndConsistencyStatement(t *testing.T) {
 	}
 
 	c := exec.Command(bin, "-consolidate-entities", "--apply")
-	c.Env = append(os.Environ(), "AXIOM_DATABASE_URL="+dsn, "AXIOM_ALLOW_DEBUG_BIND=1", "AXIOM_API_PORT=8099")
+	c.Env = append(os.Environ(), "HOME="+t.TempDir(), "AXIOM_DATABASE_URL="+dsn, "AXIOM_ALLOW_DEBUG_BIND=1", "AXIOM_API_PORT=8099")
 	out, err := c.CombinedOutput()
 	if err == nil {
 		t.Fatalf("mode must exit non-zero on a broken schema; got exit 0\n%s", out)
@@ -427,7 +428,7 @@ func TestIT_MaintenanceRetentionTrancheProgressAndDeadline(t *testing.T) {
 	// 2) expired deadline BEFORE any work: exit 1 with the MODE FAILED
 	//    contract and a deadline-specific message — never a silent success
 	c := exec.Command(bin, "-maintenance-retention", "--apply", "--timeout=1ns")
-	c.Env = append(os.Environ(), "AXIOM_DATABASE_URL="+dsn, "AXIOM_ALLOW_DEBUG_BIND=1")
+	c.Env = append(os.Environ(), "HOME="+t.TempDir(), "AXIOM_DATABASE_URL="+dsn, "AXIOM_ALLOW_DEBUG_BIND=1")
 	dlOut, err := c.CombinedOutput()
 	if err == nil {
 		t.Fatalf("expired --timeout must fail the run (exit != 0), got success:\n%s", dlOut)
@@ -471,7 +472,7 @@ func TestIT_MaintenanceRetentionTrancheProgressAndDeadline(t *testing.T) {
 	killCtx, kill := context.WithTimeout(context.Background(), 60*time.Second)
 	defer kill()
 	c2 := exec.CommandContext(killCtx, bin, "-maintenance-retention", "--apply", "--batch=1", "--timeout=5s")
-	c2.Env = append(os.Environ(), "AXIOM_DATABASE_URL="+dsn, "AXIOM_ALLOW_DEBUG_BIND=1")
+	c2.Env = append(os.Environ(), "HOME="+t.TempDir(), "AXIOM_DATABASE_URL="+dsn, "AXIOM_ALLOW_DEBUG_BIND=1")
 	blockOut, err := c2.CombinedOutput()
 	if killCtx.Err() == context.DeadlineExceeded {
 		t.Fatalf("blocked run did not terminate within 60s — the run deadline no longer bounds in-flight queries\n%s", blockOut)
@@ -514,6 +515,7 @@ func TestIT_HelpDocumentsExitCodes(t *testing.T) {
 		t.Fatalf("build binary: %v\n%s", err, out)
 	}
 	c := exec.Command(bin, "-help")
+	c.Env = append(os.Environ(), "HOME="+t.TempDir()) // hermetic: never migrate the real state root
 	out, err := c.CombinedOutput()
 	if err != nil {
 		t.Fatalf("-help exited with error: %v\n%s", err, out)
