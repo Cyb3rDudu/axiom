@@ -1,8 +1,11 @@
 package statehome
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -126,5 +129,59 @@ func TestMigrateLegacySymlinkIsNoOp(t *testing.T) {
 		t.Fatalf("legacy symlink must stay resolvable: %v", err)
 	} else if want, _ := filepath.EvalSymlinks(target); resolved != want {
 		t.Fatalf("legacy symlink must still resolve to its original target %s, got %s", want, resolved)
+	}
+}
+
+// The visibility contract (#352): the branches that do NOT move anything
+// must still say what they found — a silent no-op is how a state fork
+// hides. Pins the log lines for the successful move, the foreign
+// (resolving) symlink, and the dangling symlink.
+func TestMigrateLogsVisibility(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	// successful move
+	home := t.TempDir()
+	legacy := filepath.Join(home, ".axiom-ng")
+	canonical := filepath.Join(home, ".axiom")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(legacy, canonical); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "migrated legacy state root") {
+		t.Fatalf("successful migration must log the move, got: %q", buf.String())
+	}
+
+	// foreign symlink: legacy points elsewhere and resolves
+	buf.Reset()
+	home = t.TempDir()
+	target := filepath.Join(home, "state-elsewhere")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(home, ".axiom-ng")); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(filepath.Join(home, ".axiom-ng"), filepath.Join(home, ".axiom")); err != nil {
+		t.Fatalf("foreign-symlink migration failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "not managed by the migration") {
+		t.Fatalf("foreign legacy symlink must warn, got: %q", buf.String())
+	}
+
+	// dangling symlink: legacy points at a deleted target
+	buf.Reset()
+	home = t.TempDir()
+	if err := os.Symlink(filepath.Join(home, "ghost"), filepath.Join(home, ".axiom-ng")); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(filepath.Join(home, ".axiom-ng"), filepath.Join(home, ".axiom")); err != nil {
+		t.Fatalf("dangling-symlink migration failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "dangling symlink") {
+		t.Fatalf("dangling legacy symlink must warn, got: %q", buf.String())
 	}
 }

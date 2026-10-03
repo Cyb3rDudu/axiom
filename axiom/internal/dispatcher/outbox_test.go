@@ -33,6 +33,13 @@ import (
 // seedOutboxSnapshot inserts a snapshot + n chunks (with 3-dim embeddings) +
 // one pending outbox row; returns (outboxRowID, snapshotID).
 func (h *dispatchHarness) seedOutboxSnapshot(t *testing.T, key string, nChunks, attempts int) (string, string) {
+	return h.seedOutboxSnapshotEmbed(t, key, nChunks, attempts, true)
+}
+
+// seedOutboxSnapshotEmbed seeds an index outbox row; embed=false leaves the
+// chunks without dense embeddings (the rename-guard test path: the drainer's
+// ensure layers skip such rows entirely).
+func (h *dispatchHarness) seedOutboxSnapshotEmbed(t *testing.T, key string, nChunks, attempts int, embed bool) (string, string) {
 	t.Helper()
 	ctx := context.Background()
 	srcID := h.insertSource(t, key)
@@ -56,10 +63,12 @@ func (h *dispatchHarness) seedOutboxSnapshot(t *testing.T, key string, nChunks, 
 			RETURNING id::text`, snapID, i, "chunk text "+key).Scan(&chunkID); err != nil {
 			t.Fatalf("seed chunk %d: %v", i, err)
 		}
-		if _, err := h.pool.Exec(ctx, `
-			INSERT INTO processing_chunk_dense_embeddings (chunk_id, model, dimensions, vector)
-			VALUES ($1, 'test-bge', 3, $2)`, chunkID, "[0.1,0.2,0.3]"); err != nil {
-			t.Fatalf("seed embedding %d: %v", i, err)
+		if embed {
+			if _, err := h.pool.Exec(ctx, `
+				INSERT INTO processing_chunk_dense_embeddings (chunk_id, model, dimensions, vector)
+				VALUES ($1, 'test-bge', 3, $2)`, chunkID, "[0.1,0.2,0.3]"); err != nil {
+				t.Fatalf("seed embedding %d: %v", i, err)
+			}
 		}
 	}
 	var rowID string
@@ -1125,8 +1134,31 @@ func TestEnsureIndexRefusesWhileLegacyHoldsCorpus(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "reindex_index_rename.sh") {
 		t.Fatalf("guard must refuse with the window-script hint, got: %v", err)
 	}
+	if !strings.Contains(err.Error(), "AXIOM_OS_INDEX="+search.LegacyIndexName) {
+		t.Fatalf("refusal must pin the rollback env (AXIOM_OS_INDEX=%s), got: %v", search.LegacyIndexName, err)
+	}
 	if puts != 0 {
 		t.Fatalf("no create PUT may reach the cluster while legacy holds the corpus, got %d", puts)
+	}
+
+	// fail-closed: a legacy-HEAD transport status other than 200/404 (e.g.
+	// 503 mid-rollout) must refuse too — a transient error must not
+	// authorize creating a partial corpus
+	srv3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead && r.URL.Path == "/"+search.LegacyIndexName {
+			w.WriteHeader(503)
+			return
+		}
+		if r.Method == http.MethodHead {
+			w.WriteHeader(404)
+			return
+		}
+		w.WriteHeader(400)
+	}))
+	defer srv3.Close()
+	ix3 := newOpenSearchClient(srv3.URL, "", "", nil)
+	if err := ix3.ensureIndex(context.Background(), 1024); err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+		t.Fatalf("guard must fail closed on a non-404 legacy HEAD and name the status, got: %v", err)
 	}
 
 	// transition inert: legacy gone (404 everywhere) → creation proceeds
@@ -1142,5 +1174,50 @@ func TestEnsureIndexRefusesWhileLegacyHoldsCorpus(t *testing.T) {
 	ix2 := newOpenSearchClient(srv2.URL, "", "", nil)
 	if err := ix2.ensureIndex(context.Background(), 1024); err != nil {
 		t.Fatalf("post-soak create must proceed unguarded, got: %v", err)
+	}
+}
+
+// TestOutboxRowWithoutEmbeddingRefusesRenameTransition — rows whose docs
+// carry no embedding skip both ensure layers (dim-peek and row loop guard on
+// embedding != nil); their doc PUTs would auto-create the absent canonical
+// index while legacy holds the corpus — exactly the partial-corpus
+// degradation the #352 guard exists for. The row must fail with the
+// window-script hint and no PUT may reach the cluster.
+func TestOutboxRowWithoutEmbeddingRefusesRenameTransition(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	rowID, _ := h.seedOutboxSnapshotEmbed(t, "no-embed-key", 2, 0, false)
+
+	var puts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead && r.URL.Path == "/"+search.LegacyIndexName:
+			w.WriteHeader(200) // legacy index still holds the corpus
+		case r.Method == http.MethodHead:
+			w.WriteHeader(404) // canonical index absent
+		default:
+			if r.Method == http.MethodPut {
+				puts++
+			}
+			w.WriteHeader(400)
+		}
+	}))
+	defer srv.Close()
+
+	d := newOutboxDispatcher(h)
+	ix := newOpenSearchClient(srv.URL, "", "", nil)
+	if err := drainOutboxOnce(context.Background(), d, ix); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	status, attempts, _, lastErr := outboxRowStatus(t, h, rowID)
+	if status != "pending" || attempts != 1 {
+		t.Fatalf("row must fail once via the backoff path, got status=%s attempts=%d", status, attempts)
+	}
+	if lastErr == nil || !strings.Contains(*lastErr, "reindex_index_rename.sh") {
+		t.Fatalf("row failure must name the window script, got %v", lastErr)
+	}
+	if puts != 0 {
+		t.Fatalf("no PUT may reach the cluster from an embedding-less row while legacy holds the corpus, got %d", puts)
 	}
 }

@@ -70,11 +70,14 @@ func migrate(legacy, canonical string) error {
 	}
 	if !fi.IsDir() {
 		// canonical is absent (checked above); a legacy symlink therefore
-		// points somewhere else — the one silent state-fork shape. Make
-		// the divergence visible on every start until reconciled.
+		// points somewhere other than the canonical root — a possible state
+		// fork. Make every shape visible (resolving and dangling alike)
+		// until reconciled.
 		if fi.Mode()&os.ModeSymlink != 0 {
 			if target, terr := filepath.EvalSymlinks(legacy); terr == nil {
 				log.Printf("statehome: legacy path %s is a symlink to %s, not managed by the migration — new state goes to %s; reconcile manually if the symlink hides diverged state", legacy, target, canonical)
+			} else {
+				log.Printf("statehome: legacy path %s is a dangling symlink (resolves nowhere) — new state starts at %s; remove or relink %s consciously if it hides diverged state", legacy, canonical, legacy)
 			}
 		}
 		return nil // a file or symlink (already migrated) — not ours to touch

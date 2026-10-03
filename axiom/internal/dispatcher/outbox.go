@@ -127,18 +127,12 @@ func (c *openSearchClient) ensureIndex(ctx context.Context, dim int) error {
 		c.warnIfStrandedKnn(ctx)
 		return nil
 	}
-	// #352 rename-transition guard: the target index is absent — if the
-	// legacy one still holds the corpus on this cluster, creating the
-	// canonical index empty here would silently strand search on a
-	// partial corpus. Refuse loudly instead; the window script does the
-	// byte-preserving move, AXIOM_OS_INDEX rolls back. The guard is inert
-	// once the legacy index is deleted after the soak.
-	if legacy := search.LegacyIndexForCreate(c.index); legacy != "" {
-		if code, _, err := c.do(ctx, http.MethodHead, "/"+legacy, nil); err != nil {
-			return err
-		} else if code == http.StatusOK {
-			return fmt.Errorf("index %s is absent while legacy %s still exists — run scripts/reindex_index_rename.sh before switching (or keep AXIOM_OS_INDEX=%s on the legacy index)", c.index, legacy, legacy)
-		}
+	// #352 rename-transition guard: refuse to create the canonical index
+	// empty while the legacy one still holds the corpus — the window
+	// script does the byte-preserving move, AXIOM_OS_INDEX rolls back.
+	// The guard is inert once the legacy index is deleted after the soak.
+	if err := c.checkRenameTransition(ctx); err != nil {
+		return err
 	}
 	mapping := map[string]any{
 		"settings": map[string]any{"index": map[string]any{"knn": true}},
@@ -182,6 +176,39 @@ func (c *openSearchClient) ensureIndex(ctx context.Context, dim int) error {
 		return nil
 	}
 	return fmt.Errorf("create index %s: HTTP %d: %s", c.index, code, truncate(respBody, 200))
+}
+
+// checkRenameTransition refuses writes that would land in the canonical
+// chunks index while it is absent and the legacy #352 index still exists
+// on the cluster — creating it empty (explicitly here, or implicitly via
+// OpenSearch's create-on-write for direct doc PUTs) strands search on a
+// partial corpus. ensureIndex covers the embedding path; drainOutboxRow
+// calls this for rows whose docs carry no embedding, which skip both
+// ensure layers and would PUT straight into the absent index. Inert for
+// non-canonical indexes (explicit overrides, dev, legacy itself), once
+// the canonical index exists, and after the legacy index is deleted in
+// the post-soak cleanup. Any legacy-HEAD status other than 404 fails
+// closed — a transient error must not authorize a partial corpus.
+func (c *openSearchClient) checkRenameTransition(ctx context.Context) error {
+	legacy := search.LegacyIndexForCreate(c.index)
+	if legacy == "" || c.ensured {
+		return nil
+	}
+	code, _, err := c.do(ctx, http.MethodHead, "/"+c.index, nil)
+	if err != nil {
+		return err
+	}
+	if code == http.StatusOK {
+		return nil // canonical index exists — transition over on this cluster
+	}
+	code, _, err = c.do(ctx, http.MethodHead, "/"+legacy, nil)
+	if err != nil {
+		return err
+	}
+	if code == http.StatusNotFound {
+		return nil // legacy gone (fresh cluster or post-soak)
+	}
+	return fmt.Errorf("index %s is absent while legacy %s HEAD returned HTTP %d — run scripts/reindex_index_rename.sh before switching (or keep AXIOM_OS_INDEX=%s on the legacy index)", c.index, legacy, code, legacy)
 }
 
 // indexDoc PUTs one chunk document. The id goes in the URL only — OpenSearch
@@ -359,6 +386,13 @@ func drainOutboxRow(ctx context.Context, d *Dispatcher, osc *openSearchClient, r
 			}
 			break
 		}
+	}
+	// #352: rows without embeddings never run the ensure layers above, and
+	// their doc PUTs would auto-create the absent canonical index — the
+	// rename guard must cover that path too. Ensured clients (any embedding
+	// row already went through ensureIndex) short-circuit here.
+	if err := osc.checkRenameTransition(ctx); err != nil {
+		return d.failOutboxRow(ctx, row, fmt.Errorf("rename transition: %w", err))
 	}
 	for _, doc := range docs {
 		if err := osc.indexDoc(ctx, doc.ChunkID, outboxDocument(row, doc)); err != nil {
