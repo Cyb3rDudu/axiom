@@ -550,7 +550,7 @@ func TestSchemaFingerprintAllowlistExact(t *testing.T) {
 			}
 		}
 		if len(unexpected) > 0 || len(phantom) > 0 {
-			t.Fatalf("devStructureAllowlist drifted from the migration-derived truth:\n%s\nphantom entries (match nothing): %v\n(extend or trim the allowlist ONLY with a documented #295 debt entry)",
+			t.Fatalf("the allowlist/dropped-constraint set drifted from the migration-derived truth:\n%s\nphantom entries (match nothing): %v\n(extend or trim devStructureAllowlist/frozenDroppedConstraints ONLY with a documented #295 debt entry)",
 				strings.Join(unexpected, "\n"), phantom)
 		}
 	})
