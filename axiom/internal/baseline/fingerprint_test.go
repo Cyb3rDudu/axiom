@@ -294,6 +294,22 @@ var devStructureAllowlist = []string{
 	"ingest_jobs | ingest_jobs_intake_kind_chk |",
 }
 
+// frozenDroppedConstraints (Delta 4, DM06 #315): the five cross-component
+// FK lines the FROZEN core-derived fixture still carries but no live or
+// migration-derived database has anymore — the store migration
+// 0003_drop_cross_component_fks.sql removes exactly these five
+// constraints (witnessed line-exact by the migrations IT). The frozen
+// fixture stays core-derived and untouched (the F01 freeze); the drop is
+// store-owned and therefore shows up as MISSING lines, not extras. These
+// prefixes apply ONLY to missing lines; anything else missing still reds.
+var frozenDroppedConstraints = []string{
+	"ingest_jobs | fk_ingest_jobs_source |",
+	"ingest_jobs | fk_ingest_jobs_document |",
+	"ingest_jobs | fk_ingest_jobs_attachment |",
+	"processing_snapshots | processing_snapshots_document_id_fkey |",
+	"processing_snapshots | processing_snapshots_attachment_id_fkey |",
+}
+
 // TestSchemaFingerprintDevLive — axiom_dev must be exactly the canonical
 // freeze structure plus the documented allowlist delta. Live-gated: needs
 // the dev host's database (any structural drift on dev gets caught here,
@@ -393,8 +409,18 @@ func TestSchemaFingerprintDevLive(t *testing.T) {
 			unexpected = append(unexpected, "+ "+e)
 		}
 	}
+	allowDropped := func(line string) bool {
+		for _, p := range frozenDroppedConstraints {
+			if strings.HasPrefix(line, p) {
+				return true
+			}
+		}
+		return false
+	}
 	for _, m := range missing {
-		unexpected = append(unexpected, "- "+m)
+		if !allowDropped(m) {
+			unexpected = append(unexpected, "- "+m)
+		}
 	}
 	if len(unexpected) > 0 {
 		t.Fatalf("axiom_dev structure drift beyond the documented allowlist:\n%s\n(extend devStructureAllowlist ONLY with a documented #295 debt entry)",
@@ -483,6 +509,7 @@ func TestSchemaFingerprintAllowlistExact(t *testing.T) {
 			return "", false
 		}
 		used := map[string]bool{"processing_snapshots | snapshots_one_active_per_attachment |": true} // Delta 1: prod leftover, never migration-derived
+		usedDrop := map[string]bool{}
 		var unexpected []string
 		for l := range ls {
 			if cs[l] {
@@ -496,13 +523,29 @@ func TestSchemaFingerprintAllowlistExact(t *testing.T) {
 			used[p] = true
 		}
 		for l := range cs {
-			if !ls[l] {
+			if ls[l] {
+				continue
+			}
+			matched := false
+			for _, p := range frozenDroppedConstraints {
+				if strings.HasPrefix(l, p) {
+					usedDrop[p] = true
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				unexpected = append(unexpected, "- "+l)
 			}
 		}
 		var phantom []string
 		for _, p := range devStructureAllowlist {
 			if !used[p] {
+				phantom = append(phantom, p)
+			}
+		}
+		for _, p := range frozenDroppedConstraints {
+			if !usedDrop[p] {
 				phantom = append(phantom, p)
 			}
 		}
