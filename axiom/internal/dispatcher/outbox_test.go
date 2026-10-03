@@ -81,6 +81,15 @@ func (h *dispatchHarness) seedOutboxSnapshotEmbed(t *testing.T, key string, nChu
 	return rowID, snapID
 }
 
+// deref renders a *string test diagnostic (the pointer itself is useless
+// in a failure message).
+func deref(s *string) any {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
+}
+
 func outboxRowStatus(t *testing.T, h *dispatchHarness, rowID string) (status string, attempts int, next time.Time, lastErr *string) {
 	t.Helper()
 	err := h.pool.QueryRow(context.Background(),
@@ -1215,7 +1224,7 @@ func TestOutboxRowWithoutEmbeddingRefusesRenameTransition(t *testing.T) {
 		t.Fatalf("row must fail once via the backoff path, got status=%s attempts=%d", status, attempts)
 	}
 	if lastErr == nil || !strings.Contains(*lastErr, "reindex_index_rename.sh") {
-		t.Fatalf("row failure must name the window script, got %v", lastErr)
+		t.Fatalf("row failure must name the window script, got %v", deref(lastErr))
 	}
 	if puts != 0 {
 		t.Fatalf("no PUT may reach the cluster from an embedding-less row while legacy holds the corpus, got %d", puts)
@@ -1275,7 +1284,7 @@ func TestOutboxDeleteRowRefusesRenameTransition(t *testing.T) {
 		t.Fatalf("delete row must fail once via the backoff path, got status=%s attempts=%d", status, attempts)
 	}
 	if lastErr == nil || !strings.Contains(*lastErr, "reindex_index_rename.sh") {
-		t.Fatalf("delete-row failure must name the window script, got %v", lastErr)
+		t.Fatalf("delete-row failure must name the window script, got %v", deref(lastErr))
 	}
 	if deletes != 0 {
 		t.Fatalf("no DELETE may reach the cluster while legacy holds the corpus, got %d", deletes)
