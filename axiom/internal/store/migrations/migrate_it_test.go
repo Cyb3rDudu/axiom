@@ -7,7 +7,7 @@ package migrations
 
 import (
 	"context"
-	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"sort"
@@ -147,17 +147,21 @@ func TestStoreMigrate0002FixesLedgeredOldIndex(t *testing.T) {
 // TestStoreMigrate0003DropsExactlyTheFiveCrossFKs — the DM06 #315
 // witnesses on an ISOLATED scratch database (sibling ITs share the
 // _test DSN and call Migrate at startup; the ledger-wipe and orphan
-// injection below must never cross-talk with them):
+// injections below must never cross-talk with them):
 //  1. exactly-five: the store migration removes exactly the five
 //     allowlisted cross-component FKs — full FK inventory diff, nothing
 //     else falls, nothing appears;
 //  2. postcondition: zero FKs remain from the two Store tables onto the
 //     three Library tables;
-//  3. orphan-guard teeth: a fake orphan (post-drop, injectable exactly
-//     because the FK is gone) makes the re-run ABORT with the reference
-//     named, and the ledger row stays absent (transaction rollback);
-//  4. bootstrap-repair idempotency: clean re-run after a ledger wipe is
-//     a no-op (constraints already gone, guard passes).
+//  3. orphan-guard teeth for ALL FIVE references, under a pending drop:
+//     the five constraints are re-added (clean data), then one dangling
+//     row per reference must abort the re-run naming exactly that
+//     reference and leave no ledger row (transaction rollback);
+//  4. gated no-op: with all five constraints ABSENT, a legal post-drop
+//     orphan must NOT block the bootstrap-repair re-run (the audit
+//     guards the drop decision only);
+//  5. postcondition teeth: a sixth cross-component FK aborts the run;
+//  6. the final FK inventory equals the post-drop baseline exactly.
 func TestStoreMigrate0003DropsExactlyTheFiveCrossFKs(t *testing.T) {
 	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -169,13 +173,16 @@ func TestStoreMigrate0003DropsExactlyTheFiveCrossFKs(t *testing.T) {
 	const v0003 = "0003_drop_cross_component_fks.sql"
 	ctx := context.Background()
 
-	// Isolated scratch DB (the baseline fingerprint's fixed-name pattern:
-	// fails loudly on concurrent runs instead of cross-talking).
+	// Fixed-name scratch (the baseline fingerprint pattern): self-healing
+	// across crashed runs — a leftover is dropped, not accumulated.
+	// ponytail: fixed name — concurrent same-package runs collide loudly
+	// on DROP+CREATE; accepted ceiling for a single-operator dev host and
+	// CI (-p 1); switch to pid-suffixed names if suites ever race.
+	scratch := "axiom_dm06_0003_test"
 	admin, err := db.Open(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open admin: %v", err)
 	}
-	scratch := fmt.Sprintf("axiom_dm06_%d_test", os.Getpid())
 	if _, err := admin.Pool().Exec(ctx,
 		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, scratch); err != nil {
 		admin.Close()
@@ -211,7 +218,26 @@ func TestStoreMigrate0003DropsExactlyTheFiveCrossFKs(t *testing.T) {
 		t.Fatalf("core migrate: %v", err)
 	}
 
-	fkInventory := func() map[string]string {
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := d.Pool().Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("exec %q: %v", sql, err)
+		}
+	}
+	wipeLedger := func() {
+		t.Helper()
+		exec(`DELETE FROM store_schema_migrations WHERE version=$1`, v0003)
+	}
+	ledgered := func() bool {
+		t.Helper()
+		var b bool
+		if err := d.Pool().QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM store_schema_migrations WHERE version=$1)`, v0003).Scan(&b); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	fkInventory := func() map[string]struct{} {
 		rows, err := d.Pool().Query(ctx, `
 			SELECT conrelid::regclass::text, conname
 			FROM pg_constraint WHERE contype='f'
@@ -220,13 +246,13 @@ func TestStoreMigrate0003DropsExactlyTheFiveCrossFKs(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer rows.Close()
-		out := map[string]string{}
+		out := map[string]struct{}{}
 		for rows.Next() {
 			var tbl, name string
 			if err := rows.Scan(&tbl, &name); err != nil {
 				t.Fatal(err)
 			}
-			out[tbl+"."+name] = ""
+			out[tbl+"."+name] = struct{}{}
 		}
 		return out
 	}
@@ -285,47 +311,162 @@ func TestStoreMigrate0003DropsExactlyTheFiveCrossFKs(t *testing.T) {
 		t.Fatalf("cross-component FKs remain after the drop: %d", n)
 	}
 
-	// (3) orphan-guard teeth: inject a fake orphan (possible exactly
-	// BECAUSE the FK is gone), wipe 0003's ledger row, re-run — the
-	// guard must abort naming the reference, and the aborted
-	// transaction must leave no ledger row.
-	if _, err := d.Pool().Exec(ctx, `DELETE FROM store_schema_migrations WHERE version=$1`, v0003); err != nil {
+	// (3) orphan-guard teeth for ALL five references. The gate means the
+	// abort is only reachable while a drop is PENDING, so each probe
+	// reconstructs the real drifted shape: the orphan lands first (FKs
+	// absent), then the five constraints come back NOT VALID — the
+	// online-migration form that skips existing rows — exactly the state
+	// the audit exists for. Both snapshot reference columns are NOT NULL:
+	// each snapshot injection keeps the counterpart REAL (one mirror
+	// chain seeded below), so exactly ONE reference dangles per probe.
+	dropFive := func() {
+		t.Helper()
+		exec(`ALTER TABLE ingest_jobs DROP CONSTRAINT IF EXISTS fk_ingest_jobs_source`)
+		exec(`ALTER TABLE ingest_jobs DROP CONSTRAINT IF EXISTS fk_ingest_jobs_document`)
+		exec(`ALTER TABLE ingest_jobs DROP CONSTRAINT IF EXISTS fk_ingest_jobs_attachment`)
+		exec(`ALTER TABLE processing_snapshots DROP CONSTRAINT IF EXISTS processing_snapshots_document_id_fkey`)
+		exec(`ALTER TABLE processing_snapshots DROP CONSTRAINT IF EXISTS processing_snapshots_attachment_id_fkey`)
+	}
+	readdFiveNotValid := func() {
+		t.Helper()
+		exec(`ALTER TABLE ingest_jobs ADD CONSTRAINT fk_ingest_jobs_source
+			FOREIGN KEY (source_id) REFERENCES zotero_sources(id) ON DELETE CASCADE NOT VALID`)
+		exec(`ALTER TABLE ingest_jobs ADD CONSTRAINT fk_ingest_jobs_document
+			FOREIGN KEY (document_id) REFERENCES zotero_documents(id) ON DELETE CASCADE NOT VALID`)
+		exec(`ALTER TABLE ingest_jobs ADD CONSTRAINT fk_ingest_jobs_attachment
+			FOREIGN KEY (attachment_id) REFERENCES zotero_attachments(id) ON DELETE CASCADE NOT VALID`)
+		exec(`ALTER TABLE processing_snapshots ADD CONSTRAINT processing_snapshots_document_id_fkey
+			FOREIGN KEY (document_id) REFERENCES zotero_documents(id) ON DELETE CASCADE NOT VALID`)
+		exec(`ALTER TABLE processing_snapshots ADD CONSTRAINT processing_snapshots_attachment_id_fkey
+			FOREIGN KEY (attachment_id) REFERENCES zotero_attachments(id) ON DELETE CASCADE NOT VALID`)
+	}
+	readdFive := func() {
+		t.Helper()
+		exec(`ALTER TABLE ingest_jobs ADD CONSTRAINT fk_ingest_jobs_source
+			FOREIGN KEY (source_id) REFERENCES zotero_sources(id) ON DELETE CASCADE`)
+		exec(`ALTER TABLE ingest_jobs ADD CONSTRAINT fk_ingest_jobs_document
+			FOREIGN KEY (document_id) REFERENCES zotero_documents(id) ON DELETE CASCADE`)
+		exec(`ALTER TABLE ingest_jobs ADD CONSTRAINT fk_ingest_jobs_attachment
+			FOREIGN KEY (attachment_id) REFERENCES zotero_attachments(id) ON DELETE CASCADE`)
+		exec(`ALTER TABLE processing_snapshots ADD CONSTRAINT processing_snapshots_document_id_fkey
+			FOREIGN KEY (document_id) REFERENCES zotero_documents(id) ON DELETE CASCADE`)
+		exec(`ALTER TABLE processing_snapshots ADD CONSTRAINT processing_snapshots_attachment_id_fkey
+			FOREIGN KEY (attachment_id) REFERENCES zotero_attachments(id) ON DELETE CASCADE`)
+	}
+	var srcID string
+	if err := d.Pool().QueryRow(ctx,
+		`INSERT INTO zotero_sources (base_url, library_id, server_id)
+		 VALUES ('https://dm06-teeth.local','users/0','dm06-teeth') RETURNING id::text`).Scan(&srcID); err != nil {
 		t.Fatal(err)
 	}
-	var orphanID string
-	if err := d.Pool().QueryRow(ctx,
-		`INSERT INTO ingest_jobs (source_id) VALUES (gen_random_uuid()) RETURNING id::text`).Scan(&orphanID); err != nil {
-		t.Fatalf("inject fake orphan: %v", err)
+	exec(`INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+		VALUES ($1,'DM06REALDOC',1,'book','DM06 Teeth Real')`, srcID)
+	exec(`INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+		parent_zotero_key, link_mode, content_type, filename, preferred, deleted)
+		VALUES ($1,(SELECT id FROM zotero_documents WHERE zotero_key='DM06REALDOC'),'DM06REALATT',1,
+		'DM06REALDOC','imported_file','application/pdf','dm06.pdf',true,false)`, srcID)
+
+	probes := []struct {
+		label  string // the reference the abort must name
+		table  string // where the dangling row lands (cleanup by id)
+		inject string // mints exactly ONE dangling row for the reference
+	}{
+		{"ingest_jobs.source_id", "ingest_jobs",
+			`INSERT INTO ingest_jobs (source_id) VALUES (gen_random_uuid()) RETURNING id::text`},
+		{"ingest_jobs.document_id", "ingest_jobs",
+			`INSERT INTO ingest_jobs (document_id) VALUES (gen_random_uuid()) RETURNING id::text`},
+		{"ingest_jobs.attachment_id", "ingest_jobs",
+			`INSERT INTO ingest_jobs (attachment_id) VALUES (gen_random_uuid()) RETURNING id::text`},
+		{"processing_snapshots.document_id", "processing_snapshots",
+			`INSERT INTO processing_snapshots (attachment_id, document_id, content_hash,
+			   processor_name, processor_version, profile_hash, profile)
+			 VALUES ((SELECT id FROM zotero_attachments WHERE zotero_key='DM06REALATT'),
+			         gen_random_uuid(), 'dm06-teeth', 'p', 'v1', 'ph', '{}')
+			 RETURNING id::text`},
+		{"processing_snapshots.attachment_id", "processing_snapshots",
+			`INSERT INTO processing_snapshots (attachment_id, document_id, content_hash,
+			   processor_name, processor_version, profile_hash, profile)
+			 VALUES (gen_random_uuid(),
+			         (SELECT id FROM zotero_documents WHERE zotero_key='DM06REALDOC'),
+			         'dm06-teeth', 'p', 'v1', 'ph', '{}')
+			 RETURNING id::text`},
 	}
-	err = Migrate(ctx, d.Pool())
-	if err == nil || !strings.Contains(err.Error(), "orphan guard") || !strings.Contains(err.Error(), "ingest_jobs.source_id") {
-		t.Fatalf("orphan guard must abort naming the broken reference, got: %v", err)
-	}
-	var ledgered bool
-	if err := d.Pool().QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM store_schema_migrations WHERE version=$1)`, v0003).Scan(&ledgered); err != nil {
-		t.Fatal(err)
-	}
-	if ledgered {
-		t.Fatal("the aborted 0003 must not be ledgered (transaction rollback)")
+	for _, p := range probes {
+		dropFive() // ensure the FKs are absent so the orphan can land
+		var orphanID string
+		if err := d.Pool().QueryRow(ctx, p.inject).Scan(&orphanID); err != nil {
+			t.Fatalf("inject orphan for %s: %v", p.label, err)
+		}
+		readdFiveNotValid() // pending drop over drifted data
+		wipeLedger()
+		err := Migrate(ctx, d.Pool())
+		if err == nil || !strings.Contains(err.Error(), "orphan guard") || !strings.Contains(err.Error(), p.label) {
+			t.Fatalf("orphan guard must abort naming %s, got: %v", p.label, err)
+		}
+		if ledgered() {
+			t.Fatalf("the aborted 0003 must not be ledgered after the %s probe (transaction rollback)", p.label)
+		}
+		dropFive()
+		exec(`DELETE FROM `+p.table+` WHERE id=$1`, orphanID)
 	}
 
-	// (4) bootstrap-repair no-op: clean data, wiped ledger row — the
-	// re-run succeeds, drops nothing, restores the ledger row.
-	if _, err := d.Pool().Exec(ctx, `DELETE FROM ingest_jobs WHERE id=$1`, orphanID); err != nil {
-		t.Fatal(err)
-	}
+	// Constraints present again (fully validated — data is clean now): the
+	// re-run drops the five (the plain second application) and restores
+	// the ledger row.
+	readdFive()
+	wipeLedger()
 	if err := Migrate(ctx, d.Pool()); err != nil {
-		t.Fatalf("re-run after ledger wipe must be a no-op: %v", err)
+		t.Fatalf("second drop run: %v", err)
 	}
+	if !ledgered() {
+		t.Fatal("0003 must be ledgered after the second drop run")
+	}
+	for _, fk := range dropped {
+		if _, ok := fkInventory()[fk]; ok {
+			t.Fatalf("%s must be gone after the second drop run", fk)
+		}
+	}
+
+	// (4) gated no-op: constraints ABSENT + a legal post-drop orphan —
+	// the audit is skipped (nothing left to drop; orphans belong to the
+	// contract layer), the postcondition still holds, the repair lands.
+	var legalOrphan string
 	if err := d.Pool().QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM store_schema_migrations WHERE version=$1)`, v0003).Scan(&ledgered); err != nil {
+		`INSERT INTO ingest_jobs (source_id) VALUES (gen_random_uuid()) RETURNING id::text`).Scan(&legalOrphan); err != nil {
 		t.Fatal(err)
 	}
-	if !ledgered {
+	wipeLedger()
+	if err := Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("bootstrap repair over a legal post-drop orphan must succeed: %v", err)
+	}
+	if !ledgered() {
+		t.Fatal("0003 must be ledgered after the gated no-op run")
+	}
+	exec(`DELETE FROM ingest_jobs WHERE id=$1`, legalOrphan)
+
+	// (5) postcondition teeth: a SIXTH cross-component FK (inventory
+	// drift beyond the allowlisted five) aborts the run.
+	exec(`ALTER TABLE ingest_jobs ADD CONSTRAINT dm06_probe_fk
+		FOREIGN KEY (attachment_id) REFERENCES zotero_attachments(id)`)
+	wipeLedger()
+	err = Migrate(ctx, d.Pool())
+	if err == nil || !strings.Contains(err.Error(), "cross-component FKs remain") {
+		t.Fatalf("the postcondition must abort on a sixth cross-component FK, got: %v", err)
+	}
+	if ledgered() {
+		t.Fatal("the postcondition-aborted 0003 must not be ledgered")
+	}
+	exec(`ALTER TABLE ingest_jobs DROP CONSTRAINT dm06_probe_fk`)
+	if err := Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("re-run after the probe FK removal: %v", err)
+	}
+	if !ledgered() {
 		t.Fatal("0003 must be ledgered after the clean re-run")
 	}
-	if got := fkInventory(); len(got) != len(after) {
-		t.Fatalf("the no-op re-run changed the FK inventory: %d → %d", len(after), len(got))
+
+	// (6) the final inventory equals the post-drop baseline in CONTENT
+	// (not just cardinality).
+	if got := fkInventory(); !maps.Equal(got, after) {
+		t.Fatalf("the probes changed the FK inventory: %d baseline entries, %d final", len(after), len(got))
 	}
 }
