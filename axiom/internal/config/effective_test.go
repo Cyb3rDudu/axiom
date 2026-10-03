@@ -1,0 +1,449 @@
+// effective_test.go — witnesses for the resolved-view surface (F05 #299).
+// The completeness sonde parses config.go's SOURCE for every AXIOM_* key
+// the readers reference and asserts the table has a row — a new knob
+// cannot silently stay invisible to `axiom config get --effective`.
+package config
+
+import (
+	"os"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Cyb3rDudu/axiom/axiom/internal/deprecate"
+)
+
+// TestEffectiveTableCoversAllReadKeys — drift guard between the loader
+// and the table (the usage-lint pattern: parse the source, compare sets).
+func TestEffectiveTableCoversAllReadKeys(t *testing.T) {
+	src, err := os.ReadFile("config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyRe := regexp.MustCompile(`"(AXIOM_[A-Z0-9_]+)"`)
+	seen := map[string]bool{}
+	for _, m := range keyRe.FindAllStringSubmatch(string(src), -1) {
+		seen[m[1]] = true
+	}
+	have := map[string]bool{}
+	for _, row := range envRows {
+		if have[row.env] {
+			t.Fatalf("duplicate table row for %s", row.env)
+		}
+		have[row.env] = true
+	}
+	for key := range seen {
+		if !have[key] {
+			t.Errorf("config.go reads %s but the effective table has no row — add it", key)
+		}
+	}
+	for key := range have {
+		if !seen[key] {
+			t.Errorf("effective table row %s is read by nothing in config.go — drop it", key)
+		}
+	}
+}
+
+// TestDualFedEnvPairsMatchTableAndLoader — drift guard for the dual-fed
+// pair table (F08 #302, F10 #304): every dualFedEnv field must own exactly
+// its two table rows (canonical + legacy spelling), and every
+// computeWorkerEnv/computeWorkerDur call-site pair in config.go must be
+// tabled under the field it feeds — a new or retyped pointing var cannot
+// silently lose its resolver truth.
+func TestDualFedEnvPairsMatchTableAndLoader(t *testing.T) {
+	// part 1: the pair table vs envRows — exactly two rows per field,
+	// and their env keys are exactly the pair.
+	for field, pair := range dualFedEnv {
+		var rows []string
+		for _, row := range envRows {
+			if row.field == field {
+				rows = append(rows, row.env)
+			}
+		}
+		if len(rows) != 2 {
+			t.Fatalf("dualFedEnv field %s has %d envRows rows, want exactly 2 (canonical+legacy)", field, len(rows))
+		}
+		if !(rows[0] == pair[0] && rows[1] == pair[1]) && !(rows[0] == pair[1] && rows[1] == pair[0]) {
+			t.Errorf("dualFedEnv field %s pair {%s,%s} != envRows {%s,%s}", field, pair[0], pair[1], rows[0], rows[1])
+		}
+	}
+
+	// part 2: computeWorkerEnv/computeWorkerDur call sites vs the table.
+	// FixerCommand (F08 repairWorkerCmd) is resolved by a different helper
+	// and stays table-only.
+	src, err := os.ReadFile("config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	callRe := regexp.MustCompile(`(\w+):\s*(?:parseURLList\()?computeWorker(?:Env|Dur)\("([A-Z0-9_]+)", "([A-Z0-9_]+)"`)
+	calls := map[string][2]string{}
+	for _, m := range callRe.FindAllStringSubmatch(string(src), -1) {
+		field, canon, legacy := m[1], m[2], m[3]
+		if prev, dup := calls[field]; dup {
+			t.Fatalf("field %s has two computeWorker* call sites (%s/%s vs %s/%s)", field, prev[0], prev[1], canon, legacy)
+		}
+		calls[field] = [2]string{canon, legacy}
+	}
+	for field, pair := range dualFedEnv {
+		if field == "FixerCommand" {
+			continue
+		}
+		got, ok := calls[field]
+		if !ok {
+			t.Errorf("dualFedEnv field %s has no computeWorkerEnv/Dur call site in config.go", field)
+			continue
+		}
+		if got != pair {
+			t.Errorf("dualFedEnv field %s pair {%s,%s} != call site {%s,%s}", field, pair[0], pair[1], got[0], got[1])
+		}
+	}
+	for field := range calls {
+		if _, ok := dualFedEnv[field]; !ok {
+			t.Errorf("config.go feeds %s via computeWorker* but dualFedEnv has no entry — add it (Effective source annotation will lie)", field)
+		}
+	}
+}
+
+// TestEffectiveMarksSourcesAndRedacts — source annotation follows
+// LookupEnv (set-but-empty counts as env), secrets never carry values,
+// the DSN is projected credential-free.
+func TestEffectiveMarksSourcesAndRedacts(t *testing.T) {
+	t.Setenv("AXIOM_API_PORT", "8123")
+	t.Setenv("AXIOM_OPENSEARCH_URL", "") // set-empty = the disabled state = source env
+	t.Setenv("AXIOM_DATABASE_URL", "postgresql://u:topsecret@db.example:5432/axiom?sslmode=disable")
+	t.Setenv("AXIOM_WS_SECRET", "wssecret")
+
+	entries := Effective(Load())
+	byEnv := map[string]Entry{}
+	for _, e := range entries {
+		byEnv[e.Env] = e
+	}
+	if e := byEnv["AXIOM_API_PORT"]; e.Source != "env" || e.Value != 8123 {
+		t.Fatalf("AXIOM_API_PORT: %+v", e)
+	}
+	if e := byEnv["AXIOM_BIND_ADDR"]; e.Source != "default" {
+		t.Fatalf("unset key must read default: %+v", e)
+	}
+	if e := byEnv["AXIOM_OPENSEARCH_URL"]; e.Source != "env" || e.Value != "" {
+		t.Fatalf("set-empty OS URL: %+v", e)
+	}
+	if e := byEnv["AXIOM_WS_SECRET"]; e.Value != RedactedValue {
+		t.Fatalf("ws secret leaked: %+v", e)
+	}
+	e := byEnv["AXIOM_DATABASE_URL"]
+	if e.Value != "postgresql://db.example:5432/axiom?sslmode=disable" {
+		t.Fatalf("DSN must be credential-free, got %v", e.Value)
+	}
+	// Non-vacuous sonde: the sanitized projection keeps host+db.
+	if !strings.Contains(e.Value.(string), "db.example") {
+		t.Fatal("sanitizer removed the host — redaction over-reached")
+	}
+}
+
+// TestEffectiveCarriesFixerInterval — the F04 deferral (fixer-interval
+// test seam) is resolvable through the config surface.
+func TestEffectiveCarriesFixerInterval(t *testing.T) {
+	t.Setenv("AXIOM_FIXER_INTERVAL", "45s")
+	cfg := Load()
+	if cfg.FixerInterval != 45*time.Second {
+		t.Fatalf("FixerInterval = %v, want 45s", cfg.FixerInterval)
+	}
+	found := false
+	for _, e := range Effective(cfg) {
+		if e.Env == "AXIOM_FIXER_INTERVAL" {
+			found = true
+			if e.Source != "env" {
+				t.Fatalf("source %s, want env", e.Source)
+			}
+			// Durations render as their Go spelling, not raw nanoseconds.
+			if e.Value != "45s" {
+				t.Fatalf("AXIOM_FIXER_INTERVAL value = %v (%T), want the string \"45s\"", e.Value, e.Value)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("AXIOM_FIXER_INTERVAL missing from effective view")
+	}
+	// Default seam: unset → the invoker default 30s, source default.
+	t.Setenv("AXIOM_FIXER_INTERVAL", "")
+	if cfg := Load(); cfg.FixerInterval != 30*time.Second {
+		t.Fatalf("default FixerInterval = %v, want 30s", cfg.FixerInterval)
+	}
+}
+
+// TestEffectiveLibraryPersistenceRows — the F12 per-component
+// persistence knobs render value-level: driver and sqlite path from env,
+// the Library DSN sanitized (a DSN row is wiring state, not a secret —
+// credentials still never leave, the sanitizer drops the userinfo).
+func TestEffectiveLibraryPersistenceRows(t *testing.T) {
+	t.Setenv("AXIOM_STORAGE_LIBRARY_DRIVER", "sqlite")
+	t.Setenv("AXIOM_LIBRARY_SQLITE_PATH", "/tmp/probe.sqlite")
+	t.Setenv("AXIOM_LIBRARY_DATABASE_URL", "postgresql://axiom_user:axiom_password@localhost:5432/lib_test?sslmode=disable")
+	got := map[string]Entry{}
+	for _, e := range Effective(Load()) {
+		got[e.Env] = e
+	}
+	if e, ok := got["AXIOM_STORAGE_LIBRARY_DRIVER"]; !ok || e.Value != "sqlite" || e.Source != "env" {
+		t.Fatalf("driver row = %+v (ok=%v), want value sqlite source env", e, ok)
+	}
+	if e, ok := got["AXIOM_LIBRARY_SQLITE_PATH"]; !ok || e.Value != "/tmp/probe.sqlite" || e.Source != "env" {
+		t.Fatalf("sqlite path row = %+v (ok=%v), want value /tmp/probe.sqlite source env", e, ok)
+	}
+	if e, ok := got["AXIOM_LIBRARY_DATABASE_URL"]; !ok || e.Value != "postgresql://localhost:5432/lib_test?sslmode=disable" || e.Source != "env" {
+		t.Fatalf("library DSN row = %+v (ok=%v), want the sanitized DSN (no userinfo, not <redacted>) under source env", e, ok)
+	}
+}
+
+// TestValidateEnvFlagsSilentFallbacks — the raw-env re-parser catches
+// what the loader would silently ignore (typo'd duration, non-numeric
+// port, non-boolean flag).
+func TestValidateEnvFlagsSilentFallbacks(t *testing.T) {
+	if problems := ValidateEnv(); len(problems) != 0 {
+		t.Fatalf("clean env must validate, got %v", problems)
+	}
+	for env, val := range map[string]string{
+		"AXIOM_API_PORT":          "eighty",
+		"AXIOM_DISPATCHER_LEASE":  "5 minutes",
+		"AXIOM_SEARCH_RERANK":     "maybe",
+		"AXIOM_FIXER_CONCURRENCY": "1.5",
+		// strconv-only spellings ("t", "y") are NOT loader grammar —
+		// validate must flag them instead of blessing a silent fallback
+		// to the default.
+		"AXIOM_SEARCH_SPARSE_ARM":         "t",
+		"AXIOM_SEARCH_FRONTMATTER_FILTER": "y",
+		// F12: driver vocabulary — an unknown engine name would sail
+		// through validate and abort only at composition start.
+		"AXIOM_STORAGE_LIBRARY_DRIVER": "oracle",
+	} {
+		t.Setenv(env, val)
+		problems := ValidateEnv()
+		if len(problems) == 0 || !strings.Contains(problems[0], env) {
+			t.Fatalf("%s=%s must be flagged, got %v", env, val, problems)
+		}
+		os.Unsetenv(env)
+	}
+	// Only the loader's own boolean spellings are recognized: 1/true/yes
+	// (true) and 0/false/no (false), case-insensitive.
+	for _, val := range []string{"no", "false", "0", "TRUE", "Yes"} {
+		t.Setenv("AXIOM_SEARCH_RERANK", val)
+		if problems := ValidateEnv(); len(problems) != 0 {
+			t.Fatalf("%q must be accepted as a recognized boolean, got %v", val, problems)
+		}
+	}
+	// Driver vocabulary: postgres and sqlite are the known engines.
+	for _, val := range []string{"postgres", "sqlite"} {
+		t.Setenv("AXIOM_STORAGE_LIBRARY_DRIVER", val)
+		if problems := ValidateEnv(); len(problems) != 0 {
+			t.Fatalf("driver %q must validate, got %v", val, problems)
+		}
+	}
+}
+
+// Credential-query sonde (review round 3): pgx honors ?password= (and
+// sslpassword/passfile) as REAL credentials — they must never survive any
+// redaction surface, structured (sanitizeDSN) or free-text
+// (RedactQueryCredentials, the doctor error paths).
+func TestQueryCredentialsRedacted(t *testing.T) {
+	dsn := "postgres://u@127.0.0.1:1/db?password=SUPERSECRET_XYZ_42&sslmode=disable"
+	got := sanitizeDSN(dsn)
+	if strings.Contains(got, "SUPERSECRET_XYZ_42") {
+		t.Fatalf("query password survived sanitizeDSN: %s", got)
+	}
+	if !strings.Contains(got, "sslmode=disable") || !strings.Contains(got, "127.0.0.1:1/db") {
+		t.Fatalf("sanitizer removed non-credential parts: %s", got)
+	}
+	if g := RedactQueryCredentials("failed to parse `postgres://u:p@h/db?password=QUERY&x=1`"); strings.Contains(g, "QUERY") {
+		t.Fatalf("free-text redaction leaked: %s", g)
+	}
+	// sslpassword and passfile are credentials too.
+	if g := RedactQueryCredentials("?sslpassword=abc&passfile=/p&other=v"); strings.Contains(g, "abc") || strings.Contains(g, "/p&") {
+		t.Fatalf("sibling credential keys leaked: %s", g)
+	}
+	// Escape-tolerant value class: url.Error %q-escapes inner quotes —
+	// `password=ab\"cd` in free text must redact THROUGH the escaped
+	// pair (whole value eaten, wrapper quote kept).
+	if g := RedactQueryCredentials(`failed: Get "postgres://h/db?password=ab\"cd&x=1": dial`); strings.Contains(g, "ab") || strings.Contains(g, "cd") || !strings.Contains(g, `password=<redacted>&x=1`) {
+		t.Fatalf("escaped-quote credential value survived: %s", g)
+	}
+	// The legal spelling (%22) contains no raw quote — full redaction,
+	// pinned so a future class tweak cannot regress it.
+	if g := RedactQueryCredentials("x?password=a%22b&y=1"); strings.Contains(g, "a%22b") {
+		t.Fatalf("percent-encoded quote value survived: %s", g)
+	}
+	// Pinned residual (named on the regex): in RAW render contexts a
+	// credential value containing a RAW unescaped quote truncates at the
+	// quote — invalid spelling, env-only, write-gate refused. The part
+	// BEFORE the quote is redacted; the tail stays visible today.
+	if g := sanitizeDSN(`postgres://h/db?password=ab"cd&x=1`); !strings.Contains(g, `<redacted>"cd&x=1`) {
+		t.Fatalf("raw-quote render residual changed shape — re-pin or fix: %s", g)
+	}
+}
+
+// URL-valued rows never carry an inline userinfo (review round 3): a
+// user:pass@ typed into a non-secret URL row is still a credential.
+func TestURLRowsDropUserinfo(t *testing.T) {
+	t.Setenv("AXIOM_OPENSEARCH_URL", "http://admin:osPW@127.0.0.1:9200")
+	t.Setenv("AXIOM_QUERY_RUNNER_URL", "http://k:qpw@127.0.0.1:8112")
+	for _, e := range Effective(Load()) {
+		switch v := e.Value.(type) {
+		case string:
+			if strings.Contains(v, ":ospw@") || strings.Contains(v, "osPW@") || strings.Contains(v, "qpw@") {
+				t.Fatalf("userinfo survived in %s: %v", e.Env, e.Value)
+			}
+		case []string:
+			for _, u := range v {
+				if strings.Contains(strings.ToLower(u), "qpw@") {
+					t.Fatalf("userinfo survived in %s: %v", e.Env, e.Value)
+				}
+			}
+		}
+	}
+}
+
+// Query credentials never survive ANY rendered URL row (F13 review):
+// the strict DSN sanitizer covered only the two DSN keys — every other
+// URL-shaped row (and every slice element) passes through renderOutput
+// now, so a ?password= typed into e.g. the OpenSearch URL is redacted
+// exactly like it is in a DSN. Percent-encoded key spellings included.
+func TestURLRowsRedactQueryCredentials(t *testing.T) {
+	t.Setenv("AXIOM_OPENSEARCH_URL", "http://oshost:9200?password=osVIEWSECRET")
+	t.Setenv("AXIOM_QUERY_RUNNER_URL", "http://qhost:8112?pass%77ord=pctVIEWSECRET&x=1")
+	t.Setenv("AXIOM_COMPUTE_WORKER_URLS", "http://u:p@h1:1,http://h2:2?password=listVIEWSECRET")
+	for _, e := range Effective(Load()) {
+		switch v := e.Value.(type) {
+		case string:
+			for _, secret := range []string{"osVIEWSECRET", "pctVIEWSECRET", "listVIEWSECRET"} {
+				if strings.Contains(v, secret) {
+					t.Fatalf("query credential survived in %s: %v", e.Env, v)
+				}
+			}
+		case []string:
+			for _, u := range v {
+				if strings.Contains(u, "listVIEWSECRET") {
+					t.Fatalf("query credential survived in slice row %s: %v", e.Env, v)
+				}
+			}
+		}
+	}
+	// the sanitized URL keeps its non-credential parts — redaction must
+	// not over-reach into uselessness.
+	for _, e := range Effective(Load()) {
+		if e.Env == "AXIOM_OPENSEARCH_URL" && !strings.Contains(e.Value.(string), "oshost:9200") {
+			t.Fatalf("sanitizer removed the host: %v", e.Value)
+		}
+	}
+}
+
+// A command path is not a credential (F08 review round 2): the legacy
+// AXIOM_FIXER_CMD envRow must NOT be flagged secret — flipping its
+// redaction flag back to true turns this test red, so operators keep
+// seeing the actual worker path in `axiom config get --effective`.
+func TestEffectiveWorkerCommandRowNotRedacted(t *testing.T) {
+	deprecate.SetSilent(true)
+	t.Cleanup(func() { deprecate.SetSilent(false) })
+	t.Setenv("AXIOM_REPAIR_WORKER_CMD", "") // neutral: the legacy row is what we assert
+	t.Setenv("AXIOM_FIXER_CMD", "/opt/axiom/bin/some-worker")
+
+	for _, e := range Effective(Load()) {
+		if e.Env != "AXIOM_FIXER_CMD" {
+			continue
+		}
+		if e.Source != "env" {
+			t.Fatalf("AXIOM_FIXER_CMD source = %q, want env", e.Source)
+		}
+		if e.Value != "/opt/axiom/bin/some-worker" {
+			t.Fatalf("worker command path must show its value, got %v (redacted? %v)", e.Value, RedactedValue)
+		}
+		return
+	}
+	t.Fatal("AXIOM_FIXER_CMD missing from effective view")
+}
+
+// TestEffectiveWorkerCommandShadowingMatrix — F08 review round 3: the two
+// worker-command rows must tell the resolver's (repairWorkerCmd's) truth
+// about WHO fed the effective value. Pre-round the view lied twice: with
+// both vars set the legacy row rendered the canonical value under
+// source=env; with only legacy set the canonical row rendered the legacy
+// value under source=default.
+func TestEffectiveWorkerCommandShadowingMatrix(t *testing.T) {
+	deprecate.SetSilent(true)
+	t.Cleanup(func() { deprecate.SetSilent(false) })
+	row := func() (canonical, legacy Entry) {
+		for _, e := range Effective(Load()) {
+			switch e.Env {
+			case "AXIOM_REPAIR_WORKER_CMD":
+				canonical = e
+			case "AXIOM_FIXER_CMD":
+				legacy = e
+			}
+		}
+		if canonical.Env == "" || legacy.Env == "" {
+			t.Fatal("worker command rows missing from effective view")
+		}
+		return
+	}
+
+	t.Run("both set: canonical wins, legacy shadowed", func(t *testing.T) {
+		t.Setenv("AXIOM_REPAIR_WORKER_CMD", "/opt/canonical/worker")
+		t.Setenv("AXIOM_FIXER_CMD", "/opt/legacy/fixer")
+		canonical, legacy := row()
+		if canonical.Source != "env" || canonical.Value != "/opt/canonical/worker" {
+			t.Fatalf("canonical row = %v/%v, want env + canonical value", canonical.Source, canonical.Value)
+		}
+		if legacy.Source != "default" {
+			t.Fatalf("shadowed legacy row source = %q, want default (it fed nothing)", legacy.Source)
+		}
+		if legacy.Value != "/opt/canonical/worker" {
+			t.Fatalf("legacy row value = %v, want the effective (canonical) value", legacy.Value)
+		}
+	})
+	t.Run("legacy only: legacy feeds, canonical row stays default", func(t *testing.T) {
+		t.Setenv("AXIOM_REPAIR_WORKER_CMD", "")
+		t.Setenv("AXIOM_FIXER_CMD", "/opt/legacy/fixer")
+		canonical, legacy := row()
+		if legacy.Source != "env" || legacy.Value != "/opt/legacy/fixer" {
+			t.Fatalf("legacy row = %v/%v, want env + legacy value", legacy.Source, legacy.Value)
+		}
+		if canonical.Source != "default" {
+			t.Fatalf("canonical row source = %q, want default (canonical var fed nothing)", canonical.Source)
+		}
+		if canonical.Value != "/opt/legacy/fixer" {
+			t.Fatalf("canonical row value = %v, want the effective (legacy-fed) value", canonical.Value)
+		}
+	})
+	t.Run("nothing set: both default, canonical default value", func(t *testing.T) {
+		t.Setenv("AXIOM_REPAIR_WORKER_CMD", "")
+		t.Setenv("AXIOM_FIXER_CMD", "")
+		canonical, legacy := row()
+		if canonical.Source != "default" || legacy.Source != "default" {
+			t.Fatalf("sources = %v/%v, want default/default", canonical.Source, legacy.Source)
+		}
+		if canonical.Value != "/opt/axiom/bin/axiom-repair-worker" {
+			t.Fatalf("canonical row value = %v, want the canonical default", canonical.Value)
+		}
+	})
+}
+
+// Percent-encoded credential keys (review round 3 minor): pgconn decodes
+// escapes before matching query names (?pass%77ord= sets cfg.Password),
+// so the redaction must catch encoded spellings too — the contract is
+// absolute ("secret values never appear in any output").
+func TestEncodedCredentialKeysRedacted(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://u@h/db?pass%77ord=ENCODEDKEY&sslmode=disable",
+		"postgres://u@h/db?%50assword=MIXED&x=1",
+		"postgres://u@h/db?sslpass%77ord=S&passfile=/f",
+	} {
+		if got := sanitizeDSN(dsn); strings.Contains(got, "ENCODEDKEY") || strings.Contains(got, "MIXED") {
+			t.Fatalf("encoded credential key survived: %s -> %s", dsn, got)
+		}
+	}
+	if got := RedactQueryCredentials("parse `postgres://u@h/db?pass%77ord=ENC`"); strings.Contains(got, "ENC") {
+		t.Fatalf("free-text encoded key leaked: %s", got)
+	}
+	// Structured redaction keeps the rest of the query intact.
+	if got := sanitizeDSN("postgres://u@h/db?pass%77ord=ENC&sslmode=disable"); !strings.Contains(got, "sslmode=disable") {
+		t.Fatalf("non-credential params must survive, got %s", got)
+	}
+}

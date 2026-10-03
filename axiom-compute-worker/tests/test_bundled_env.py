@@ -58,7 +58,7 @@ def test_bundled_env_drift_zwischen_den_baeumen():
     von der anderen Seite; beide Builds cmp-en zusätzlich)."""
     repo = Path(__file__).resolve().parents[1].parent
     canonical = Path(__file__).resolve().parents[1] / "axiom_compute_worker" / "compute_core" / "bundled_env.py"
-    mirror = repo / "axiom_ng" / "tools" / "pdf_repair_agent" / "tools" / "bundled_env.py"
+    mirror = repo / "axiom" / "tools" / "pdf_repair_agent" / "tools" / "bundled_env.py"
     assert canonical.exists() and mirror.exists()
     assert canonical.read_text() == mirror.read_text(), (
         "bundled_env drift zwischen Runner und Fixer — synchronisieren"

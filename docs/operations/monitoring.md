@@ -146,7 +146,7 @@ axiom-compute-worker/.venv/bin/python scripts/integrity_probe.py --report /tmp/i
 
 It expects local Zotero at `http://localhost:23119`, axiom at
 `http://localhost:8011`, Zotero storage under `~/Zotero/storage`, and the
-write key at `~/.axiom-ng/write-api-key`. Set `INTRESULTS` to change the
+write key at `~/.axiom/write-api-key`. Set `INTRESULTS` to change the
 default results file. The probe is measurement-only for axiom: it does not
 heal, rechunk, or delete documents. `--write` does create tagged Zotero
 annotations and notes.

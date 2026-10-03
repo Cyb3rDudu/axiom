@@ -2,7 +2,7 @@
 
 **Report type:** Measurement report (dated) · **Date:** 2026-08-14 · **Context:**
 production DB build (complete Zotero library, 16 documents) via an external GPU
-runner · Original: `axiom_ng/docs/benchmarks/MASS_CHUNKING_BENCHMARK.md`.
+runner · Original: `axiom/docs/benchmarks/MASS_CHUNKING_BENCHMARK.md`.
 
 > **Env-naming note:** at run time the dispatcher variables were still
 > `AXIOMNG_*`; since the rename they are `AXIOM_*` (e.g. `AXIOMNG_PROCESSOR_URL`

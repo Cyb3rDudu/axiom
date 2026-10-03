@@ -57,7 +57,7 @@ degraded_no_sync means they never did).
 Live response shape:
 
 ```json
-{"ok":true,"build":"axiom-ng v0.1.10-…-gc043bab (commit c043bab, release build)","checks":{"ingest-runner":"ok","postgres":"ok","query-runner":"ok","zotero":"ok"}}
+{"ok":true,"build":"axiom v0.2.0-…-g1a2b3c4 (commit 1a2b3c4, release build)","checks":{"ingest-runner":"ok","postgres":"ok","query-runner":"ok","zotero":"ok"}}
 ```
 
 ### `GET /api/ingest/jobs`

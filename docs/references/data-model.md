@@ -3,7 +3,7 @@
 This is the schema-level reference for the durable store: what axiom persists,
 how the tables relate, and the invariants that make the model trustworthy. The
 source of truth for field-level detail is the migrations under
-`axiom_ng/internal/db/schema/`; this page is the developer-facing map.
+`axiom/internal/db/schema/`; this page is the developer-facing map.
 
 ## The durable store at a glance
 

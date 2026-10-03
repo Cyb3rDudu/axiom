@@ -19,8 +19,8 @@ import pymupdf
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # repo root
-FIXER_ROOT = REPO_ROOT / "axiom_ng" / "tools" / "pdf_repair_agent"
-AXIOM_NG = REPO_ROOT / "axiom_ng"
+FIXER_ROOT = REPO_ROOT / "axiom" / "tools" / "pdf_repair_agent"
+AXIOM_ROOT = REPO_ROOT / "axiom"
 sys.path.insert(0, str(FIXER_ROOT))  # fixer tools (pymupdf-only imports)
 
 from tools import labeltree_heal  # noqa: E402
@@ -85,7 +85,7 @@ def test_it_missing_tree_heals_end_to_end(tmp_path):
     q = subprocess.run(
         ["go", "run", "./cmd/quarantine",
          str(tmp_path / "quarantine"), "K-IT1", str(src)],
-        cwd=AXIOM_NG,
+        cwd=AXIOM_ROOT,
         capture_output=True, text=True, timeout=180, check=False,
     )
     if q.returncode != 0:

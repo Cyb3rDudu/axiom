@@ -6,7 +6,7 @@ functional as warn-once aliases through 0.2.x.
 
 A loopback HTTP document processor implementing `PROCESSOR_CONTRACT.md`
 (transport contract v1). It owns **only computation and temporary job output**;
-all durable application state lives in axiom-ng.
+all durable application state lives in the axiom runtime.
 
 ## What it is
 

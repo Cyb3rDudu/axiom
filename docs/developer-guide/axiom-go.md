@@ -1,12 +1,12 @@
 # axiom dispatcher
 
-`axiom_ng` is the Go orchestrator of the system. It owns all durable
+`axiom` is the Go orchestrator of the system. It owns all durable
 application state: Zotero synchronization, ingest jobs, leases, retries,
 cancellation, persistent IDs, versioned processing snapshots, durable derived
 artifacts, chunks/embeddings/entities/relationships, the PostgreSQL/pgvector
 and knowledge-graph write paths, and OpenSearch outbox/index synchronization.
 
-The Python runner computes; `axiom_ng` orchestrates, validates, and persists.
+The Python worker computes; `axiom` orchestrates, validates, and persists.
 
 The runner contract structures are specified in
 [Processor Contract](processor-contract.md). The client-facing Go routes are
@@ -198,7 +198,7 @@ write OpenSearch index/delete outbox operations, and mark the job completed.
 
 ## Configuration wiring
 
-`axiom_ng` reads its configuration entirely from `AXIOM_*` environment
+`axiom` reads its configuration entirely from `AXIOM_*` environment
 variables at startup (see the [complete table](configuration.md)). The
 `DispatcherProfile` is frozen into each job's input snapshot at claim time;
 changing it affects only newly claimed jobs, not in-flight ones.

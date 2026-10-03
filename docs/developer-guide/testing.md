@@ -11,7 +11,7 @@ axiom has two independent suites, one per code base:
 
 | Suite | Command | What it covers |
 | --- | --- | --- |
-| Go (`axiom_ng`) | `go build ./... && go vet ./... && go test ./...` | Unit + integration tests. Integration tests against a real Postgres (see below). |
+| Go (`axiom`) | `go build ./... && go vet ./... && go test ./...` | Unit + integration tests. Integration tests against a real Postgres (see below). |
 | Python (`axiom_compute_worker`) | `pytest tests/ -v` | The contract black-box suite (§19) against the `reference` backend + compute-core import/unit tests. |
 
 The contract black-box suite (Python, `reference` backend) needs only the

@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # repo root
-FIXER_ROOT = REPO_ROOT / "axiom_ng" / "tools" / "pdf_repair_agent"
+FIXER_ROOT = REPO_ROOT / "axiom" / "tools" / "pdf_repair_agent"
 sys.path.insert(0, str(FIXER_ROOT))  # fixer tools (pymupdf-only imports)
 
 from tools import folio_harvest, labeltree_heal, surgery_exec  # noqa: E402

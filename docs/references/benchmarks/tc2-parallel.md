@@ -3,7 +3,7 @@
 **Report type:** Measurement report (dated) · **Date:** 2026-08-15 · **Context:**
 L8 test case 2 · **Data basis:** complete fresh run of the 16 books after a
 clean slate; reference = TC1 backup. Original:
-`axiom_ng/docs/benchmarks/TC2_PARALLEL_BENCHMARK.md`.
+`axiom/docs/benchmarks/TC2_PARALLEL_BENCHMARK.md`.
 
 > This report documents the **system state as of 2026-08-15**. Figures remain
 > valid as measurements; setup details are reduced to roles.

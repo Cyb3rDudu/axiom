@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- com.axiom.rag — axiom-ng API instance :8011 (#205 §3).
+<!-- com.axiom.rag — axiom API instance :8011 (#205 §3).
      Shared env (DB, OpenSearch, source secret) lives in
      ~/.config/axiom/rag.env (0700); instance overrides in
      ~/.config/axiom/rag-api.env. NEVER /tmp.

@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: axiom_ng/go.mod
+          go-version-file: axiom/go.mod
       - uses: actions/setup-python@v5
         with:
           # mirrors release.yml: fixer requirements.lock.txt is a 3.11 freeze

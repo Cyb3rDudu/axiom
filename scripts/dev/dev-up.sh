@@ -11,7 +11,7 @@
 #   dev index, ports and all isolation boundaries stay exactly the same.
 #
 # Isolation boundaries against production (v0.1.18, :8011/:8012, axiom_db,
-# axiom-ng-chunks-v1): own DB (axiom_dev), own OpenSearch index
+# axiom-chunks-v1): own DB (axiom_dev), own OpenSearch index
 # (AXIOM_OS_INDEX=axiom-dev-chunks-v1), own state dirs, own logs, no Zotero
 # write credentials, fixer invoker off. Shared: OpenSearch instance :9200,
 # Postgres instance, Zotero local API (read-only).
@@ -44,7 +44,7 @@ STATE="$HOME/.local/state/axiom-dev"
 # The tag is v0.1.18 (commit 4704656); the DEPLOYED RAG binary inside that
 # release is the bf77410-generation asset (verified byte-identical with
 # /opt/axiom/bin/axiom-ng when present). bf77410..v0.1.18 touches no
-# axiom_ng/axiom_compute_worker runtime code (4 commits: fixer/docs/ci only),
+# axiom/axiom_compute_worker runtime code (4 commits: fixer/docs/ci only),
 # so the bf77410-generation pair IS the freeze state in every observable
 # behavior. Runner: same-generation tarball; note the runner generation is
 # not hash-pinnable against prod (prod runs a local nix build — #295 debt).
@@ -62,7 +62,7 @@ RAG_PORT=8111
 RUNNER_PORT=8112
 DEV_DB="axiom_dev"
 DEV_INDEX="axiom-dev-chunks-v1"
-PROD_INDEX="axiom-ng-chunks-v1"
+PROD_INDEX="axiom-chunks-v1" # #352: prod index renamed via byte-preserving _reindex
 
 die() {
     echo "dev-up: $*" >&2
@@ -98,7 +98,7 @@ echo "$MODE" >"$STATE/mode"
 
 # --- provide the RAG binary (and, in release mode, the runner env) ---------
 
-RAG_BIN="$STATE/bin/axiom-ng-dev" # source mode default: working-tree build
+RAG_BIN="$STATE/bin/axiom-dev" # source mode default: working-tree build
 RUNNER_PY="$REPO/axiom-compute-worker/.venv/bin/python"
 RUNNER_PYTHONPATH="$REPO/axiom-compute-worker" # source venv needs the package on sys.path
 
@@ -154,8 +154,8 @@ if [ "$MODE" = release ]; then
     RUNNER_PYTHONPATH="" # release env is self-contained; a PYTHONPATH would
     # let working-tree code shadow the freeze bits
 else
-    note "building axiom-ng (debug build, working tree)…"
-    (cd "$REPO/axiom_ng" && go build -o "$RAG_BIN" ./cmd/axiom-ng)
+    note "building axiom (debug build, working tree)…"
+    (cd "$REPO/axiom" && go build -o "$RAG_BIN" ./cmd/axiom)
 fi
 
 # --- bootstrap the dev OpenSearch index -------------------------------------

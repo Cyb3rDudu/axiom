@@ -4,7 +4,7 @@ The **Python compute worker** (`axiom-compute-worker`, canonical name since F10 
 `PROCESSOR_CONTRACT` (transport contract v1) for document processing **and**
 serves the query compute (`embed`, `rerank`) for search. In both roles it owns
 **only computation and temporary job output**; all durable application state
-lives in `axiom_ng`.
+lives in `axiom`.
 
 > **Canonical sources** for this chapter are the files in the package:
 > `README.md`, `config.py`, `app.py`, and `PROCESSOR_CONTRACT` (contract v1).

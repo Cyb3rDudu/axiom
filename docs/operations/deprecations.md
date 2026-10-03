@@ -54,6 +54,9 @@ how often it has been read since process start.
 | --- | --- | --- | --- |
 | `axiom-ng` | binary | counter (alias warns + counts) | removal candidate per criteria above |
 | `axiom_ng_runner` module entrypoint, "axiom-runner" service | compute worker module | counter | same criteria |
+| `axiom_ng` Go module/directory (#352) | code path | none — internal import paths moved mechanically; rebuild from source | n/a (not a runtime name) |
+| state directory `~/.axiom-ng/` (#352) | filesystem | startup migration symlink (no counter) | symlink stays through 0.2.x; removal with the alias generation |
+| default index `axiom-ng-chunks-v1` (#352) | OpenSearch index | none — byte-preserving `_reindex` moved it; rollback = `AXIOM_OS_INDEX` | old index deleted after soak |
 | `axiom-fixer` shim | repair worker binary | counter | same criteria |
 | `AXIOM_PROCESSOR_URL`, `AXIOM_PROCESSOR_URLS`, `AXIOM_PROCESSOR_RUNNER_NAME`, `AXIOM_PROCESSOR_TIMEOUT`, `AXIOM_PROCESSOR_SOURCE_SECRET`, `AXIOM_PROCESSOR_SOURCE_BASE_URL` | dispatcher-side env | counter | same criteria |
 | `AXIOM_RUNNER_HEALTH_INTERVAL` | dispatcher-side env | counter | same criteria |
@@ -65,8 +68,8 @@ contract (`AXIOM_PROCESSOR_PORT`, `AXIOM_PROCESSOR_BIND_ADDR`,
 `AXIOM_PROCESSOR_COMPUTE`, `AXIOM_PROCESSOR_WORK_ROOT`,
 `AXIOM_PROCESSOR_ALLOWED_SOURCE_ROOTS`,
 `AXIOM_PROCESSOR_MAX_CONCURRENT_JOBS`, `AXIOM_PROCESSOR_RESULT_RETENTION`)
-is the worker's frozen public surface through 0.2.x; the default index
-name and `~/.axiom-ng/` default paths are quoted technical constants.
+is the worker's frozen public surface through 0.2.x; the index and state-dir
+legacy names survive only in the mapping tables above.
 
 ## Operator-side switches (no counter — your action)
 

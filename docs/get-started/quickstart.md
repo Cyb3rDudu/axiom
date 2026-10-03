@@ -57,7 +57,7 @@ export AXIOM_OPENSEARCH_URL=http://localhost:9200
 export AXIOM_COMPUTE_WORKER_URL=http://127.0.0.1:8537
 export AXIOM_DISPATCHER_ENABLED=true
 
-cd axiom_ng && go run ./cmd/axiom serve all
+cd axiom && go run ./cmd/axiom serve all
 ```
 
 The dispatcher checks Zotero is reachable and the runner is contract-compatible.

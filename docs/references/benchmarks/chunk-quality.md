@@ -4,7 +4,7 @@
 basis:** DB after L8 test case 1 (16/16 completed) · **Scope:** 4,810 chunks,
 4,810 dense embeddings (1024-dim), 26,353 entities, 55,537 mentions, 10,382
 relationships, OpenSearch index. Original:
-`axiom_ng/docs/benchmarks/CHUNK_QUALITY_ASSESSMENT.md`.
+`axiom/docs/benchmarks/CHUNK_QUALITY_ASSESSMENT.md`.
 
 > **Character:** evaluative, read-only — pipeline and data left unchanged. This
 > report documents the **system state as of 2026-08-15**.

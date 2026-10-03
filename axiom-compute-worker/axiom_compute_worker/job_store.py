@@ -5,7 +5,7 @@ keyed by its job id. A small JSON manifest persists the request and the
 accepted/running/terminal state so the service can recover from a restart
 without losing accepted work.
 
-This is operational, temporary state — never application truth. axiom-ng owns
+This is operational, temporary state — never application truth. The runtime owns
 the durable record.
 """
 

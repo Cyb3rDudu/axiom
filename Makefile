@@ -14,9 +14,9 @@ AXIOM_BIN := $(DIST)/axiom-$(VERSION)-$(OS_ARCH)
 RAG_BIN := $(DIST)/axiom-ng-$(VERSION)-$(OS_ARCH)
 ZSTD_BIN := $(dir $(firstword $(wildcard /nix/store/*-zstd-*-bin/bin/zstd)))
 
-LDFLAGS := -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.Version=$(VERSION) -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.Commit=$(COMMIT) -X github.com/Cyb3rDudu/axiom/axiom_ng/internal/version.BuildType=release
+LDFLAGS := -X github.com/Cyb3rDudu/axiom/axiom/internal/version.Version=$(VERSION) -X github.com/Cyb3rDudu/axiom/axiom/internal/version.Commit=$(COMMIT) -X github.com/Cyb3rDudu/axiom/axiom/internal/version.BuildType=release
 
-GO_SOURCES := $(wildcard axiom_ng/cmd/axiom/*.go) $(wildcard axiom_ng/cmd/axiom-ng/*.go) $(wildcard axiom_ng/internal/*/*.go) $(wildcard axiom_ng/internal/db/schema/*.sql) axiom_ng/go.mod axiom_ng/go.sum
+GO_SOURCES := $(wildcard axiom/cmd/axiom/*.go) $(wildcard axiom/cmd/axiom-ng/*.go) $(wildcard axiom/internal/*/*.go) $(wildcard axiom/internal/db/schema/*.sql) axiom/go.mod axiom/go.sum
 
 .PHONY: all build rag compute-worker runner fixer clean install test checksums golden-baseline
 
@@ -26,12 +26,12 @@ rag: $(AXIOM_BIN) $(RAG_BIN) ## Release builds (axiom + axiom-ng alias) with ver
 
 $(AXIOM_BIN): $(GO_SOURCES)
 	@mkdir -p "$(DIST)"
-	cd axiom_ng && CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o '../$(AXIOM_BIN)' ./cmd/axiom
+	cd axiom && CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o '../$(AXIOM_BIN)' ./cmd/axiom
 	(cd "$(DIST)" && shasum -a 256 '$(notdir $(AXIOM_BIN))' > '$(notdir $(AXIOM_BIN)).sha256')
 
 $(RAG_BIN): $(GO_SOURCES)
 	@mkdir -p "$(DIST)"
-	cd axiom_ng && CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o '../$(RAG_BIN)' ./cmd/axiom-ng
+	cd axiom && CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o '../$(RAG_BIN)' ./cmd/axiom-ng
 	(cd "$(DIST)" && shasum -a 256 '$(notdir $(RAG_BIN))' > '$(notdir $(RAG_BIN)).sha256')
 
 compute-worker: ## conda-pack style artifact (micromamba env, relocatable) -> dist/
@@ -55,11 +55,11 @@ install: ## Operator-gated: dist/ artifacts -> /opt/axiom (asks first)
 
 test: ## All suites: fix-convention, Go (vet+test), compute worker, fixer isolation+
 	./scripts/test_fix_convention.sh
-	cd axiom_ng && go vet ./... && go test ./...
+	cd axiom && go vet ./... && go test ./...
 	@[ -x axiom-compute-worker/.venv/bin/python ] || { echo "compute-worker: venv missing — bootstrap first (axiom-compute-worker/.venv)"; exit 1; }
 	cd axiom-compute-worker && .venv/bin/python -m pytest -q
-	@[ -x axiom_ng/tools/pdf_repair_agent/.venv/bin/python ] || { echo "fixer: venv missing — bootstrap first (axiom_ng/tools/pdf_repair_agent: ./bootstrap.sh)"; exit 1; }
-	cd axiom_ng/tools/pdf_repair_agent && .venv/bin/python -m pytest -q
+	@[ -x axiom/tools/pdf_repair_agent/.venv/bin/python ] || { echo "fixer: venv missing — bootstrap first (axiom/tools/pdf_repair_agent: ./bootstrap.sh)"; exit 1; }
+	cd axiom/tools/pdf_repair_agent && .venv/bin/python -m pytest -q
 
 # --- 0.1.18 frozen compatibility baseline (#295) --------------------------
 

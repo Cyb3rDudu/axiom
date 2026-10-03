@@ -2,7 +2,7 @@
 
 **Report type:** Measurement report (dated) · **Date:** 2026-08-15 · **Context:**
 closure-gate analysis · **Data basis:** production DBs (`axiom_db`, TC2 state;
-TC1 backup), reproducible. Original: `axiom_ng/docs/benchmarks/L8_DURCHSTICHS_ANALYSE.md`.
+TC1 backup), reproducible. Original: `axiom/docs/benchmarks/L8_DURCHSTICHS_ANALYSE.md`.
 
 > This report documents the **system state as of 2026-08-15**. The figures are
 > real measurements; the lessons (transport, fencing, GPU pinning) are preserved
@@ -100,7 +100,7 @@ fix uncovered the next. **Today they are code, test, or checklist.**
     chunk texts made reruns byte-different. Fix: basename normalization before
     chunking.
 
-**Process lessons (not code):** kill orphan binaries (`pkill -f axiom_ng`, never
+**Process lessons (not code):** kill orphan binaries (`pkill -f axiom`, never
 only the parent) · never "blast away" jobs before a reset · requeue rule: keep
 zombies attempt-unchanged, after exhaustion `attempt=0` · un-rebuilt mutation
 probes in the worktree are build hazards.

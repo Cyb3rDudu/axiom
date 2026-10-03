@@ -4,13 +4,13 @@ Every axiom knob is read from an `AXIOM_*` environment variable at startup —
 and, since F13 (#307), optionally from the persistent runtime configuration
 file `config.sqlite` under the state root. This page is the **single,
 machine-maintainable reference** for all of them. The two code bases each
-read their own set — the Go orchestrator (`axiom_ng`) and the Python runner
+read their own set — the Go orchestrator (`axiom`) and the Python worker
 (`axiom_compute_worker`) — so the table is organized by *where the variable
 is consumed* (`set by`).
 
 > **Single source:** this table is meant to be regenerated from code. Each
 > variable's name, default, and consumer live in exactly one place in the source
-> (`axiom_ng/internal/config/config.go` for the Go set,
+> (`axiom/internal/config/config.go` for the Go set,
 > `axiom-compute-worker/config.py` for the Python set). A completeness grep against
 > those two files is the DoD check for this page — nothing here should exist
 > without a code backing, and no code variable should be missing.
@@ -57,7 +57,7 @@ The Go orchestrator's RUNTIME SURFACES — `serve` (every role and the compat bo
 
 ### `config.sqlite` — the persistent runtime configuration
 
-One small SQLite file per host installation (default `~/.axiom-ng/config.sqlite`,
+One small SQLite file per host installation (default `~/.axiom/config.sqlite`,
 override with `AXIOM_CONFIG_PATH`), created atomically on first write
 (`config set` / `config import-env`), WAL journal, restrictive permissions.
 
@@ -110,7 +110,7 @@ cfg-dependent checks skipped honestly.
 - A few pairs look alike but mean different things — those are called out under
   [Near-miss pairs](#near-miss-pairs).
 
-## Go — the orchestrator (`axiom_ng`)
+## Go — the orchestrator (`axiom`)
 
 Rows below lead with the canonical spelling; where a legacy alias still feeds
 the same knob it is named in the row and tracked in the
@@ -135,7 +135,7 @@ the same knob it is named in the row and tracked in the
 | `AXIOM_COMPUTE_WORKER_TIMEOUT` | `300s` | Bounds the **result** fetch and (as the submit floor) the synchronous remote source download inside `POST /v1/process`. Canonical spelling (F10 #304); legacy `AXIOM_PROCESSOR_TIMEOUT` still feeds it (warn-once alias). Remote deployments raise it to cover the runner's download budget. |
 | `AXIOM_COMPUTE_WORKER_NAME` | processor-URL host | Human identity of the compute worker this dispatcher drives; lands in the phase log line and `ingest_jobs.runner_name` at claim time. Canonical spelling (F10 #304); legacy `AXIOM_PROCESSOR_RUNNER_NAME` still feeds it (warn-once alias). |
 | `AXIOM_DISPATCHER_ENABLED` | off | Gates the claim/process dispatcher loop; it never runs unless explicitly `1 | true | yes`. |
-| `AXIOM_DISPATCHER_WORKER_ID` | `axiom-ng` | This process's stable worker identity for leases (literal code default). Left at default, two dispatchers share one identity — set it per process when running multiple. |
+| `AXIOM_DISPATCHER_WORKER_ID` | `axiom` | This process's stable worker identity for leases (literal code default). Left at default, two dispatchers share one identity — set it per process when running multiple. |
 | `AXIOM_DISPATCHER_CONCURRENCY` | `1` | Parallel claim/process slots. |
 | `AXIOM_DISPATCHER_PROFILE` | `full-rag-v1` | Processing profile JSON frozen at claim time; the `full-rag-v1` default materializes **every** feature boolean as `true` (entities, relationships, dense + sparse embeddings, images). The profile *name* alone does not toggle features — the explicit booleans do. |
 | `AXIOM_DISPATCHER_LEASE` | `5m` | Per-claim lease length. |
@@ -145,8 +145,8 @@ the same knob it is named in the row and tracked in the
 | `AXIOM_LIBRARY_IMPORT_PROVIDERS` | — | Selects the Library import write-side provider set (F06 #300). `fake` wires the deterministic fake providers (dev-env proof until F07 ports Zotero); unset leaves the `/api/v1/library/imports` routes unwired (404 — the honest no-provider state). |
 | `AXIOM_STORAGE_LIBRARY_DRIVER` | `postgres` | Library persistence engine (F12 #306): `postgres` (own pool over `AXIOM_LIBRARY_DATABASE_URL`, defaulting to the core DSN) or `sqlite` (one `library.sqlite` file, single host — WAL/FK/busy-timeout asserted at start, 0600). `zotero` import providers require the PostgreSQL profile (the Zotero mirror lives on the shared database). |
 | `AXIOM_LIBRARY_DATABASE_URL` | — | The Library component's own PostgreSQL DSN (F12 #306); unset = `AXIOM_DATABASE_URL`. A separate DSN unwires the legacy sync-lane revision Mits-Schreib honestly (no mirror reachable; revision intake is the successor). Redacted like the core DSN in `config get --effective`. |
-| `AXIOM_LIBRARY_SQLITE_PATH` | `~/.axiom-ng/library.sqlite` | The `library.sqlite` file for the SQLite profile (F12 #306). One file per component: never ATTACHed, never shared with the Store or config.sqlite. |
-| `AXIOM_API_PORT` | `8011` | Port the `axiom_ng` REST API listens on. |
+| `AXIOM_LIBRARY_SQLITE_PATH` | `~/.axiom/library.sqlite` | The `library.sqlite` file for the SQLite profile (F12 #306). One file per component: never ATTACHed, never shared with the Store or config.sqlite. |
+| `AXIOM_API_PORT` | `8011` | Port the `axiom` REST API listens on. |
 | `AXIOM_ALLOW_DEBUG_BIND` | off | Explicit opt-out that lets a **debug** build bind a production port (8011, 8013–8015). Release builds always bind; unset/wrong values keep the guard active. |
 | `AXIOM_BIND_ADDR` | `127.0.0.1` | Interface the API binds to. Loopback default keeps the unauthenticated sync/job endpoints off the LAN. |
 | `AXIOM_SEARCH_SPARSE_ARM` | off | Enables the **sparse** recall arm (`rank_feature` clauses) on `POST /api/search`. Default off per the retrieval quality benchmark (no quality gain, +~1.3 s p95 local). |
@@ -154,8 +154,8 @@ the same knob it is named in the row and tracked in the
 | `AXIOM_SEARCH_RERANK` | on | Runs the cross-encoder **reranker** on `POST /api/search`. Set `false` for the latency-only profile; rerank latency is steerable via a remote runner / overfetch. |
 | `AXIOM_SEARCH_FRONTMATTER_FILTER` | on | Removes detected TOC, preface, and reference chunks from search candidates before reranking. |
 | `AXIOM_SEARCH_MAX_PER_BOOK` | `2` | Caps final hits per document with rank-order refill; `0` disables the cap. |
-| `AXIOM_ZOTERO_WRITE_KEY_FILE` | `~/.axiom-ng/write-api-key` | Local Zotero write-key file. A missing or too-short key keeps the repair API unregistered. |
-| `AXIOM_QUARANTINE_ROOT` | `~/.axiom-ng/quarantine` | Durable quarantine root for originals before repair mutations; falls back to `/tmp/axiom_quarantine` when no home directory resolves. |
+| `AXIOM_ZOTERO_WRITE_KEY_FILE` | `~/.axiom/write-api-key` | Local Zotero write-key file. A missing or too-short key keeps the repair API unregistered. |
+| `AXIOM_QUARANTINE_ROOT` | `~/.axiom/quarantine` | Durable quarantine root for originals before repair mutations; falls back to `/tmp/axiom_quarantine` when no home directory resolves. |
 | `AXIOM_CONTEXTUAL_COLLECTIONS` | — | (#255) Comma-separated collection paths (any depth, e.g. `VWL/Lectures,ORG/Lectures`) whose member documents are projected `citation_class: contextual` — searchable at full rank, never citable, KG-excluded. Empty CSV fields are ignored as formatting slack (a trailing comma is fine). Resolved at boot against the synced collections and stabilized on `zotero_key`; an **unknown path is a loud start error** — but only once the DB has sync state; on a never-synced DB the boot degrades instead of fataling (#262): rules stay inactive (everything citable), `/api/health` shows `contextual: degraded_no_sync`, and the first successful sync activates the rules without a restart. |
 | `AXIOM_CONTEXTUAL_TAGS` | — | (#255) Comma-separated literal Zotero tag names that force a document contextual (the outlier lever next to the collection rule; a tag never forces citable). Boot-validated like the paths: a tag no active document carries is a loud start error (with the same #262 never-synced degradation as the paths). |
 
@@ -180,7 +180,7 @@ the same knob it is named in the row and tracked in the
 > The runner reads its variables under a shared processor prefix in
 > `config.py`; each is listed above by its full name.
 
-| `AXIOM_CONFIG_PATH` | `~/.axiom-ng/config.sqlite` | Location of the persistent runtime configuration file (F13 #307). Unset/absent = the env-only bootstrap (the container path — nothing is created). |
+| `AXIOM_CONFIG_PATH` | `~/.axiom/config.sqlite` | Location of the persistent runtime configuration file (F13 #307). Unset/absent = the env-only bootstrap (the container path — nothing is created). |
 
 ## Near-miss pairs
 
