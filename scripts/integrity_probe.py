@@ -55,7 +55,7 @@ ABBREV_END = re.compile(r"(?:^|\s)[a-zA-ZäöüÄÖÜ]{1,3}\.$")  # "z.", "B.", 
 
 
 def zotero_headers():
-    key = Path.home().joinpath(".axiom-ng/write-api-key").read_text().strip()
+    key = Path.home().joinpath(".axiom/write-api-key").read_text().strip()
     req = urllib.request.Request(ZOTERO + "/api/")
     with urllib.request.urlopen(req, timeout=10) as r:
         sid = r.headers["Zotero-Server-ID"]

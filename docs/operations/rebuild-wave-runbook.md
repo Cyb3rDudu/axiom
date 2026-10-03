@@ -261,7 +261,7 @@ ssh <user>@<runner-host> 'for p in <port1> <port2> <port3>; do
 ```bash
 # OpenSearch == Postgres parity (the W10 census prelude; 0 while draining,
 # equal counts at rest):
-OS=$(curl -s localhost:9200/axiom-ng-chunks-v1/_count | jq .count)
+OS=$(curl -s localhost:9200/axiom-chunks-v1/_count | jq .count)
 PG=$(psql axiom_db -tAc "SELECT count(*) FROM processing_chunks c
      JOIN processing_snapshots s ON s.id=c.snapshot_id WHERE s.active")
 echo "OS=$OS PG=$PG"
@@ -396,11 +396,11 @@ ride the #171 teardown plan.
 
 ## 5. Sources
 
-- `axiom_ng/docs/benchmarks/MASS_CHUNKING_BENCHMARK.md` — Flutgate-class
+- `axiom/docs/benchmarks/MASS_CHUNKING_BENCHMARK.md` — Flutgate-class
   reference run (16 docs, serial, 20.9 docs/h, profile-finding, shm/network traps).
-- `axiom_ng/docs/benchmarks/L8_DURCHSTICHS_ANALYSE.md` — TC2 3-GPU parallel
+- `axiom/docs/benchmarks/L8_DURCHSTICHS_ANALYSE.md` — TC2 3-GPU parallel
   proof (1.71×, work-conserving, straggler tail, determinism).
-- `axiom_ng/docs/EXTERNAL_RUNNER_DEPLOYMENT.md` — container recipe, network/shm
+- `axiom/docs/EXTERNAL_RUNNER_DEPLOYMENT.md` — container recipe, network/shm
   rationale, CDI pinning, failover topology.
 - Issues #186 (chunker fix + census), #185 (KG), #188 (wave decisions D1/D2,
   W1–W12 sequencing); merge train main @78558d5.

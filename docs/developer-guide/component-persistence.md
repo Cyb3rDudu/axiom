@@ -1,6 +1,6 @@
 # Component Persistence (F12, #306)
 
-**Status:** Landed with #306 (0.2.0 Zug, Epic #342) · Code: `axiom_ng/internal/library` (interfaces), `…/library/pglib`, `…/library/sqlite`, `…/library/reposuite`, `…/store`, `…/composition` · Issue carries the acceptance evidence.
+**Status:** Landed with #306 (0.2.0 Zug, Epic #342) · Code: `axiom/internal/library` (interfaces), `…/library/pglib`, `…/library/sqlite`, `…/library/reposuite`, `…/store`, `…/composition` · Issue carries the acceptance evidence.
 
 This document is the design comment the issue demanded: the repository
 map, the SQLite operating rules and their boundary, the Store capability
@@ -141,7 +141,7 @@ the Store's five fields. The backend may carry report-only extras
 `AXIOM_STORAGE_LIBRARY_DRIVER` (`postgres`|`sqlite`, default
 `postgres`), `AXIOM_LIBRARY_DATABASE_URL` (own DSN, default = core
 DSN), `AXIOM_LIBRARY_SQLITE_PATH` (default
-`~/.axiom-ng/library.sqlite`) — all visible in
+`~/.axiom/library.sqlite`) — all visible in
 `axiom config get --effective --json` (DSN sanitized like the core
 DSN), vocabulary-checked by `axiom config validate`, documented in
 `configuration.md`. Shutdown closes in reverse start order: writer

@@ -11,7 +11,7 @@ The axiom RAG indexes the local Zotero library (books, PDFs, EPUBs) and serves c
 
 ```
 Base URL:  http://127.0.0.1:8011   (LAN: http://192.168.0.107:8011)
-Health:    GET /api/health         → {"status":"ok","build":"axiom-ng v…"}
+Health:    GET /api/health         → {"status":"ok","build":"axiom v…"}
 ```
 
 ## Endpoints

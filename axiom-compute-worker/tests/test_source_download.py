@@ -658,7 +658,7 @@ class TestLabelTreeE2E251:
         # repo-relative, NEVER a session worktree path (#233 hermeticity):
         tools = (
             _P(__file__).resolve().parents[2]
-            / "axiom_ng"
+            / "axiom"
             / "tools"
             / "pdf_repair_agent"
             / "tools"

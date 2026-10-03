@@ -117,7 +117,7 @@ services:
       AXIOM_INTERNAL_STORE_ADDR: "0.0.0.0:8212"
     volumes:
       # the seeded fixture the mirror row points at (read-only)
-      - ../../axiom_ng/internal/backfill/testdata:/srv/seed:ro
+      - ../../axiom/internal/backfill/testdata:/srv/seed:ro
       - store-state:/var/lib/axiom
     depends_on:
       # sequential boot on a fresh database: db.Migrate owns the schema,

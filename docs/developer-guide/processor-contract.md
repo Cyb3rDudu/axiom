@@ -2,7 +2,7 @@
 
 !!! note "Version"
     This page summarizes the **v1** contract. The canonical, implementation-
-    binding detail rules live in `axiom_ng/docs/PROCESSOR_CONTRACT.md`; the
+    binding detail rules live in `axiom/docs/PROCESSOR_CONTRACT.md`; the
     version below is implied by that canonical file.
 
 The Processor Contract separates durable data ownership from hardware- and
@@ -127,8 +127,8 @@ source_url delivery, and replay-after-ACK semantics.
 
 You can read the binding, complete contract text in the canonical file:
 
-- Repo path: `axiom_ng/docs/PROCESSOR_CONTRACT.md`
-- GitHub: [PROCESSOR_CONTRACT.md](https://github.com/Cyb3rDudu/axiom/blob/main/axiom_ng/docs/PROCESSOR_CONTRACT.md)
+- Repo path: `axiom/docs/PROCESSOR_CONTRACT.md`
+- GitHub: [PROCESSOR_CONTRACT.md](https://github.com/Cyb3rDudu/axiom/blob/main/axiom/docs/PROCESSOR_CONTRACT.md)
 
 Continue: [axiom runner](compute-worker.md) ·
 [axiom dispatcher](axiom-go.md) · [Architecture Overview](architecture.md)

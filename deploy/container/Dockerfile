@@ -11,10 +11,10 @@
 FROM golang:1.26 AS build
 WORKDIR /src
 # layer-cache friendliness: modules first, then sources
-WORKDIR /src/axiom_ng
-COPY axiom_ng/go.mod axiom_ng/go.sum ./
+WORKDIR /src/axiom
+COPY axiom/go.mod axiom/go.sum ./
 RUN go mod download
-COPY axiom_ng ./
+COPY axiom ./
 RUN CGO_ENABLED=0 go build -o /out/axiom ./cmd/axiom
 
 FROM python:3.11-slim

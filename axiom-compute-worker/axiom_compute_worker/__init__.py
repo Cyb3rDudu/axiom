@@ -1,7 +1,7 @@
 """Axiom document processor runner (process contract v1).
 
 A loopback HTTP service implementing PROCESSOR_CONTRACT.md. It owns only
-computation and temporary job output; all durable state lives in axiom-ng.
+computation and temporary job output; all durable state lives in the axiom runtime.
 """
 
 import os

@@ -58,7 +58,7 @@ rsync -a \
     --exclude '.venv' --exclude '__pycache__' --exclude 'runs' \
     --exclude '.ruff_cache' --exclude '.pytest_cache' --exclude '.mypy_cache' \
     --exclude 'fixtures/storage' --exclude 'fixtures/difficult' \
-    axiom_ng/tools/pdf_repair_agent/ "$STAGE/app/"
+    axiom/tools/pdf_repair_agent/ "$STAGE/app/"
 
 # fix.sh ships INTO the artifact (#206): the installed /opt/axiom/bin/axiom-fixer
 # shim execs it, so EVERY caller (invoker, operator) runs through the same
@@ -113,9 +113,9 @@ echo "fixer-artifact: env matches the explicit lock ($LOCK_N packages)"
 PY="$PREFIX/bin/python"
 
 # --- pinned deps (lock wins when present — same rule as bootstrap.sh) -------
-REQS="axiom_ng/tools/pdf_repair_agent/requirements.txt"
-[ -f axiom_ng/tools/pdf_repair_agent/requirements.lock.txt ] && \
-    REQS="axiom_ng/tools/pdf_repair_agent/requirements.lock.txt"
+REQS="axiom/tools/pdf_repair_agent/requirements.txt"
+[ -f axiom/tools/pdf_repair_agent/requirements.lock.txt ] && \
+    REQS="axiom/tools/pdf_repair_agent/requirements.lock.txt"
 "$PY" -m pip install -q --disable-pip-version-check -r "$REQS"
 
 # #286 review: NO separate deu download. The conda tesseract package ships

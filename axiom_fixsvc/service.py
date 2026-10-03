@@ -54,7 +54,7 @@ MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 ARABIC = re.compile(r"^\d{1,4}$")
 
 # Mirror of the AUTHORITATIVE auto-apply gate: repo.RepairAutoApplyMinScore
-# in axiom_ng/internal/repo/repair.go (0.95). The RAG re-enforces it
+# in axiom/internal/repo/repair.go (0.95). The RAG re-enforces it
 # server-side (SubmitRepairVerdict); this constant only decides whether the
 # service uploads a healed PDF at all — keep both in sync.
 AUTO_APPLY_MIN_COVERAGE = 0.95

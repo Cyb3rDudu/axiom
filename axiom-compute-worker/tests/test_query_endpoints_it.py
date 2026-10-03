@@ -2,7 +2,7 @@
 
 NOT part of the hermetic suite: these run the REAL BGE-M3 stack (torch,
 FlagEmbedding, MPS/CUDA) against the REAL local OpenSearch index
-(axiom-ng-chunks-v1, 4813 chunks) — the roundtrip, latency and quality
+(`AXIOM_OS_INDEX` default, 4813 chunks at calibration time) — the roundtrip, latency and quality
 evidence Hivemind verifies. No stubs anywhere.
 
 Run with:
@@ -36,7 +36,7 @@ if DENSE_EMBEDDING_DIM != 1024:
     )
 
 OS_URL = os.getenv("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200").rstrip("/")
-OS_INDEX = os.getenv("AXIOM_OS_INDEX", "axiom-ng-chunks-v1")
+OS_INDEX = os.getenv("AXIOM_OS_INDEX", "axiom-chunks-v1")
 
 # Hermetic-suite compatibility: the app module must exist, but singletons
 # reset per test keeps the warm-keep accounting honest.

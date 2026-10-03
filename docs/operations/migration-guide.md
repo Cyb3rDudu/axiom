@@ -18,7 +18,7 @@ public edge:
   the versioned `/api/v1/{health,search,passage/{id}}` edge) behaves
   byte-identically through 0.2.x. The F01 golden suite (#295) froze the
   0.1.18 baseline as the witness — the frozen route inventory lives at
-  `axiom_ng/internal/baseline/fixtures/api_inventory.txt` in the repository;
+  `axiom/internal/baseline/fixtures/api_inventory.txt` in the repository;
   the same suite runs green against the new
   binary in all-in-one **and** split-process form.
 - **Unchanged:** your environment. Every 0.1.x env var still loads; legacy
@@ -113,11 +113,13 @@ schedule.
 | `axiom-ng` | `axiom` (`axiom serve …`) | alias binary of the same build generation; delegates, warns once, counts |
 | `axiom_ng_runner` module, service "axiom-runner" | `axiom-compute-worker` (module `axiom_compute_worker`) | legacy module entrypoint keeps working; warns once, counts |
 | `axiom-fixer` (`pdf_repair_agent`) | `axiom-repair-worker` | shim delegates to the canonical worker; warns once, counts |
-| `axiom_ng` Go module/directory | unchanged (code-path name — a technical fact, not a product name) | — |
+| `axiom_ng` Go module/directory | `axiom` module/directory (#352) | import paths moved mechanically; no alias — code-path fact |
+| state directory `~/.axiom-ng/` | `~/.axiom/` (#352) | one-time startup migration moves contents and leaves the legacy path as a symlink (rollback-safe, no dual state) |
+| version banner `axiom-ng v…` | `axiom v…` (#352) | no alias — the alias binary prints its own deprecation witness line |
 | release assets `axiom-ng-<version>-<os>-<arch>`, `axiom-runner-<gen>-*` | `axiom-<version>-<os>-<arch>`, `axiom-compute-worker-<gen>-*` | releases ship the alias names alongside the canonical ones |
 | launchd label `com.axiom.runner` | `com.axiom.compute-worker` | **operator-side switch** — see [deployment](#launchd-macos) below |
 | Make target `make runner` | `make compute-worker` | warns and still builds |
-| default index `axiom-ng-chunks-v1` | unchanged (quoted verbatim in operational commands) | — |
+| default index `axiom-ng-chunks-v1` | `axiom-chunks-v1` (#352) | byte-preserving `_reindex` (no re-chunking, no re-embedding); rollback = `AXIOM_OS_INDEX` + restart; old index deleted after soak |
 
 ### Environment variables
 
@@ -217,7 +219,7 @@ export AXIOM_LIBRARY_DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/<librar
 
 # SQLite profile (single host!):
 export AXIOM_STORAGE_LIBRARY_DRIVER=sqlite
-export AXIOM_LIBRARY_SQLITE_PATH=~/.axiom-ng/library.sqlite
+export AXIOM_LIBRARY_SQLITE_PATH=~/.axiom/library.sqlite
 ```
 
 Operating rules that matter to an operator:
@@ -454,7 +456,7 @@ Nothing but this page: a fresh machine (or an empty directory), no
 inherited environment, no host databases. Everything substrate-shaped runs
 as disposable containers; the runtime itself is the binary you build.
 
-**Prerequisites:** a Go toolchain (see `axiom_ng/go.mod`), a container
+**Prerequisites:** a Go toolchain (see `axiom/go.mod`), a container
 runtime with a compose implementation (Docker + compose plugin, or podman +
 podman-compose — the topology smoke accepts either via
 `AXIOM_TOPOLOGY_COMPOSE`), `jq`, `curl`, `git`.
@@ -586,7 +588,7 @@ the Store's revision intake (the same contract class the CI topology
 smoke rides):
 
 ```bash
-FIXTURE="axiom_ng/internal/backfill/testdata/book.epub"
+FIXTURE="axiom/internal/backfill/testdata/book.epub"
 HASH="$(shasum -a 256 "$FIXTURE" | awk '{print $1}')"   # Linux: sha256sum
 
 docker exec -i axiom-guide-pg psql -U axiom -d axiom -v ON_ERROR_STOP=1 <<SQL

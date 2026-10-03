@@ -22,7 +22,7 @@ from axiom_compute_worker.app import app
 
 FIXTURE = (
     Path(__file__).resolve().parents[2]
-    / "axiom_ng"
+    / "axiom"
     / "internal"
     / "baseline"
     / "fixtures"

@@ -4,7 +4,7 @@
 retrieval arm selection · **Data basis:** a 25-query gold suite (DE+EN,
 concept/fact/norm/author), a real OpenSearch index (4,813 chunks), a real query
 runner (warm), and the real database. Original:
-`axiom_ng/docs/RETRIEVAL_BENCHMARK.md`. Reproducible with the retrieval-bench
+`axiom/docs/RETRIEVAL_BENCHMARK.md`. Reproducible with the retrieval-bench
 command (see the canonical file).
 
 > **Provisional gold caveat (important):** the gold annotations in this report

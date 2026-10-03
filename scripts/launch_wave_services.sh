@@ -5,7 +5,7 @@
 # env afterwards. A silent empty SOURCE_BASE_URL/SECRET dies loudly here —
 # boot-time, not 130 jobs in.
 set -euo pipefail
-BIN="${1:-/tmp/axiom-ng-wave}"
+BIN="${1:-/tmp/axiom-wave}"
 SECRET_FILE="${SECRET_FILE:-/tmp/axiom_runs/.secret}"
 DSN='postgresql://axiom_user:axiom_password@127.0.0.1:5432/axiom_db?sslmode=disable'
 PROFILE='{"profile":"full-rag-v1","extract_entities":true,"extract_relationships":true,"compute_dense_embeddings":true,"compute_sparse_embeddings":true,"extract_images":true}'
@@ -35,7 +35,7 @@ for spec in "19542 w9-gpu0 8013" "19543 w9-gpu1 8014" "19544 w9-a3000 8015"; do
   set -- $spec; i=$((i+1))
   env "${COMMON_ENV[@]}" \
     AXIOM_API_PORT=$3 AXIOM_BIND_ADDR=127.0.0.1 \
-    AXIOM_DISPATCHER_ENABLED=1 AXIOM_DISPATCHER_WORKER_ID="axiom-ng-w9-$i" \
+    AXIOM_DISPATCHER_ENABLED=1 AXIOM_DISPATCHER_WORKER_ID="axiom-w9-$i" \
     AXIOM_DISPATCHER_CONCURRENCY=1 AXIOM_DISPATCHER_LEASE=5m AXIOM_DISPATCHER_PROFILE="$PROFILE" \
     AXIOM_PROCESSOR_URL="http://192.168.1.2:$1" AXIOM_PROCESSOR_RUNNER_NAME="$2" \
     nohup "$BIN" > /tmp/axiom_runs/w9-dispatcher-$2.log 2>&1 &

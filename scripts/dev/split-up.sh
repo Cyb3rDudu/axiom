@@ -68,9 +68,9 @@ done
 mkdir -p "$STATE"/{logs,artifacts,runner,quarantine,bin,cache/captions}
 echo "source" >"$STATE/mode"
 
-BIN="$STATE/bin/axiom-ng-split"
-note "building axiom-ng (working tree)…"
-(cd "$REPO/axiom_ng" && go build -o "$BIN" ./cmd/axiom-ng)
+BIN="$STATE/bin/axiom-split"
+note "building axiom (working tree)…"
+(cd "$REPO/axiom" && go build -o "$BIN" ./cmd/axiom)
 
 # dev DSN/index derivation (the dev-up boundary: never prod)
 dev_dsn() {

@@ -56,7 +56,7 @@ for p in "$RAG_PORT" "$RUNNER_PORT"; do
         left=1
     fi
 done
-pgrep -f "$STATE/bin/axiom-ng-dev" >/dev/null 2>&1 && {
+pgrep -f "$STATE/bin/axiom-dev" >/dev/null 2>&1 && {
     echo "dev-down: WARNING dev RAG process still alive" >&2
     left=1
 }

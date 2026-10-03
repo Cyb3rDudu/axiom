@@ -4,7 +4,7 @@ Strict pydantic models for the *small* request/response envelopes where the
 contract fixes the shape (accept, status, ack, error, capability header).
 The processor *result* payload is intentionally NOT a strict model here: the
 contract (§4) requires additive unknown fields to be ignored by readers, and
-the strict validation of every result field is axiom-ng's job at Gate 4, not
+the strict validation of every result field is the runtime's job at Gate 4, not
 the processor's.
 """
 

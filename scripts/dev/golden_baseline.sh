@@ -1,7 +1,7 @@
 #!/bin/bash
 # golden_baseline.sh — `make golden-baseline` backend (#295).
 #
-# Runs the frozen v0.1.18 compatibility suite (axiom_ng/internal/baseline)
+# Runs the frozen v0.1.18 compatibility suite (axiom/internal/baseline)
 # against the dev environment. Preconditions enforced here, not in the
 # tests: the dev RAG must serve the FREEZE BITS (release mode), otherwise
 # the suite would baseline a working-tree debug build — the exact mistake
@@ -40,7 +40,7 @@ rm -f "$ACTUAL_DIR"/*
 
 # shellcheck disable=SC1091
 . "$REPO/scripts/dev/env.sh"
-cd "$REPO/axiom_ng"
+cd "$REPO/axiom"
 AXIOM_BASELINE_LIVE=1 AXIOM_BASELINE_ACTUAL="$ACTUAL_DIR" \
     go test ./internal/baseline -count=1 -timeout 30m
 
