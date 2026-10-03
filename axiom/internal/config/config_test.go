@@ -12,6 +12,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("AXIOM_ZOTERO_BASE", "")
 	t.Setenv("AXIOM_ZOTERO_LIBRARY", "")
 	t.Setenv("AXIOM_API_PORT", "")
+	t.Setenv("AXIOM_DISPATCHER_WORKER_ID", "") // env("") == unset → pins the default
 
 	c := Load()
 	if c.ZoteroBaseURL != defaultZoteroBase {
@@ -25,6 +26,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if c.ProcessorURL == "" || c.OpenSearchURL == "" {
 		t.Errorf("default sidecar URLs must be set, got %+v", c)
+	}
+	// #352: the canonical worker id default — log lines and dispatcher
+	// identity key off it; a drift back to the legacy "axiom-ng" goes
+	// red here (the env(" ") Setenv above neutralizes ambient overrides).
+	if c.DispatcherWorkerID != "axiom" {
+		t.Errorf("DispatcherWorkerID = %q, want %q", c.DispatcherWorkerID, "axiom")
 	}
 }
 

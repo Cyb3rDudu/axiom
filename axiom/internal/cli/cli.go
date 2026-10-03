@@ -50,7 +50,9 @@ import (
 func Run(name string, args []string) int {
 	// #352: one-time legacy state migration at process start, before any
 	// path resolution; best-effort — a failure logs, never blocks boot.
-	_ = statehome.Migrate()
+	if err := statehome.Migrate(); err != nil {
+		log.Printf("statehome: legacy state migration failed (legacy root untouched): %v", err)
+	}
 	if len(args) < 2 {
 		cfg, code := loadRuntime(name, nil)
 		if code != exitOK {

@@ -43,22 +43,23 @@ note() { echo "reindex: $*"; }
 
 [ "$OLD_INDEX" != "$NEW_INDEX" ] || die "old and new index are identical ($OLD_INDEX)"
 
-"${CURL[@]}" -o /dev/null "$OS_URL/$OLD_INDEX" || die "legacy index $OLD_INDEX not reachable at $OS_URL"
-if "${CURL[@]}" -o /dev/null "$OS_URL/$NEW_INDEX"; then
+# every call bounded: short ops get -m 30, the (large) _reindex gets -m 600
+"${CURL[@]}" -m 30 -o /dev/null "$OS_URL/$OLD_INDEX" || die "legacy index $OLD_INDEX not reachable at $OS_URL"
+if "${CURL[@]}" -m 30 -o /dev/null "$OS_URL/$NEW_INDEX"; then
     die "target index $NEW_INDEX already exists — refusing to touch it (delete it first if this is a retry)"
 fi
 
 note "cloning mappings+settings: $OLD_INDEX -> $NEW_INDEX …"
-"${CURL[@]}" "$OS_URL/$OLD_INDEX" |
+"${CURL[@]}" -m 30 "$OS_URL/$OLD_INDEX" |
     jq --arg old "$OLD_INDEX" \
         '{settings: (.[$old].settings.index | del(.uuid,.version,.creation_date,.provided_name)), mappings: .[$old].mappings}' |
-    "${CURL[@]}" -XPUT "$OS_URL/$NEW_INDEX" -H 'Content-Type: application/json' -d @- >/dev/null ||
+    "${CURL[@]}" -m 30 -XPUT "$OS_URL/$NEW_INDEX" -H 'Content-Type: application/json' -d @- >/dev/null ||
     die "index create failed"
 
 cleanup_partial() {
-    "${CURL[@]}" -XDELETE "$OS_URL/$NEW_INDEX" >/dev/null 2>&1 || true
+    "${CURL[@]}" -m 30 -XDELETE "$OS_URL/$NEW_INDEX" >/dev/null 2>&1 || true
 }
-if ! "${CURL[@]}" -XPOST "$OS_URL/_reindex?wait_for_completion=true" -H 'Content-Type: application/json' \
+if ! "${CURL[@]}" -m 600 -XPOST "$OS_URL/_reindex?wait_for_completion=true" -H 'Content-Type: application/json' \
     -d "{\"source\":{\"index\":\"$OLD_INDEX\"},\"dest\":{\"index\":\"$NEW_INDEX\"}}" \
     | jq -e '.failures | length == 0' >/dev/null; then
     # HTTP 200 can still carry per-doc failures — the copy must be exact
@@ -66,8 +67,11 @@ if ! "${CURL[@]}" -XPOST "$OS_URL/_reindex?wait_for_completion=true" -H 'Content
     die "_reindex failed or reported per-doc failures (partial target deleted — safe to rerun)"
 fi
 
-old_n="$("${CURL[@]}" "$OS_URL/$OLD_INDEX/_count" | jq -r .count)"
-new_n="$("${CURL[@]}" "$OS_URL/$NEW_INDEX/_count" | jq -r .count)"
+# make the copied docs visible to count/_search before parity checks
+"${CURL[@]}" -m 30 -XPOST "$OS_URL/$NEW_INDEX/_refresh" >/dev/null
+
+old_n="$("${CURL[@]}" -m 30 "$OS_URL/$OLD_INDEX/_count" | jq -r .count)"
+new_n="$("${CURL[@]}" -m 30 "$OS_URL/$NEW_INDEX/_count" | jq -r .count)"
 [ "$new_n" = "$old_n" ] || {
     cleanup_partial
     die "count mismatch: $new_n/$old_n (partial target deleted — safe to rerun)"
@@ -78,8 +82,8 @@ note "counts match: $new_n/$old_n"
 # (identical mappings -> identical BM25 ranking; the dense arm needs the
 # runtime, BM25 parity is the index-level witness here)
 PROBE='{"size":1,"query":{"match_all":{}},"sort":["_id"]}'
-a="$("${CURL[@]}" "$OS_URL/$OLD_INDEX/_search" -H 'Content-Type: application/json' -d "$PROBE" | jq -r '.hits.hits[0]._id // "none"')"
-b="$("${CURL[@]}" "$OS_URL/$NEW_INDEX/_search" -H 'Content-Type: application/json' -d "$PROBE" | jq -r '.hits.hits[0]._id // "none"')"
+a="$("${CURL[@]}" -m 30 "$OS_URL/$OLD_INDEX/_search" -H 'Content-Type: application/json' -d "$PROBE" | jq -r '.hits.hits[0]._id // "none"')"
+b="$("${CURL[@]}" -m 30 "$OS_URL/$NEW_INDEX/_search" -H 'Content-Type: application/json' -d "$PROBE" | jq -r '.hits.hits[0]._id // "none"')"
 [ "$a" = "$b" ] && [ "$a" != "none" ] || {
     cleanup_partial
     die "spot-query mismatch: first _id $a vs $b (partial target deleted — safe to rerun)"
