@@ -134,8 +134,11 @@ func TestRunnerLiveEndToEndSingleAgent(t *testing.T) {
 	if !strings.HasSuffix(dbName, "_test") {
 		t.Fatalf("REFUSING to truncate: current_database %q does not end in _test", dbName)
 	}
+	// processing_snapshots is explicit since the cross-component FKs fell
+	// (DM06 #315): TRUNCATE … CASCADE on the zotero_* tables no longer
+	// reaches the store rows.
 	if _, err := d.Pool().Exec(ctxSeed, `TRUNCATE ingest_jobs, zotero_attachments, zotero_documents,
-		zotero_items, zotero_sources CASCADE`); err != nil {
+		zotero_items, zotero_sources, processing_snapshots CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	seedLiveJob(t, d, "LV1")

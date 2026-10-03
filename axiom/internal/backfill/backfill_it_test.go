@@ -248,7 +248,13 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 	pool := openBackfillDB(t)
 	python, runnerDir := resolvePython(t)
 	ctx := context.Background()
-	// clean slate for our fixtures
+	// clean slate for our fixtures (snapshots first: the cross-component
+	// FKs fell, DM06 #315, so the document delete no longer cascades into
+	// the store rows of a previous run)
+	if _, err := pool.Exec(ctx, `DELETE FROM processing_snapshots WHERE document_id IN
+		(SELECT id FROM zotero_documents WHERE zotero_key LIKE 'LB%')`); err != nil {
+		t.Fatalf("clean: %v", err)
+	}
 	if _, err := pool.Exec(ctx, `DELETE FROM zotero_documents WHERE zotero_key LIKE 'LB%'`); err != nil {
 		t.Fatalf("clean: %v", err)
 	}
@@ -401,6 +407,12 @@ func TestBackfillDirectionPDFRefused(t *testing.T) {
 	pool := openBackfillDB(t)
 	python, runnerDir := resolvePython(t)
 	ctx := context.Background()
+	// snapshots first (see the LB% cleanup above): the document delete no
+	// longer cascades into the store rows since the cross-FK drop
+	if _, err := pool.Exec(ctx, `DELETE FROM processing_snapshots WHERE document_id IN
+		(SELECT id FROM zotero_documents WHERE zotero_key LIKE 'LB4%')`); err != nil {
+		t.Fatalf("clean: %v", err)
+	}
 	if _, err := pool.Exec(ctx, `DELETE FROM zotero_documents WHERE zotero_key LIKE 'LB4%'`); err != nil {
 		t.Fatalf("clean: %v", err)
 	}

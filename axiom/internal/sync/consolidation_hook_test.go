@@ -160,14 +160,22 @@ func TestConsolidationHookStopCancelsPendingRun(t *testing.T) {
 
 // hookSeedSnapshot seeds source -> document -> attachment -> ACTIVE snapshot
 // with two same-form entities (the duplicate mass the hook must merge).
-// Own base_url per test run (newScriptedBase) — cascade delete cleans up.
+// Own base_url per test run (newScriptedBase) — explicit cleanup follows.
 func hookSeedSnapshot(t *testing.T, svc *Service, form string) {
 	t.Helper()
 	ctx := context.Background()
 	pool := svc.repo.Pool()
-	// The sync test DB is persistent — clear EVERY previous run's chain
-	// (documents cascade to attachments -> snapshots -> entities/chunks;
-	// the key is test-only, so a cross-source delete is safe).
+	// The sync test DB is persistent — clear EVERY previous run's chain.
+	// The snapshot delete is explicit since the cross-component FKs fell
+	// (DM06 #315): deleting the document no longer cascades into the
+	// store rows. Chunks/entities/mentions still cascade INTERNALLY from
+	// the snapshot; the key is test-only, so a cross-source delete is
+	// safe.
+	if _, err := pool.Exec(ctx, `
+		DELETE FROM processing_snapshots WHERE attachment_id IN
+		  (SELECT id FROM zotero_attachments WHERE zotero_key='HOOK197')`); err != nil {
+		t.Fatalf("clean previous seed: %v", err)
+	}
 	if _, err := pool.Exec(ctx, `
 		DELETE FROM zotero_documents WHERE zotero_key='DOCHOOK197'`); err != nil {
 		t.Fatalf("clean previous seed: %v", err)

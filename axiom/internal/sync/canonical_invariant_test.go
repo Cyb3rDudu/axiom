@@ -30,6 +30,9 @@ func runCanon(t *testing.T, src zoteroprovider.Source, d *db.DB) (Result, error)
 		if sourceID == "" {
 			return
 		}
+		// Sync-written jobs go FIRST since the cross-component FKs fell
+		// (DM06 #315): deleting the source no longer cascades into them.
+		_, _ = d.Pool().Exec(context.Background(), `DELETE FROM ingest_jobs WHERE source_id=$1`, sourceID)
 		_, _ = d.Pool().Exec(context.Background(), `DELETE FROM zotero_sources WHERE id=$1`, sourceID)
 	})
 	res, err := svc.Run(ctx, nil)

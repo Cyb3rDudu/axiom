@@ -184,6 +184,14 @@ func custITEnv(t *testing.T) (*Server, *repo.Repo, *custWriteZotero, *custSource
 		t.Fatalf("seed sync: %v", err)
 	}
 	t.Cleanup(func() {
+		// Store rows go FIRST since the cross-component FKs fell (DM06
+		// #315): deleting the source no longer cascades into the sync-
+		// written jobs (or snapshots) referencing its chain.
+		_, _ = d.Pool().Exec(ctx, `DELETE FROM ingest_jobs WHERE source_id IN
+			(SELECT id FROM zotero_sources WHERE base_url=$1)`, src.baseURL)
+		_, _ = d.Pool().Exec(ctx, `DELETE FROM processing_snapshots WHERE attachment_id IN
+			(SELECT id FROM zotero_attachments WHERE source_id IN
+			   (SELECT id FROM zotero_sources WHERE base_url=$1))`, src.baseURL)
 		_, _ = d.Pool().Exec(ctx, `DELETE FROM zotero_sources WHERE base_url=$1`, src.baseURL)
 	})
 
