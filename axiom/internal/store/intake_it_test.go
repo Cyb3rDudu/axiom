@@ -585,3 +585,69 @@ func TestRevisionSameKeyReplayAfterObsoletion(t *testing.T) {
 		t.Fatalf("terminal replay must carry Failure: %+v", dto)
 	}
 }
+
+// TestRevisionIntakeClaimObsoletesOnGhostSourceAndDocument — the DM06
+// #315 intake witnesses for the references the dropped cross-component
+// FKs used to secure at the database level (the rendition ghost has its
+// own witness above): a revision whose SOURCE does not exist, and one
+// whose DOCUMENT record does not exist, must both be obsoleted LOUDLY
+// with REVISION_REF_UNRESOLVED at claim time — never silently claimed,
+// never silently resolved onto wrong rows. Runs post-drop: the contract
+// layer is the only guard left, and this proves it holds.
+func TestRevisionIntakeClaimObsoletesOnGhostSourceAndDocument(t *testing.T) {
+	d := openIntakeDB(t)
+	hash := revision.HashContent([]byte("ghost ref bytes"))
+	srcID, _, _ := seedMirror(t, d, "DOCIT1", "ATTIT1", hash)
+	rep := repo.New(d.Pool())
+	ctx := context.Background()
+
+	claim := func(t *testing.T) {
+		t.Helper()
+		if _, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
+			WorkerID: "intake-it", LeaseDuration: 30 * time.Second,
+			Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
+		}); err != nil {
+			t.Fatalf("claim (must obsolete the ghost, not error): %v", err)
+		}
+	}
+	assertObsoleted := func(t *testing.T, jobID, wantSub string) {
+		t.Helper()
+		var status, skipped string
+		if err := d.Pool().QueryRow(ctx,
+			`SELECT status::text, COALESCE(error_message,'') FROM ingest_jobs WHERE id=$1`, jobID).Scan(&status, &skipped); err != nil {
+			t.Fatal(err)
+		}
+		if status != "skipped" || !strings.Contains(skipped, wantSub) {
+			t.Fatalf("ghost reference must be obsoleted with %s, got %s / %q", wantSub, status, skipped)
+		}
+	}
+
+	// Ghost SOURCE: the revision names a source uuid the mirror never saw
+	// (a syntactically valid uuid that exists in no zotero_sources row).
+	ghostSrc := "00000000-0000-4000-8000-00000000d006"
+	rev := seedRevision(ghostSrc, hash)
+	job, minted, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
+		IdempotencyKey: "ghost-src-1", RevisionSourceID: ghostSrc, RevisionRecordID: "DOCIT1",
+		RevisionRenditionID: "ATTIT1", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, rev),
+	})
+	if err != nil || !minted {
+		t.Fatalf("mint ghost source: %v %v", job, err)
+	}
+	claim(t)
+	assertObsoleted(t, job.ID, "REVISION_REF_UNRESOLVED")
+
+	// Ghost DOCUMENT: the source and rendition exist, the record does not.
+	rev2 := seedRevision(srcID, hash)
+	rev2.Bibliography.RecordID = "GONEDOC"
+	job2, minted2, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
+		IdempotencyKey: "ghost-doc-1", RevisionSourceID: srcID, RevisionRecordID: "GONEDOC",
+		RevisionRenditionID: "ATTIT1", RevisionNo: "1", ContentHash: hash,
+		RevisionJSON: mustCanonical(t, rev2),
+	})
+	if err != nil || !minted2 {
+		t.Fatalf("mint ghost document: %v %v", job2, err)
+	}
+	claim(t)
+	assertObsoleted(t, job2.ID, "REVISION_REF_UNRESOLVED")
+}
