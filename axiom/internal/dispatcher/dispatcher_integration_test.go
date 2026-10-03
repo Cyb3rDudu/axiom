@@ -106,8 +106,14 @@ func (h *dispatchHarness) truncateFixtures(t *testing.T) {
 		t.Fatalf("REFUSING to truncate: %q does not end in _test", dbName)
 	}
 	if _, err := h.pool.Exec(ctx,
+		// processing_snapshots is explicit since DM06 (#315): the
+		// cross-component FKs are gone, so TRUNCATE … CASCADE on the
+		// zotero_* tables no longer reaches the store tables (chunks,
+		// embeddings and the outbox still cascade INTERNALLY from the
+		// snapshot).
 		`TRUNCATE ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
-		         zotero_item_collections, zotero_collections, zotero_sources
+		         zotero_item_collections, zotero_collections, zotero_sources,
+		         processing_snapshots
 		CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

@@ -259,11 +259,16 @@ func (lr *leaseRepo) truncateFixtures(t *testing.T) {
 	if !strings.HasSuffix(dbName, "_test") {
 		t.Fatalf("REFUSING to truncate: current_database %q does not end in _test", dbName)
 	}
+	// processing_snapshots is explicit since DM06 (#315): the
+	// cross-component FKs are gone, so TRUNCATE … CASCADE on the
+	// zotero_* tables no longer reaches the store tables (all
+	// snapshot-derived rows still cascade INTERNALLY from it).
 	if _, err := lr.pool.Exec(ctx, `
 		TRUNCATE kg_superseded_entities,
 		         ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
 		         zotero_item_collections, zotero_collections, zotero_sources,
-		         zotero_selections, zotero_collection_selections
+		         zotero_selections, zotero_collection_selections,
+		         processing_snapshots
 		CASCADE`); err != nil {
 		t.Fatalf("truncate fixtures: %v", err)
 	}
