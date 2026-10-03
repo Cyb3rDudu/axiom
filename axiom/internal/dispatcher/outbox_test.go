@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/search"
 	"io"
 	"log"
 	"net/http"
@@ -1093,4 +1094,53 @@ func (c *artifactStubClient) Artifact(ctx context.Context, jobID, ref string) ([
 func (c *artifactStubClient) Cancel(ctx context.Context, jobID string) error { return nil }
 func (c *artifactStubClient) Ack(ctx context.Context, jobID string, ack processor.Ack) error {
 	return nil
+}
+
+// TestEnsureIndexRefusesWhileLegacyHoldsCorpus — the #352 rename-transition
+// guard: with the canonical index absent and the legacy one present, the
+// drainer must NOT create an empty canonical index (silent partial-corpus
+// degradation); it refuses loudly naming the window script, and no create
+// PUT reaches the cluster. Legacy absent → creation proceeds (transition
+// inert, e.g. fresh clusters and dev indexes).
+func TestEnsureIndexRefusesWhileLegacyHoldsCorpus(t *testing.T) {
+	var puts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead && r.URL.Path == "/"+search.LegacyIndexName:
+			w.WriteHeader(200) // legacy index still holds the corpus
+		case r.Method == http.MethodHead:
+			w.WriteHeader(404) // canonical index absent
+		case r.Method == http.MethodPut:
+			puts++
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"error":{"reason":"unexpected create"}}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	ix := newOpenSearchClient(srv.URL, "", "", nil)
+	err := ix.ensureIndex(context.Background(), 1024)
+	if err == nil || !strings.Contains(err.Error(), "reindex_index_rename.sh") {
+		t.Fatalf("guard must refuse with the window-script hint, got: %v", err)
+	}
+	if puts != 0 {
+		t.Fatalf("no create PUT may reach the cluster while legacy holds the corpus, got %d", puts)
+	}
+
+	// transition inert: legacy gone (404 everywhere) → creation proceeds
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && r.URL.Path == "/axiom-chunks-v1" {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"acknowledged":true}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv2.Close()
+	ix2 := newOpenSearchClient(srv2.URL, "", "", nil)
+	if err := ix2.ensureIndex(context.Background(), 1024); err != nil {
+		t.Fatalf("post-soak create must proceed unguarded, got: %v", err)
+	}
 }

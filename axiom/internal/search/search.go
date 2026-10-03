@@ -42,6 +42,26 @@ import (
 // and its rollback live in scripts/reindex_index_rename.sh.
 const defaultIndexName = "axiom-chunks-v1"
 
+// LegacyIndexName is the pre-#352 production index. It exists only as the
+// rename-transition reference: while it still holds the corpus on a
+// cluster, creating the canonical index empty (instead of running the
+// byte-preserving _reindex window) would silently degrade search to a
+// partial corpus — so the write path refuses that combination (see
+// dispatcher.ensureIndex). After the soak deletes the legacy index the
+// name resolves to nothing and every guard keyed on it is inert.
+const LegacyIndexName = "axiom-ng-chunks-v1"
+
+// LegacyIndexForCreate names the legacy predecessor that must be checked
+// before index is created from scratch (rename transition, #352), or ""
+// when none applies. Inert for dev indexes, explicit overrides that are
+// not the canonical default, and post-soak clusters.
+func LegacyIndexForCreate(index string) string {
+	if index == defaultIndexName {
+		return LegacyIndexName
+	}
+	return ""
+}
+
 var IndexName = indexNameFromEnv(os.Getenv)
 
 func indexNameFromEnv(getenv func(string) string) string {

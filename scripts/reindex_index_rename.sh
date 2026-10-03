@@ -34,8 +34,20 @@ OLD_INDEX="${1:-axiom-ng-chunks-v1}"
 NEW_INDEX="${2:-axiom-chunks-v1}"
 
 CURL=(curl -fsS)
+NETRC=""
+cleanup() {
+    [ -n "$NETRC" ] && rm -f "$NETRC"
+    return 0
+}
+trap cleanup EXIT
 if [ -n "${AXIOM_OPENSEARCH_USERNAME:-}" ]; then
-    CURL+=(-u "$AXIOM_OPENSEARCH_USERNAME:${AXIOM_OPENSEARCH_PASSWORD:-}")
+    # credentials via a 0600 netrc file, never in argv (ps-visible)
+    NETRC="$(mktemp)"
+    chmod 600 "$NETRC"
+    OS_HOST="$(printf '%s' "$OS_URL" | sed -E 's#^[a-zA-Z]+://([^/:]+).*#\1#')"
+    printf 'machine %s login %s password %s\n' "$OS_HOST" \
+        "$AXIOM_OPENSEARCH_USERNAME" "${AXIOM_OPENSEARCH_PASSWORD:-}" >"$NETRC"
+    CURL+=(--netrc-file "$NETRC")
 fi
 
 die() { echo "reindex: $*" >&2; exit 1; }
@@ -61,8 +73,9 @@ cleanup_partial() {
 }
 if ! "${CURL[@]}" -m 600 -XPOST "$OS_URL/_reindex?wait_for_completion=true" -H 'Content-Type: application/json' \
     -d "{\"source\":{\"index\":\"$OLD_INDEX\"},\"dest\":{\"index\":\"$NEW_INDEX\"}}" \
-    | jq -e '.failures | length == 0' >/dev/null; then
-    # HTTP 200 can still carry per-doc failures — the copy must be exact
+    | jq -e '(.failures // [] | length == 0) and (.timed_out // false | not)' >/dev/null; then
+    # HTTP 200 can still carry per-doc failures or a timeout flag —
+    # the copy must be exact
     cleanup_partial
     die "_reindex failed or reported per-doc failures (partial target deleted — safe to rerun)"
 fi
@@ -78,17 +91,23 @@ new_n="$("${CURL[@]}" -m 30 "$OS_URL/$NEW_INDEX/_count" | jq -r .count)"
 }
 note "counts match: $new_n/$old_n"
 
-# spot-query parity: same top chunk id for a probe query on both indices
-# (identical mappings -> identical BM25 ranking; the dense arm needs the
-# runtime, BM25 parity is the index-level witness here)
-PROBE='{"size":1,"query":{"match_all":{}},"sort":["_id"]}'
-a="$("${CURL[@]}" -m 30 "$OS_URL/$OLD_INDEX/_search" -H 'Content-Type: application/json' -d "$PROBE" | jq -r '.hits.hits[0]._id // "none"')"
-b="$("${CURL[@]}" -m 30 "$OS_URL/$NEW_INDEX/_search" -H 'Content-Type: application/json' -d "$PROBE" | jq -r '.hits.hits[0]._id // "none"')"
-[ "$a" = "$b" ] && [ "$a" != "none" ] || {
+# spot-doc parity (no _id sort — that needs non-default fielddata): take
+# any one doc id from the OLD index and require the SAME id in the NEW
+# index with a semantically identical _source — the byte-preserving copy
+# witness at document level
+probe_id="$("${CURL[@]}" -m 30 "$OS_URL/$OLD_INDEX/_search" -H 'Content-Type: application/json' \
+    -d '{"size":1,"query":{"match_all":{}}}' | jq -r '.hits.hits[0]._id // empty')"
+[ -n "$probe_id" ] || {
     cleanup_partial
-    die "spot-query mismatch: first _id $a vs $b (partial target deleted — safe to rerun)"
+    die "could not read a probe doc id from $OLD_INDEX — is the legacy index empty? (partial target deleted — safe to rerun)"
 }
-note "spot query parity ok (first _id $a)"
+old_src="$("${CURL[@]}" -m 30 "$OS_URL/$OLD_INDEX/_doc/$probe_id" | jq -S '._source')"
+new_src="$("${CURL[@]}" -m 30 "$OS_URL/$NEW_INDEX/_doc/$probe_id" | jq -S '._source // empty')"
+[ -n "$old_src" ] && [ "$old_src" = "$new_src" ] || {
+    cleanup_partial
+    die "spot-doc mismatch for _id $probe_id — copy not byte-preserving (partial target deleted — safe to rerun)"
+}
+note "spot doc parity ok (_id $probe_id, _source equal)"
 
 note "DONE — $NEW_INDEX holds $new_n docs, byte-preserving copy of $OLD_INDEX."
 note "next (operator): start the RAG on the canonical default (unset AXIOM_OS_INDEX or set it to $NEW_INDEX),"

@@ -46,9 +46,17 @@ func Migrate() error {
 }
 
 // migrate moves legacy onto canonical and leaves the legacy path as a
-// symlink to it.
+// symlink to it. Every deliberate no-op branch that could hide a state
+// fork logs (visibility: the migration must never happen silently —
+// #352 review).
 func migrate(legacy, canonical string) error {
 	if _, err := os.Lstat(canonical); err == nil {
+		// canonical present but not a usable directory (a file, or a
+		// dangling symlink) hides a broken state root — say so on every
+		// start instead of failing far away at first use.
+		if st, serr := os.Stat(canonical); serr != nil || !st.IsDir() {
+			log.Printf("statehome: canonical root %s exists but is not a directory — defaults will misbehave; move it away or fix the symlink", canonical)
+		}
 		return nil // canonical already there (fresh install or migrated)
 	} else if !os.IsNotExist(err) {
 		return err
@@ -61,11 +69,20 @@ func migrate(legacy, canonical string) error {
 		return err
 	}
 	if !fi.IsDir() {
+		// canonical is absent (checked above); a legacy symlink therefore
+		// points somewhere else — the one silent state-fork shape. Make
+		// the divergence visible on every start until reconciled.
+		if fi.Mode()&os.ModeSymlink != 0 {
+			if target, terr := filepath.EvalSymlinks(legacy); terr == nil {
+				log.Printf("statehome: legacy path %s is a symlink to %s, not managed by the migration — new state goes to %s; reconcile manually if the symlink hides diverged state", legacy, target, canonical)
+			}
+		}
 		return nil // a file or symlink (already migrated) — not ours to touch
 	}
 	if err := os.Rename(legacy, canonical); err != nil {
 		return err
 	}
+	log.Printf("statehome: migrated legacy state root to %s (compat symlink at %s)", canonical, legacy)
 	if err := os.Symlink(canonical, legacy); err != nil {
 		// Contents are safe under canonical; only the compat path is
 		// missing — say exactly what broke, the move itself succeeded.

@@ -33,3 +33,27 @@ func TestIndexNameFromEnv(t *testing.T) {
 		t.Errorf("IndexName = %q, want prod default in an unoverridden process", IndexName)
 	}
 }
+
+// TestLegacyIndexForCreate pins the rename-transition mapping (#352): the
+// guard arms only for the canonical default; dev indexes, explicit
+// overrides and the legacy name itself stay ungoverned (the legacy name
+// must never be guarded against its own transition tooling).
+func TestLegacyIndexForCreate(t *testing.T) {
+	cases := []struct {
+		index string
+		want  string
+	}{
+		{"axiom-chunks-v1", LegacyIndexName},
+		{"axiom-ng-chunks-v1", ""}, // staying on the legacy index is the rollback path
+		{"axiom-dev-chunks-v1", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := LegacyIndexForCreate(tc.index); got != tc.want {
+			t.Errorf("LegacyIndexForCreate(%q) = %q, want %q", tc.index, got, tc.want)
+		}
+	}
+	if LegacyIndexName != "axiom-ng-chunks-v1" {
+		t.Errorf("LegacyIndexName = %q, want the pre-#352 production name", LegacyIndexName)
+	}
+}
