@@ -428,6 +428,15 @@ func drainOutboxDelete(ctx context.Context, d *Dispatcher, osc *openSearchClient
 			return d.failOutboxRow(ctx, row, fmt.Errorf("load chunk ids: %w", err))
 		}
 	}
+	// #352: deletes must not bypass the rename guard — deleteDoc treats 404
+	// as success (idempotent tombstone), so against the absent canonical
+	// index every delete would "succeed" (index_not_found), the row would
+	// mark done, and the window script would later copy the still-indexed
+	// chunks from the legacy corpus with no tombstone left to remove them.
+	// Same fail-closed/backoff semantics as the index path.
+	if err := osc.checkRenameTransition(ctx); err != nil {
+		return d.failOutboxRow(ctx, row, fmt.Errorf("rename transition: %w", err))
+	}
 	for _, id := range ids {
 		if err := osc.deleteDoc(ctx, id); err != nil {
 			return d.failOutboxRow(ctx, row, err)
