@@ -127,6 +127,19 @@ func (c *openSearchClient) ensureIndex(ctx context.Context, dim int) error {
 		c.warnIfStrandedKnn(ctx)
 		return nil
 	}
+	// #352 rename-transition guard: the target index is absent — if the
+	// legacy one still holds the corpus on this cluster, creating the
+	// canonical index empty here would silently strand search on a
+	// partial corpus. Refuse loudly instead; the window script does the
+	// byte-preserving move, AXIOM_OS_INDEX rolls back. The guard is inert
+	// once the legacy index is deleted after the soak.
+	if legacy := search.LegacyIndexForCreate(c.index); legacy != "" {
+		if code, _, err := c.do(ctx, http.MethodHead, "/"+legacy, nil); err != nil {
+			return err
+		} else if code == http.StatusOK {
+			return fmt.Errorf("index %s is absent while legacy %s still exists — run scripts/reindex_index_rename.sh before switching (or keep AXIOM_OS_INDEX=%s on the legacy index)", c.index, legacy, legacy)
+		}
+	}
 	mapping := map[string]any{
 		"settings": map[string]any{"index": map[string]any{"knn": true}},
 		"mappings": map[string]any{

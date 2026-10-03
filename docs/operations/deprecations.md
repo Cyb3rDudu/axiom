@@ -56,7 +56,7 @@ how often it has been read since process start.
 | `axiom_ng_runner` module entrypoint, "axiom-runner" service | compute worker module | counter | same criteria |
 | `axiom_ng` Go module/directory (#352) | code path | none — internal import paths moved mechanically; rebuild from source | n/a (not a runtime name) |
 | state directory `~/.axiom-ng/` (#352) | filesystem | startup migration symlink (no counter) | symlink stays through 0.2.x; removal with the alias generation |
-| default index `axiom-ng-chunks-v1` (#352) | OpenSearch index | none — byte-preserving `_reindex` moved it; rollback = `AXIOM_OS_INDEX` | old index deleted after soak |
+| default index `axiom-ng-chunks-v1` (#352) | OpenSearch index | none — byte-preserving `_reindex` (`scripts/reindex_index_rename.sh`); rollback = `AXIOM_OS_INDEX` | old index deleted after soak |
 | `axiom-fixer` shim | repair worker binary | counter | same criteria |
 | `AXIOM_PROCESSOR_URL`, `AXIOM_PROCESSOR_URLS`, `AXIOM_PROCESSOR_RUNNER_NAME`, `AXIOM_PROCESSOR_TIMEOUT`, `AXIOM_PROCESSOR_SOURCE_SECRET`, `AXIOM_PROCESSOR_SOURCE_BASE_URL` | dispatcher-side env | counter | same criteria |
 | `AXIOM_RUNNER_HEALTH_INTERVAL` | dispatcher-side env | counter | same criteria |
