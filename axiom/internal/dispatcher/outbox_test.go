@@ -1221,3 +1221,63 @@ func TestOutboxRowWithoutEmbeddingRefusesRenameTransition(t *testing.T) {
 		t.Fatalf("no PUT may reach the cluster from an embedding-less row while legacy holds the corpus, got %d", puts)
 	}
 }
+
+// TestOutboxDeleteRowRefusesRenameTransition — tombstones must not bypass
+// the #352 guard: deleteDoc counts 404 as success (idempotent tombstone),
+// so against the absent canonical index (premature boot while legacy holds
+// the corpus) every delete would "succeed", the row would mark done — and
+// the window script would later copy the still-indexed chunks from the
+// legacy corpus with no tombstone left to remove them. The row must fail
+// with the window-script hint and no DELETE may reach the cluster.
+func TestOutboxDeleteRowRefusesRenameTransition(t *testing.T) {
+	h := openDispatchDB(t)
+	h.truncateFixtures(t)
+	ctx := context.Background()
+
+	_, snapID := h.seedOutboxSnapshot(t, "del-guard-key", 2, 0)
+	// deactivate — exactly the premature-boot shape: the tombstone must
+	// materialize against the index the corpus actually lives in
+	if _, err := h.pool.Exec(ctx, `UPDATE processing_snapshots SET active=false WHERE id=$1`, snapID); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	var delRowID string
+	if err := h.pool.QueryRow(ctx, `
+		INSERT INTO opensearch_outbox (snapshot_id, operation, payload)
+		VALUES ($1, 'delete', '{"operation":"delete"}'::jsonb)
+		RETURNING id::text`, snapID).Scan(&delRowID); err != nil {
+		t.Fatalf("seed delete row: %v", err)
+	}
+
+	var deletes int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodHead && r.URL.Path == "/"+search.LegacyIndexName:
+			w.WriteHeader(200) // legacy index still holds the corpus
+		case r.Method == http.MethodHead:
+			w.WriteHeader(404) // canonical index absent
+		default:
+			if r.Method == http.MethodDelete {
+				deletes++
+			}
+			w.WriteHeader(400)
+		}
+	}))
+	defer srv.Close()
+
+	d := newOutboxDispatcher(h)
+	ix := newOpenSearchClient(srv.URL, "", "", nil)
+	if err := drainOutboxOnce(ctx, d, ix); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	status, attempts, _, lastErr := outboxRowStatus(t, h, delRowID)
+	if status != "pending" || attempts != 1 {
+		t.Fatalf("delete row must fail once via the backoff path, got status=%s attempts=%d", status, attempts)
+	}
+	if lastErr == nil || !strings.Contains(*lastErr, "reindex_index_rename.sh") {
+		t.Fatalf("delete-row failure must name the window script, got %v", lastErr)
+	}
+	if deletes != 0 {
+		t.Fatalf("no DELETE may reach the cluster while legacy holds the corpus, got %d", deletes)
+	}
+}

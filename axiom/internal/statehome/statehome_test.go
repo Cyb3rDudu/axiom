@@ -184,4 +184,18 @@ func TestMigrateLogsVisibility(t *testing.T) {
 	if !strings.Contains(buf.String(), "dangling symlink") {
 		t.Fatalf("dangling legacy symlink must warn, got: %q", buf.String())
 	}
+
+	// canonical root exists but is not a usable directory (a plain file —
+	// the dangling-canonical shape logs the same warning via os.Stat error)
+	buf.Reset()
+	home = t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".axiom"), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(filepath.Join(home, ".axiom-ng"), filepath.Join(home, ".axiom")); err != nil {
+		t.Fatalf("canonical-not-a-dir migration failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "exists but is not a directory") {
+		t.Fatalf("broken canonical root must warn, got: %q", buf.String())
+	}
 }
