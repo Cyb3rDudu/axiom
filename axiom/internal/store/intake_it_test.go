@@ -637,19 +637,24 @@ func TestRevisionIntakeClaimObsoletesOnGhostSourceAndDocument(t *testing.T) {
 	claim(t)
 	assertObsoleted(t, job.ID, "REVISION_REF_UNRESOLVED")
 
-	// Ghost DOCUMENT: the source exists, the record does not — the claim
-	// resolves source first and must obsolete at the document branch.
-	// Own rendition key AND own content hash: the two ghost rows must stay
-	// identical-free under EVERY index shape, including the status-blind
-	// legacy identity index the ledger-wipe IT rebuilds (rendition+hash
-	// alone) — a shared pair would poison that IT with 23505.
+	// Ghost DOCUMENT: the source and rendition exist, the record does
+	// not — the claim resolves source first and must obsolete at the
+	// document branch. The revision KEEPS the seeded rendition key and
+	// diverges ONLY the content hash: the two ghost rows stay distinct
+	// under every index shape (the legacy status-blind rendition+hash
+	// pair differs on the hash; the active-scoped triple differs on
+	// source), so a filtered intake run cannot poison the ledger-wipe IT
+	// with 23505 — and the witness stays SHARP against false document
+	// resolution: a regression that resolves the document lookup onto
+	// any real row lets the claim continue to the hash check, which must
+	// answer CONTENT_HASH_CHANGED — the assertion below goes red instead
+	// of passing on the same REVISION_REF_UNRESOLVED.
 	docHash := revision.HashContent([]byte("ghost doc bytes"))
 	rev2 := seedRevision(srcID, docHash)
-	rev2.RenditionID = "ATTGHOSTDOC"
 	rev2.Bibliography.RecordID = "GONEDOC"
 	job2, minted2, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
 		IdempotencyKey: "ghost-doc-1", RevisionSourceID: srcID, RevisionRecordID: "GONEDOC",
-		RevisionRenditionID: "ATTGHOSTDOC", RevisionNo: "1", ContentHash: docHash,
+		RevisionRenditionID: "ATTIT1", RevisionNo: "1", ContentHash: docHash,
 		RevisionJSON: mustCanonical(t, rev2),
 	})
 	if err != nil || !minted2 {
