@@ -24,6 +24,19 @@ import (
 var librarySchemaFS embed.FS
 
 func (s *Store) ensureLibraryMigrationsTable(ctx context.Context) error {
+	// DM07 #316: privilege-free when the ledger already exists — CREATE
+	// TABLE IF NOT EXISTS still demands CREATE-on-schema even as a no-op,
+	// and the DML-only runtime role boots on a current schema without
+	// attempting any DDL. The catalog read is world-readable.
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'library_schema_migrations')`,
+	).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
 	_, err := s.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS library_schema_migrations (
 		version TEXT PRIMARY KEY,
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT now()

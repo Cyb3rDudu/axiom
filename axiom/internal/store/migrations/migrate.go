@@ -27,11 +27,23 @@ var storeSchemaFS embed.FS
 // Migrate applies every not-yet-applied Store migration to the pool's
 // database. Idempotent; safe to call at every start.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS store_schema_migrations (
-		version TEXT PRIMARY KEY,
-		applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-	)`); err != nil {
-		return fmt.Errorf("store migrations table: %w", err)
+	// DM07 #316: privilege-free when the ledger already exists — CREATE
+	// TABLE IF NOT EXISTS still demands CREATE-on-schema even as a no-op,
+	// and the DML-only runtime role boots on a current schema without
+	// attempting any DDL. The catalog read is world-readable.
+	var ledgerExists bool
+	if err := pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'store_schema_migrations')`,
+	).Scan(&ledgerExists); err != nil {
+		return fmt.Errorf("store migrations table check: %w", err)
+	}
+	if !ledgerExists {
+		if _, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS store_schema_migrations (
+			version TEXT PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`); err != nil {
+			return fmt.Errorf("store migrations table: %w", err)
+		}
 	}
 	entries, err := fs.ReadDir(storeSchemaFS, "schema")
 	if err != nil {
