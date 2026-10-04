@@ -27,6 +27,10 @@ func TestDataUsageErrors(t *testing.T) {
 		{"import two targets", []string{"import", "--component", "library", "--from", "y", "--dsn", "a", "--sqlite", "b"}, exitUsage},
 		{"import missing from", []string{"import", "--component", "library", "--dsn", "a"}, exitUsage},
 		{"verify no target", []string{"verify", "--component", "library", "--from", "y"}, exitUsage},
+		{"shadow missing source", []string{"shadow", "--component", "library", "--dsn", "a", "--out", "r"}, exitUsage},
+		{"shadow no target", []string{"shadow", "--component", "library", "--source-dsn", "s", "--out", "r"}, exitUsage},
+		{"shadow two targets", []string{"shadow", "--component", "library", "--source-dsn", "s", "--dsn", "a", "--sqlite", "b", "--out", "r"}, exitUsage},
+		{"shadow missing out", []string{"shadow", "--component", "library", "--source-dsn", "s", "--dsn", "a"}, exitUsage},
 		{"unknown component", []string{"export", "--component", "store", "--dsn", "x", "--out", "y"}, exitUsage},
 		{"positional junk", []string{"verify", "--component", "library", "--from", "y", "--dsn", "a", "junk"}, exitUsage},
 	}
@@ -67,7 +71,7 @@ func TestDataExportRuntimeFailureSanitized(t *testing.T) {
 // TestDataHelpSurface — the help text documents the data family.
 func TestDataHelpSurface(t *testing.T) {
 	h := help("axiom")
-	for _, want := range []string{"data export", "data import", "data verify", "DM03", "DM04"} {
+	for _, want := range []string{"data export", "data import", "data verify", "data shadow", "DM03", "DM04"} {
 		if !strings.Contains(h, want) {
 			t.Fatalf("help lacks %q", want)
 		}

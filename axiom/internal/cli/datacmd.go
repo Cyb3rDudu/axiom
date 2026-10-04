@@ -4,6 +4,7 @@
 //	axiom data export  --component library --dsn URL --out DIR
 //	axiom data import  --component library --from DIR (--dsn URL | --sqlite PATH) [--merge]
 //	axiom data verify  --component library --from DIR (--dsn URL | --sqlite PATH) [--json]
+//	axiom data shadow  --component library --source-dsn URL (--dsn URL | --sqlite PATH) --out REPORT [--json]
 //
 // Migration commands against mirror copies — the DSN is ALWAYS an
 // explicit flag (never ambient runtime config: these tools point at
@@ -27,7 +28,7 @@ import (
 
 func cmdData(name string, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "usage: %s data <export|import|verify> --component library [flags]\n", name)
+		fmt.Fprintf(os.Stderr, "usage: %s data <export|import|verify|shadow> --component library [flags]\n", name)
 		return exitUsage
 	}
 	switch args[0] {
@@ -37,8 +38,10 @@ func cmdData(name string, args []string) int {
 		return cmdDataImport(name, args[1:])
 	case "verify":
 		return cmdDataVerify(name, args[1:])
+	case "shadow":
+		return cmdDataShadow(name, args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "%s data: unknown subcommand %q (export | import | verify)\n", name, args[0])
+		fmt.Fprintf(os.Stderr, "%s data: unknown subcommand %q (export | import | verify | shadow)\n", name, args[0])
 		return exitUsage
 	}
 }
@@ -201,6 +204,118 @@ func digestMark(ok bool) string {
 		return "digest OK"
 	}
 	return "DIGEST MISMATCH"
+}
+
+// cmdDataShadow — the DM08 shadow-read (#317): the legacy mirror copy
+// against the imported Library copy, full data set, explicit
+// normalization allowlist, every other deviation red. Exit 1 on any
+// unexpected deviation — the cutover window's last check.
+func cmdDataShadow(name string, args []string) int {
+	var component, sourceDSN, dsn, sqlite, out string
+	var jsonOut bool
+	var maxSamples int
+	fs := flag.NewFlagSet("data shadow", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&component, "component", "", "component to operate on (library)")
+	fs.StringVar(&sourceDSN, "source-dsn", "", "PostgreSQL DSN of the legacy mirror copy (the pull-point source)")
+	fs.StringVar(&dsn, "dsn", "", "PostgreSQL DSN of the imported copy (target)")
+	fs.StringVar(&sqlite, "sqlite", "", "imported library.sqlite path (target)")
+	fs.StringVar(&out, "out", "", "shadow report JSON path")
+	fs.IntVar(&maxSamples, "max-samples", 20, "per-surface sample rows in the report")
+	fs.BoolVar(&jsonOut, "json", false, "machine-readable output")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if component != "library" {
+		fmt.Fprintf(os.Stderr, "%s data shadow: --component library is required (this build carries the library component only)\n", name)
+		return exitUsage
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "%s data shadow: unexpected argument %q\n", name, fs.Arg(0))
+		return exitUsage
+	}
+	if sourceDSN == "" || (dsn == "") == (sqlite == "") {
+		fmt.Fprintf(os.Stderr, "%s data shadow: --source-dsn and exactly one of --dsn / --sqlite are required\n", name)
+		return exitUsage
+	}
+	if out == "" {
+		fmt.Fprintf(os.Stderr, "%s data shadow: --out (report artifact path) is required — the run must leave evidence\n", name)
+		return exitUsage
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	res, err := databundle.Shadow(ctx, databundle.ShadowOptions{
+		SourceDSN: sourceDSN, DSN: dsn, SQLitePath: sqlite,
+		Out: out, MaxSamples: maxSamples,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s data shadow: %s\n", name, err)
+		return exitFailure
+	}
+	if jsonOut {
+		b, jerr := json.MarshalIndent(res, "", "  ")
+		if jerr != nil {
+			fmt.Fprintf(os.Stderr, "%s data shadow: %s\n", name, jerr)
+			return exitFailure
+		}
+		fmt.Println(string(b))
+	} else {
+		fmt.Printf("shadow: source %s @ cutoff %s → target %s (%s)\n",
+			res.SourceEngine, res.SourceCutoff, res.TargetEngine, res.TargetMode)
+		for _, t := range res.Tables {
+			switch t.Status {
+			case "skipped", "absent":
+				fmt.Printf("table %-32s %-8s %s\n", t.Table, t.Status, t.Note)
+			default:
+				fmt.Printf("table %-32s %8d compared  %8d equal  %8d normalized  %8d unexpected",
+					t.Table, t.Compared, t.Equal, t.Normalized, t.Unexpected)
+				if t.MissingOnTarget > 0 || t.ExtraOnTarget > 0 {
+					fmt.Printf("  (+%d structural: %d missing / %d extra)", t.MissingOnTarget+t.ExtraOnTarget, t.MissingOnTarget, t.ExtraOnTarget)
+				}
+				fmt.Println()
+				for _, s := range t.Samples {
+					printRowDiff(t.Table, s)
+				}
+			}
+		}
+		for _, a := range res.Allowlist {
+			if a.Applied > 0 {
+				fmt.Printf("allowlist %-20s %8d absorbed  (%s)\n", a.ID, a.Applied, a.Scope)
+			}
+		}
+		for _, w := range res.Warnings {
+			fmt.Printf("warning: %s\n", w)
+		}
+	}
+	fmt.Printf("report: %s\n", out)
+	if res.OK {
+		fmt.Printf("shadow: OK (zero unexpected deviations)\n")
+		return exitOK
+	}
+	fmt.Fprintf(os.Stderr, "%s data shadow: FAILED — unexpected deviations, see %s\n", name, out)
+	return exitFailure
+}
+
+// printRowDiff prints one sample deviation — table, key, columns and
+// per-side value digests; never row values (no-leaks discipline).
+func printRowDiff(table string, d databundle.RowDiff) {
+	switch d.Kind {
+	case "field_diff":
+		for _, f := range d.Fields {
+			rule := "UNEXPECTED"
+			if f.Rule != "" {
+				rule = "normalized: " + f.Rule
+			}
+			fmt.Printf("       diff %-32s key %s  column %s  source %s  target %s  [%s]\n",
+				table, d.Key, f.Column, f.Source, f.Target, rule)
+		}
+	default:
+		note := d.Note
+		if note == "" {
+			note = d.Kind
+		}
+		fmt.Printf("       diff %-32s key %s  %s\n", table, d.Key, note)
+	}
 }
 
 func sortedLedgers(m map[string][]string) []string {

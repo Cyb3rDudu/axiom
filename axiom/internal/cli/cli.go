@@ -451,6 +451,11 @@ Commands:
   data verify --component library --from DIR (--dsn URL | --sqlite PATH) [--json]
                                 counts, digests, FK invariants, semantic
                                 readbacks (+ PRAGMA integrity on SQLite)
+  data shadow --component library --source-dsn URL (--dsn URL | --sqlite PATH)
+                                [--out REPORT --max-samples N --json]
+                                shadow-read: legacy mirror vs imported
+                                copy, full data set, explicit allowlist;
+                                unexpected deviations red (DM08)
   --set KEY=VALUE               one-shot override for serve/doctor/config
                                 (the CLI-flag stage of the chain)
   (KG mode flags)               the legacy one-shot modes (#244) keep
