@@ -1,12 +1,12 @@
 {
   "format": "axiom-shadow-report",
   "format_version": 1,
-  "build": "axiom v0.2.1-33-g37aca2ab-dirty (commit 37aca2ab, release build)",
-  "generated_at": "2026-10-04T15:45:29.976594Z",
-  "source_cutoff": "2026-10-04T15:45:29.987411Z",
+  "build": "axiom v0.2.1-38-gea68266d (commit ea68266d, release build)",
+  "generated_at": "2026-10-04T16:56:09.391576Z",
+  "source_cutoff": "2026-10-04T16:56:09.461966Z",
   "source_engine": "postgresql",
   "target_engine": "sqlite",
-  "target_mode": "file read (frozen imported copy)",
+  "target_mode": "file read (mode=ro, query_only — frozen imported copy; no migration, no writes)",
   "tables": [
     {
       "surface": "sources",

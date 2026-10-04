@@ -1,11 +1,12 @@
 {
   "format": "axiom-shadow-report",
   "format_version": 1,
-  "build": "axiom v0.2.1-33-g37aca2ab-dirty (commit 37aca2ab, release build)",
-  "generated_at": "2026-10-04T15:45:29.666302Z",
-  "source_cutoff": "2026-10-04T15:45:29.676730Z",
+  "build": "axiom v0.2.1-38-gea68266d (commit ea68266d, release build)",
+  "generated_at": "2026-10-04T16:55:56.674014Z",
+  "source_cutoff": "2026-10-04T16:55:56.744278Z",
   "source_engine": "postgresql",
   "target_engine": "postgresql",
+  "target_cutoff": "2026-10-04T16:55:56.751051Z",
   "target_mode": "snapshot read (REPEATABLE READ READ ONLY)",
   "tables": [
     {

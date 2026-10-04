@@ -1,11 +1,12 @@
 {
   "format": "axiom-shadow-report",
   "format_version": 1,
-  "build": "axiom v0.2.1-33-g37aca2ab-dirty (commit 37aca2ab, release build)",
-  "generated_at": "2026-10-04T15:44:30.105160Z",
-  "source_cutoff": "2026-10-04T15:44:30.116139Z",
+  "build": "axiom v0.2.1-38-gea68266d (commit ea68266d, release build)",
+  "generated_at": "2026-10-04T16:56:09.060194Z",
+  "source_cutoff": "2026-10-04T16:56:09.130303Z",
   "source_engine": "postgresql",
   "target_engine": "postgresql",
+  "target_cutoff": "2026-10-04T16:56:09.137230Z",
   "target_mode": "snapshot read (REPEATABLE READ READ ONLY)",
   "tables": [
     {
@@ -36,7 +37,7 @@
       "extra_on_target": 0,
       "samples": [
         {
-          "key": "\"6080fdae-f774-4c29-a651-cdf366fe6c1c\"",
+          "key": "6080fdae-f774-4c29-a651-cdf366fe6c1c",
           "kind": "field_diff",
           "fields": [
             {
@@ -90,7 +91,7 @@
       "extra_on_target": 0,
       "samples": [
         {
-          "key": "\"628ba837-1399-4230-8969-add6985961f7\"",
+          "key": "628ba837-1399-4230-8969-add6985961f7",
           "kind": "field_diff",
           "fields": [
             {
