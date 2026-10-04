@@ -38,7 +38,6 @@ func openPG(ctx context.Context, dsn string) (*pgDB, error) {
 
 func (p *pgDB) Close() { p.pool.Close() }
 
-// engineVersion is the manifest's engine identity line.
 // engineVersionInTx reads the identity INSIDE the export snapshot (the
 // manifest's provenance must describe the same database state as the
 // exported rows).
@@ -58,8 +57,6 @@ func engineVersionQ(ctx context.Context, q pgQuerier) (string, error) {
 	return v, nil
 }
 
-// migrationLedgers snapshots every migration ledger that exists — the
-// manifest's migration-state provenance.
 // migrationLedgersInTx snapshots every ledger INSIDE the export
 // snapshot (same-state guarantee as the rows).
 func (p *pgDB) migrationLedgersInTx(ctx context.Context, q pgQuerier) (map[string][]string, error) {

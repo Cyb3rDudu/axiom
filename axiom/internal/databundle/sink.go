@@ -151,25 +151,22 @@ func (s *pgSink) rowByPK(ctx context.Context, table string, cols []ColumnRef, ke
 
 func (s *pgSink) foreignKeys(ctx context.Context, table string) ([]fkRef, error) {
 	// pg_constraint's conkey/confkey are PARALLEL arrays — the k-th child
-	// column references the k-th parent column. WITH ORDINALITY keeps
-	// the pairing (a plain key_column_usage × constraint_column_usage
-	// join would cross-product composite FKs into wrong pairs).
+	// column references the k-th parent column. WITH ORDINALITY + array_agg
+	// keeps the pairing (a plain key_column_usage × constraint_column_usage
+	// join would cross-product composite FKs into wrong pairs); arrays (not
+	// delimited strings) leave identifier spelling a non-question.
 	rows, err := s.db.pool.Query(ctx, `
-		SELECT c.conname, rt.relname, cols.names, refcols.names
+		SELECT c.conname, rt.relname,
+		       ARRAY(SELECT a.attname FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+		             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+		             ORDER BY k.ord) AS cols,
+		       ARRAY(SELECT a.attname FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
+		             JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum
+		             ORDER BY k.ord) AS refcols
 		FROM pg_constraint c
 		JOIN pg_class ct ON ct.oid = c.conrelid
 		JOIN pg_class rt ON rt.oid = c.confrelid
 		JOIN pg_namespace n ON n.oid = c.connamespace
-		CROSS JOIN LATERAL (
-		  SELECT string_agg(a.attname, ',' ORDER BY k.ord) AS names
-		  FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
-		  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
-		) cols
-		CROSS JOIN LATERAL (
-		  SELECT string_agg(a.attname, ',' ORDER BY k.ord) AS names
-		  FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
-		  JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum
-		) refcols
 		WHERE c.contype = 'f' AND n.nspname = current_schema() AND ct.relname = $1
 		ORDER BY c.conname`, table)
 	if err != nil {
@@ -179,12 +176,9 @@ func (s *pgSink) foreignKeys(ctx context.Context, table string) ([]fkRef, error)
 	var out []fkRef
 	for rows.Next() {
 		var r fkRef
-		var cols, refcols string
-		if err := rows.Scan(&r.Constraint, &r.RefTable, &cols, &refcols); err != nil {
+		if err := rows.Scan(&r.Constraint, &r.RefTable, &r.Columns, &r.RefColumns); err != nil {
 			return nil, err
 		}
-		r.Columns = strings.Split(cols, ",")
-		r.RefColumns = strings.Split(refcols, ",")
 		if len(r.Columns) != len(r.RefColumns) {
 			return nil, fmt.Errorf("fk %s: unpaired column lists (%d child, %d parent)", r.Constraint, len(r.Columns), len(r.RefColumns))
 		}

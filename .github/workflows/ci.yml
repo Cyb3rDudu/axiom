@@ -149,16 +149,14 @@ jobs:
       - name: "library repository contract suite (engine: postgres + sqlite)"
         run: go test -count=1 -v ./internal/library/reposuite ./internal/library/sqlite ./internal/library/pglib -run 'TestRepositoryContractSuite|TestSkipGuardProbes'
       # DM03/DM04 (#312/#313): the bundle evidence chain needs the real
-      # PostgreSQL — PG→PG identity, digest/bit-flip teeth, enum teeth,
-      # in-flight verbatim, retry sonde, and the import under the DM07
-      # DML-only role (AXIOM_REQUIRE_DRILL turns skips into failures —
-      # this leg owns a disposable service, the drill must run).
+      # PostgreSQL — the WHOLE package runs (PG-gated tests execute,
+      # incl. the composite-FK pairing witness; unit tests re-run as a
+      # cross-check). AXIOM_REQUIRE_DRILL turns skips into failures —
+      # this leg owns a disposable service, the drill must run.
       - name: "data bundle roundtrip (engine: postgres)"
         env:
           AXIOM_REQUIRE_DRILL: "1"
-        run: >-
-          go test -count=1 -v ./internal/databundle
-          -run 'TestBundlePostgres|TestImportUnderDMLRole'
+        run: go test -count=1 -v ./internal/databundle
 
   library-engine-sqlite:
     runs-on: ubuntu-latest
@@ -171,7 +169,10 @@ jobs:
       # contract-suite leg must run green with no PostgreSQL anywhere in
       # the environment.
       - name: "library repository contract suite (engine: sqlite, PG-free)"
-        run: go test -count=1 -v ./internal/library/reposuite ./internal/library/sqlite -run 'TestRepositoryContractSuite|TestSkipGuardProbes'
+        run: >-
+          go test -count=1 -v
+          ./internal/library/reposuite ./internal/library/sqlite
+          -run 'TestRepositoryContractSuite|TestSkipGuardProbes'
       # DM03/DM04: the bundle's SQLite leg must run green with NO
       # PostgreSQL anywhere (bundle→library.sqlite import, verify with
       # PRAGMA integrity, retry sonde, the imported file passing the
