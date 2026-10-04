@@ -13,12 +13,13 @@ import logging
 
 import uvicorn
 
-from .config import load_settings
+from .config import assert_credential_free_env, load_settings
 
 _LOG_FORMAT = "%(asctime)s [compute-worker] %(levelname)s %(name)s: %(message)s"
 
 
 def main() -> None:
+    assert_credential_free_env()
     s = load_settings()
     logging.basicConfig(
         level=getattr(logging, s.log_level.upper(), logging.INFO), format=_LOG_FORMAT

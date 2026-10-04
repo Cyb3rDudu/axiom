@@ -91,6 +91,41 @@ def _env_roots(name: str) -> tuple[str, ...]:
     return tuple(p for p in raw.split(os.pathsep) if p)
 
 
+# DM07 #316 — the compute worker is credential-free by contract: it
+# talks HTTP only (runner.py performs no database access). A worker
+# environment that carries one of the KNOWN credential variable names
+# refuses to boot — names are printed, values never (the same
+# no-env-dump rule the Go-side worker check follows).
+CREDENTIAL_ENV_NAMES = (
+    "AXIOM_DATABASE_URL",
+    "AXIOM_STORE_DATABASE_URL",
+    "AXIOM_LIBRARY_DATABASE_URL",
+    "AXIOM_WS_SECRET",
+    "AXIOM_OPENSEARCH_PASSWORD",
+    "AXIOM_PROCESSOR_SOURCE_SECRET",
+    "AXIOM_COMPUTE_WORKER_SOURCE_SECRET",
+)
+
+
+def assert_credential_free_env() -> None:
+    """Refuse to start when a known credential variable is present.
+
+    The refusal names the offending KEYS and the fix (strip the worker
+    environment to the AXIOM_PROCESSOR_* contract); it never echoes a
+    value — even a wrongly-placed credential must not leak into logs.
+    """
+
+    present = [name for name in CREDENTIAL_ENV_NAMES if os.getenv(name)]
+    if present:
+        raise SystemExit(
+            "credential variables present in the compute-worker environment: "
+            + ", ".join(present)
+            + " — the worker is credential-free by contract (#316); feed only "
+            "AXIOM_PROCESSOR_* vars (see config.py). Values are never printed: "
+            "remove the variables from the worker's service environment."
+        )
+
+
 def load_settings() -> Settings:
     return Settings(
         bind_addr=os.getenv("AXIOM_PROCESSOR_BIND_ADDR", "127.0.0.1"),
