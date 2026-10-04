@@ -21,7 +21,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math/big"
 	"os"
 	"slices"
@@ -261,9 +263,12 @@ func openSQLiteShadow(path string) (*sqliteSink, error) {
 		return nil, fmt.Errorf("data bundle: a SQLite path is required")
 	}
 	if _, err := os.Stat(path); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("cannot stat shadow target %s: %w", path, err)
+		}
 		return nil, fmt.Errorf("shadow target %s does not exist — the shadow reads a frozen imported copy, it never creates one", path)
 	}
-	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)&_pragma=query_only(1)", path, 5000))
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)&_pragma=query_only(1)", path, sqliteBusyTimeoutMs))
 	if err != nil {
 		return nil, fmt.Errorf("open read-only: %w", err)
 	}
@@ -400,9 +405,12 @@ func Shadow(ctx context.Context, opts ShadowOptions) (rep *ShadowReport, err err
 	rep.OK = false
 	comparedAny := false
 	// An aborted run still leaves its evidence: when --out is set and
-	// the run fails before the regular write, a best-effort failure
-	// report lands at the artifact path (OK=false, the abort reason in
-	// the warnings — the cutover window keeps its paper trail).
+	// the run fails after this point, a best-effort failure report
+	// lands at the artifact path (OK=false, the abort reason in the
+	// warnings — the cutover window keeps its paper trail). Failures
+	// BEFORE the report exists (argument validation, source open)
+	// deliberately write nothing: loud stderr/exit instead of
+	// destroying a previous run's artifact.
 	written := false
 	defer func() {
 		if err == nil || opts.Out == "" || written || rep == nil {
@@ -420,7 +428,7 @@ func Shadow(ctx context.Context, opts ShadowOptions) (rep *ShadowReport, err err
 	if opts.DSN != "" {
 		tgtSnap, err = openPGSnapshot(ctx, opts.DSN)
 		if err != nil {
-			return nil, fmt.Errorf("target open: %w", err)
+			return rep, fmt.Errorf("target open: %w", err)
 		}
 		defer tgtSnap.close()
 		rep.TargetEngine = "postgresql"
@@ -429,7 +437,7 @@ func Shadow(ctx context.Context, opts ShadowOptions) (rep *ShadowReport, err err
 	} else {
 		tgtSQLite, err = openSQLiteShadow(opts.SQLitePath)
 		if err != nil {
-			return nil, fmt.Errorf("target open: %w", err)
+			return rep, fmt.Errorf("target open: %w", err)
 		}
 		defer tgtSQLite.close()
 		rep.TargetEngine = "sqlite"

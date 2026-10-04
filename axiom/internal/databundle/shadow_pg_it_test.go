@@ -85,8 +85,9 @@ func TestShadowPostgresGreen(t *testing.T) {
 		summary, _ := json.MarshalIndent(rep.Tables, "", "  ")
 		t.Fatalf("shadow not OK:\n%s", summary)
 	}
-	if rep.SourceCutoff == "" || rep.TargetEngine != "postgresql" {
-		t.Fatalf("report provenance incomplete: %+v", rep)
+	if rep.SourceCutoff == "" || rep.TargetEngine != "postgresql" || rep.TargetCutoff == "" {
+		t.Fatalf("report provenance incomplete: source %q engine %q target cutoff %q",
+			rep.SourceCutoff, rep.TargetEngine, rep.TargetCutoff)
 	}
 
 	// every library table compared, full data set — not a sample
@@ -287,6 +288,7 @@ func TestShadowPostgresAbsentAtSourceRed(t *testing.T) {
 func TestShadowPostgresDuplicateKeyAborts(t *testing.T) {
 	src, tgt := shadowPGFixture(t)
 	ctx := context.Background()
+	abortArtifact := filepath.Join(t.TempDir(), "abort.json")
 
 	pool := mustPool(t, src)
 	defer pool.Close()
@@ -299,12 +301,34 @@ func TestShadowPostgresDuplicateKeyAborts(t *testing.T) {
 		t.Fatalf("insert duplicate: %v", err)
 	}
 
-	_, err := Shadow(ctx, ShadowOptions{SourceDSN: src, DSN: tgt})
+	_, err := Shadow(ctx, ShadowOptions{SourceDSN: src, DSN: tgt, Out: abortArtifact})
 	if err == nil {
 		t.Fatal("duplicate stable key did not abort the run")
 	}
 	if !strings.Contains(err.Error(), "zotero_selections") || !strings.Contains(err.Error(), "not unique") {
 		t.Fatalf("error does not name the table and the non-uniqueness: %v", err)
+	}
+	// the abort leaves its paper trail: a parseable failure report at
+	// the artifact path (OK=false, the abort reason in the warnings)
+	b, err := os.ReadFile(abortArtifact)
+	if err != nil {
+		t.Fatalf("aborted run left no artifact at %s: %v", abortArtifact, err)
+	}
+	var fromDisk ShadowReport
+	if err := json.Unmarshal(b, &fromDisk); err != nil {
+		t.Fatalf("abort artifact not JSON: %v", err)
+	}
+	if fromDisk.OK {
+		t.Fatal("abort artifact claims OK")
+	}
+	aborted := false
+	for _, w := range fromDisk.Warnings {
+		if strings.HasPrefix(w, "shadow aborted:") {
+			aborted = true
+		}
+	}
+	if !aborted {
+		t.Fatalf("abort artifact lacks the abort warning: %v", fromDisk.Warnings)
 	}
 }
 

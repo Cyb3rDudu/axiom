@@ -21,10 +21,11 @@ import (
 
 func jsonMarshalIndent(v any) ([]byte, error) { return json.MarshalIndent(v, "", "  ") }
 
-func TestShadowSQLite(t *testing.T) {
-	if os.Getenv("AXIOM_TEST_DATABASE_URL") == "" {
-		t.Skip("AXIOM_TEST_DATABASE_URL not set — PG-gated shadow tests skip")
-	}
+// shadowSQLiteFixture builds the SQLite drill pair: a seeded source
+// mirror and a bundle-fed library.sqlite (the DM04 rehearsal shape,
+// SQLite target).
+func shadowSQLiteFixture(t *testing.T) (src, dbPath string) {
+	t.Helper()
 	src, cleanupSrc := scratchDB(t, "shlsrc")
 	t.Cleanup(cleanupSrc)
 	seedSource(t, src)
@@ -34,10 +35,20 @@ func TestShadowSQLite(t *testing.T) {
 	if _, err := Export(ctx, "library", ExportOptions{DSN: src, Out: bundle, Build: "axiom v0.2.2-it (commit test, release build)"}); err != nil {
 		t.Fatalf("export: %v", err)
 	}
-	dbPath := filepath.Join(t.TempDir(), "library.sqlite")
+	dbPath = filepath.Join(t.TempDir(), "library.sqlite")
 	if _, err := Import(ctx, ImportOptions{From: bundle, SQLitePath: dbPath}); err != nil {
 		t.Fatalf("import: %v", err)
 	}
+	return src, dbPath
+}
+
+func TestShadowSQLite(t *testing.T) {
+	if os.Getenv("AXIOM_TEST_DATABASE_URL") == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set — PG-gated shadow tests skip")
+	}
+	src, dbPath := shadowSQLiteFixture(t)
+
+	ctx := context.Background()
 
 	// green: skips on the legacy namespace, full compare on library_*
 	rep, err := Shadow(ctx, ShadowOptions{SourceDSN: src, SQLitePath: dbPath})
@@ -124,13 +135,37 @@ func TestShadowSQLiteReadOnlyOpen(t *testing.T) {
 
 	// missing path: loud error, no file created
 	missing := filepath.Join(t.TempDir(), "does-not-exist.sqlite")
-	if _, err := Shadow(ctx, ShadowOptions{SourceDSN: src, SQLitePath: missing}); err == nil {
+	missingArtifact := filepath.Join(t.TempDir(), "missing.json")
+	if _, err := Shadow(ctx, ShadowOptions{SourceDSN: src, SQLitePath: missing, Out: missingArtifact}); err == nil {
 		t.Fatal("missing target file passed silently — the shadow must not create its evidence source")
 	} else if !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("missing-file error does not name the problem: %v", err)
 	}
 	if _, serr := os.Stat(missing); !os.IsNotExist(serr) {
 		t.Fatal("the failed shadow run left a file behind")
+	}
+	// the target-open abort still leaves its paper trail: the failure
+	// happens after the report exists, so --out gets the failure
+	// report (OK=false, the abort reason naming the missing path)
+	b, rerr := os.ReadFile(missingArtifact)
+	if rerr != nil {
+		t.Fatalf("target-open abort left no artifact at %s: %v", missingArtifact, rerr)
+	}
+	var fromDisk ShadowReport
+	if err := json.Unmarshal(b, &fromDisk); err != nil {
+		t.Fatalf("abort artifact not JSON: %v", err)
+	}
+	if fromDisk.OK {
+		t.Fatal("target-open abort artifact claims OK")
+	}
+	sawAbort := false
+	for _, w := range fromDisk.Warnings {
+		if strings.HasPrefix(w, "shadow aborted:") && strings.Contains(w, missing) {
+			sawAbort = true
+		}
+	}
+	if !sawAbort {
+		t.Fatalf("abort artifact lacks the missing-path reason: %v", fromDisk.Warnings)
 	}
 
 	// schema-stand drift: an EMPTY file (older than any library schema)
@@ -157,8 +192,14 @@ func TestShadowSQLiteReadOnlyOpen(t *testing.T) {
 		}
 		red++
 	}
-	if red != 9 { // the library_* namespace (F12)
-		t.Fatalf("structural reds: %d, want 9", red)
+	want := 0                            // the library_* namespace (F12), derived — namespace
+	for _, spec := range LibraryTables { // growth updates the test
+		if sqliteCarried(spec.Name) {
+			want++
+		}
+	}
+	if red != want {
+		t.Fatalf("structural reds: %d, want %d", red, want)
 	}
 	// and the file is STILL empty of schema — no migration ran
 	db, err := sql.Open("sqlite", "file:"+empty+"?mode=ro")
@@ -183,18 +224,8 @@ func TestShadowSQLiteSourceGateBeforeScope(t *testing.T) {
 	if os.Getenv("AXIOM_TEST_DATABASE_URL") == "" {
 		t.Skip("AXIOM_TEST_DATABASE_URL not set — PG-gated shadow tests skip")
 	}
-	src, cleanupSrc := scratchDB(t, "shlsg")
-	t.Cleanup(cleanupSrc)
-	seedSource(t, src)
+	src, dbPath := shadowSQLiteFixture(t)
 	ctx := context.Background()
-	bundle := t.TempDir()
-	if _, err := Export(ctx, "library", ExportOptions{DSN: src, Out: bundle, Build: "axiom v0.2.2-it (commit test, release build)"}); err != nil {
-		t.Fatalf("export: %v", err)
-	}
-	dbPath := filepath.Join(t.TempDir(), "library.sqlite")
-	if _, err := Import(ctx, ImportOptions{From: bundle, SQLitePath: dbPath}); err != nil {
-		t.Fatalf("import: %v", err)
-	}
 
 	pool := mustPool(t, src)
 	defer pool.Close()

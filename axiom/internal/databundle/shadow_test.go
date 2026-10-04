@@ -137,12 +137,15 @@ func TestShadowAllowlistDocumented(t *testing.T) {
 		}
 	}
 	// classification may only emit listed rule ids — the probe pairs
-	// are DIFFERING values that actually trigger rules where rules
-	// exist (an emitting pair proves the closed-world check can fire)
+	// trigger rules where rules exist (an emitting pair proves the
+	// closed-world check can fire; the timestamp pair is identical-form
+	// because the canonical grammar has no same-instant different-
+	// spelling form — the classifier has no equality guard, callers own
+	// equality)
 	emits := map[string]string{
 		TagNumeric:   "0.850|0.85",
 		TagFloat64:   "1e-06|0.000001",
-		TagTimestamp: "2026-10-05T09:00:00.000001Z|2026-10-05T09:00:00.000001Z",
+		TagTimestamp: `"2026-10-05T09:00:00.000001Z"|"2026-10-05T09:00:00.000001Z"`,
 		TagJSONB:     `{"n":1e3}|{"n":1000}`,
 		TagText:      "a|b",
 	}
@@ -235,6 +238,19 @@ func TestCompareRows(t *testing.T) {
 	// field diff (x), the missing key (gone) and the extra key (extra)
 	if len(sr.Samples) != 3 {
 		t.Fatalf("samples: %+v", sr.Samples)
+	}
+
+	// the cap bounds the samples without touching the counts
+	capped := SurfaceResult{Samples: []RowDiff{}}
+	if err := compareRows(&capped, cols, src, tgt, 1, newShadowAllowlist()); err != nil {
+		t.Fatal(err)
+	}
+	if len(capped.Samples) != 1 {
+		t.Fatalf("capped samples: %+v", capped.Samples)
+	}
+	if capped.Compared != sr.Compared || capped.Unexpected != sr.Unexpected ||
+		capped.MissingOnTarget != sr.MissingOnTarget || capped.ExtraOnTarget != sr.ExtraOnTarget {
+		t.Fatalf("cap changed counts: capped %+v vs full %+v", capped, sr)
 	}
 
 	// empty-object guard: a null line must not compare "equal"

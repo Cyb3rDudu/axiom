@@ -234,6 +234,11 @@ type sqliteSink struct {
 	db *sql.DB
 }
 
+// sqliteBusyTimeoutMs bounds how long a sqlite open waits on a
+// competing writer before failing — shared by the import sink and the
+// shadow's read-only target open.
+const sqliteBusyTimeoutMs = 5000
+
 // openSQLiteSink opens (creating + migrating on first use) the Library
 // SQLite file with the engine's operating pragmas, then hands the
 // import a raw single-writer handle. Migration reuse: the component's
@@ -250,7 +255,7 @@ func openSQLiteSink(ctx context.Context, path string) (*sqliteSink, error) {
 		return nil, err
 	}
 	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(%d)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_txlock=immediate",
-		path, 5000)
+		path, sqliteBusyTimeoutMs)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
