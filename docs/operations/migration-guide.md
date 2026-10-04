@@ -548,7 +548,7 @@ train once the cutover rehearsals are done; until then there is **no
 operator action** — and nothing in this guide depends on it.
 
 The bundle format and the Library data commands HAVE shipped (DM03/DM04,
-#312/#313):
+#312/#313), and so has the shadow-read comparison (DM08, #317):
 
 ```bash
 # write a bundle from a source database (read-only, one snapshot):
@@ -562,6 +562,17 @@ axiom data import --component library --from bundle/ --sqlite ~/.axiom/library.s
 # verify: per-table counts + canonical digests, FK-invariant scans,
 # semantic envelope readbacks, PRAGMA integrity on SQLite:
 axiom data verify --component library --from bundle/ --dsn "$TARGET_URL" [--json]
+
+# shadow-read (DM08): the legacy mirror copy against the imported
+# copy, FULL data set, explicit normalization allowlist — every other
+# deviation red; exit 0 only on zero unexpected deviations:
+axiom data shadow --component library \
+  --source-dsn "$LEGACY_MIRROR_URL" --dsn "$IMPORTED_URL" \
+  --out shadow-report.json
+# or against an imported library.sqlite:
+axiom data shadow --component library \
+  --source-dsn "$LEGACY_MIRROR_URL" --sqlite ~/.axiom/library.sqlite \
+  --out shadow-report.json
 ```
 
 Properties that matter to an operator:
@@ -592,6 +603,39 @@ The SQLite target additionally proves `PRAGMA integrity_check` and
 Library repository contract suite (F12 engine matrix). The dev
 rehearsal against a fresh production mirror copy — export → import →
 verify, all green — is documented in #313.
+
+**Shadow-read properties (DM08 #317):**
+
+- **Deterministic by pull point.** The legacy side reads a restored
+  mirror copy pinned to one `REPEATABLE READ READ ONLY` snapshot (the
+  cutoff is recorded in the report); the imported side derives from
+  the same pull through the bundle. Both sides out of one pull = a
+  re-runnable comparison, which is why the cutover window's last
+  check is this same command.
+- **Full corpus, not a sample.** Every Library table compares over
+  every stable key: records, collections, renditions, selections,
+  repair readback, raw envelopes — plus the acquisition ledgers
+  (imports, events, steps, identifiers, provenance, revisions,
+  anchors, audit, leases). Structural deviations (a stable key on one
+  side only, a missing table, a drifted column set) are red.
+- **Explicit allowlist, everything else red.** Approved normalizations
+  are a documented, reviewed list — lexical number spellings
+  (`numeric-value`, `float-value`, `json-number-value`) and the
+  timestamp-instant belt — each absorption counted and sampled in the
+  report. Read-time canonicalization (UTC µs timestamps,
+  permutation-stable JSON, boolean folding, UUID case) applies to both
+  sides by construction. **No id-remap entry exists on purpose**: the
+  import preserves stable-key ids verbatim, so a differing id is an
+  unexpected diff.
+- **No-leaks report.** The artifact carries tables, columns, counts,
+  stable-key identifiers and per-side value digests — never row
+  values, never DSNs.
+- **Sonde teeth, in CI and rehearsed on a real corpus:** an injected
+  semantic deviation (a changed title, a changed envelope value) goes
+  red; a pure numeric-spelling difference is absorbed and counted as
+  normalized — the bounds of the allowlist are witnessed, not
+  assumed. The dev rehearsal artifacts live in
+  `docs/diagnostics/2026-10-04-shadow-read-dm08.md`.
 
 ## Clean-machine walkthrough
 

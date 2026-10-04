@@ -1,0 +1,88 @@
+# DM08 shadow-read rehearsal: legacy mirror vs imported copy, full corpus
+
+Date: 2026-10-04  
+Scope: DM08 (#317) — shadow-read and semantic comparison, dev rehearsal  
+Result: full-corpus run zero unexpected deviations; injected-deviation sonde red; SQLite leg green under the F12 namespace rule
+
+## Procedure (release-validation pull shape)
+
+1. **Pull point:** read-only `pg_dump` of the production database →
+   restored mirror copy (the legacy side of the comparison; production
+   itself untouched, still serving).
+2. **Bundle:** `axiom data export --component library` from the mirror
+   (one REPEATABLE READ READ ONLY snapshot; 19 tables, 2,951 rows —
+   12 sources, 982 items, 59 collections, 563 item_collections,
+   370 documents, 443 attachments, 1 selection, 48 repair cases,
+   112 write-audit rows, 361 source revisions).
+3. **Imported copy:** schema-only restore of the same pull →
+   `axiom data import --component library` (data-only, 2,951 inserted,
+   0 idempotent skips).
+4. **Shadow:** `axiom data shadow --component library` — source mirror
+   vs imported copy, both sides read through pinned snapshots (the
+   source cutoff is recorded in the report; determinism comes from the
+   shared pull point).
+
+## Green run (the acceptance shape)
+
+2,951 rows compared across all 19 tables — **2,951 equal, 0 normalized,
+0 unexpected, 0 structural**. Exit 0.
+
+Artifact: [`data/dm08-shadow-report.json`](data/dm08-shadow-report.json)
+
+## Sonde (the teeth)
+
+Two semantic deviations injected into the **imported copy**:
+
+- `zotero_documents.title` of one record gained a suffix,
+- a `title` value inside one `zotero_items.raw_data` envelope replaced.
+
+Both surfaced as `field_diff` rows with table, stable key, column and
+per-side value digests, classified `UNEXPECTED` (no allowlist rule
+absorbed them), run verdict **red**, exit 1.
+
+Artifact: [`data/dm08-shadow-report-sonde.json`](data/dm08-shadow-report-sonde.json)
+
+```
+table zotero_items      982 compared  981 equal  1 unexpected
+  key 6080fdae…  column raw_data  source 279ede179676  target 50c588f7974d  [UNEXPECTED]
+table zotero_documents  370 compared  369 equal  1 unexpected
+  key 628ba837…  column title      source 21c7f3c5fb79  target 57d083099c8e  [UNEXPECTED]
+```
+
+## SQLite leg (F12 namespace rule)
+
+The same bundle imported into a `library.sqlite` and shadowed against
+the same source: the `library_*` namespace compares fully (361 source
+revisions equal), the 10 legacy-mirror surfaces report `skipped` with
+the scope note (F12: the legacy mirror set lands on PostgreSQL targets
+only) — a documented scope fact, not a deviation.
+
+Artifact: [`data/dm08-shadow-report-sqlite.json`](data/dm08-shadow-report-sqlite.json)
+
+## The normalization surface
+
+Read-time canonicalization (applies to both sides by construction,
+differences of these kinds never surface): timestamps to UTC µs form,
+jsonb to permutation-stable canonical JSON, booleans folded from
+SQLite 0/1, UUIDs lowercased, numerics as verbatim decimal tokens.
+
+Comparison-time allowlist (every absorption counted and sampled in the
+report; extending the list requires review):
+
+| rule | scope | absorbs |
+| --- | --- | --- |
+| `numeric-value` | numeric columns | lexical spellings of the same rational (0.850 vs 0.85) |
+| `float-value` | float8 columns | lexical spellings of the same double |
+| `timestamp-instant` | timestamps | same instant, different precision (belt) |
+| `json-number-value` | inside jsonb | value-equal number tokens (engine re-rendering) |
+
+**No id-remap entry exists, deliberately:** the DM04 import preserves
+stable-key ids verbatim, so internal ids are not re-minted across the
+migration — a differing id is an unexpected diff. The rehearsal
+confirms it: every id compared equal on the real corpus.
+
+The lexical bounds are witnessed in CI
+(`TestShadowPostgresLexicalAbsorbed`): a pure numeric-spelling
+difference on the legacy side is absorbed and counted `normalized`,
+while a real value change on the same column goes red — the allowlist
+absorbs spelling, never semantics.

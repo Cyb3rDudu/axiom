@@ -1,0 +1,362 @@
+{
+  "format": "axiom-shadow-report",
+  "format_version": 1,
+  "build": "axiom v0.2.1-33-g37aca2ab-dirty (commit 37aca2ab, release build)",
+  "generated_at": "2026-10-04T15:44:30.105160Z",
+  "source_cutoff": "2026-10-04T15:44:30.116139Z",
+  "source_engine": "postgresql",
+  "target_engine": "postgresql",
+  "target_mode": "snapshot read (REPEATABLE READ READ ONLY)",
+  "tables": [
+    {
+      "surface": "sources",
+      "table": "zotero_sources",
+      "status": "compared",
+      "source_rows": 12,
+      "target_rows": 12,
+      "compared": 12,
+      "equal": 12,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "raw-envelopes",
+      "table": "zotero_items",
+      "status": "compared",
+      "source_rows": 982,
+      "target_rows": 982,
+      "compared": 982,
+      "equal": 981,
+      "normalized": 0,
+      "unexpected": 1,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": [
+        {
+          "key": "\"6080fdae-f774-4c29-a651-cdf366fe6c1c\"",
+          "kind": "field_diff",
+          "fields": [
+            {
+              "column": "raw_data",
+              "source_digest": "279ede179676",
+              "target_digest": "50c588f7974d"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface": "collections",
+      "table": "zotero_collections",
+      "status": "compared",
+      "source_rows": 59,
+      "target_rows": 59,
+      "compared": 59,
+      "equal": 59,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "collections",
+      "table": "zotero_item_collections",
+      "status": "compared",
+      "source_rows": 563,
+      "target_rows": 563,
+      "compared": 563,
+      "equal": 563,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "records",
+      "table": "zotero_documents",
+      "status": "compared",
+      "source_rows": 370,
+      "target_rows": 370,
+      "compared": 370,
+      "equal": 369,
+      "normalized": 0,
+      "unexpected": 1,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": [
+        {
+          "key": "\"628ba837-1399-4230-8969-add6985961f7\"",
+          "kind": "field_diff",
+          "fields": [
+            {
+              "column": "title",
+              "source_digest": "21c7f3c5fb79",
+              "target_digest": "57d083099c8e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "surface": "renditions",
+      "table": "zotero_attachments",
+      "status": "compared",
+      "source_rows": 443,
+      "target_rows": 443,
+      "compared": 443,
+      "equal": 443,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "selections",
+      "table": "zotero_selections",
+      "status": "compared",
+      "source_rows": 1,
+      "target_rows": 1,
+      "compared": 1,
+      "equal": 1,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "selections",
+      "table": "zotero_collection_selections",
+      "status": "compared",
+      "source_rows": 0,
+      "target_rows": 0,
+      "compared": 0,
+      "equal": 0,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "repair-readback",
+      "table": "repair_cases",
+      "status": "compared",
+      "source_rows": 48,
+      "target_rows": 48,
+      "compared": 48,
+      "equal": 48,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "legacy-write-audit",
+      "table": "zotero_write_audit",
+      "status": "compared",
+      "source_rows": 112,
+      "target_rows": 112,
+      "compared": 112,
+      "equal": 112,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "library-acquisition",
+      "table": "library_imports",
+      "status": "compared",
+      "source_rows": 0,
+      "target_rows": 0,
+      "compared": 0,
+      "equal": 0,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "library-acquisition",
+      "table": "library_import_events",
+      "status": "compared",
+      "source_rows": 0,
+      "target_rows": 0,
+      "compared": 0,
+      "equal": 0,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "library-acquisition",
+      "table": "library_import_steps",
+      "status": "compared",
+      "source_rows": 0,
+      "target_rows": 0,
+      "compared": 0,
+      "equal": 0,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "library-acquisition",
+      "table": "library_external_identifiers",
+      "status": "compared",
+      "source_rows": 0,
+      "target_rows": 0,
+      "compared": 0,
+      "equal": 0,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "library-acquisition",
+      "table": "library_metadata_provenance",
+      "status": "compared",
+      "source_rows": 0,
+      "target_rows": 0,
+      "compared": 0,
+      "equal": 0,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "library-acquisition",
+      "table": "library_source_revisions",
+      "status": "compared",
+      "source_rows": 361,
+      "target_rows": 361,
+      "compared": 361,
+      "equal": 361,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "library-acquisition",
+      "table": "library_write_audit",
+      "status": "compared",
+      "source_rows": 0,
+      "target_rows": 0,
+      "compared": 0,
+      "equal": 0,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "library-acquisition",
+      "table": "library_provider_anchors",
+      "status": "compared",
+      "source_rows": 0,
+      "target_rows": 0,
+      "compared": 0,
+      "equal": 0,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    },
+    {
+      "surface": "library-acquisition",
+      "table": "library_writer_leases",
+      "status": "compared",
+      "source_rows": 0,
+      "target_rows": 0,
+      "compared": 0,
+      "equal": 0,
+      "normalized": 0,
+      "unexpected": 0,
+      "missing_on_target": 0,
+      "extra_on_target": 0,
+      "samples": []
+    }
+  ],
+  "canonicalization": [
+    {
+      "id": "timestamp-utc-micros",
+      "scope": "column tag timestamp",
+      "justification": "Timestamps encode to UTC RFC3339 with fixed microseconds on both engines; timezone rendering and sub-microsecond precision differences are not semantic.",
+      "applied": 0
+    },
+    {
+      "id": "json-canonical-shape",
+      "scope": "column tag jsonb",
+      "justification": "jsonb has no key-order contract on any engine; both sides encode through permutation-stable canonical JSON (sorted keys, compact separators). Key order and whitespace are not semantic.",
+      "applied": 0
+    },
+    {
+      "id": "bool-integer-fold",
+      "scope": "column tag bool",
+      "justification": "SQLite carries booleans as 0/1 integers, PostgreSQL as true/false; both fold to the canonical boolean.",
+      "applied": 0
+    },
+    {
+      "id": "uuid-case-form",
+      "scope": "column tag uuid",
+      "justification": "UUIDs encode to the lowercase hyphenated form; case differences are not semantic.",
+      "applied": 0
+    },
+    {
+      "id": "decimal-token-verbatim",
+      "scope": "column tag numeric",
+      "justification": "Numeric values travel as verbatim decimal tokens (no float64 round-trip); scale is preserved exactly as each engine renders it — value differences are compared by the numeric-value rule below.",
+      "applied": 0
+    }
+  ],
+  "allowlist": [
+    {
+      "id": "numeric-value",
+      "scope": "column tag numeric",
+      "justification": "Lexical decimal forms of the same value (trailing zeros, exponent expansion) differ between engine renderings; the numbers compare by exact rational value. Semantics: the stored quantity, not its spelling.",
+      "applied": 0
+    },
+    {
+      "id": "float-value",
+      "scope": "column tag float64",
+      "justification": "IEEE-754 doubles compare by parsed value, tolerating lexical rendering differences ('1e-06' vs '0.000001'). Same bits are guaranteed by the scan path; this rule is the belt.",
+      "applied": 0
+    },
+    {
+      "id": "timestamp-instant",
+      "scope": "column tag timestamp",
+      "justification": "Canonical forms differing while denoting the same instant (a future engine writing a different fixed precision) compare by instant. The canonical form is identical today; this rule is the belt.",
+      "applied": 0
+    },
+    {
+      "id": "json-number-value",
+      "scope": "column tag jsonb",
+      "justification": "Inside JSON documents, number tokens compare by value (exact rational), not lexically: PostgreSQL jsonb re-renders numeric tokens through its numeric type (e.g. exponent expansion) while SQLite stores the imported text verbatim — equal numbers may spell differently. Structure, strings and booleans remain strictly byte-compared after canonicalization.",
+      "applied": 0
+    }
+  ],
+  "warnings": [],
+  "ok": false
+}
