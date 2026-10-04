@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"os"
 	"slices"
 	"sort"
 	"strconv"
@@ -116,9 +118,14 @@ type ShadowReport struct {
 	// canonical form. Both sides derive from this point (the target is
 	// the bundle import of the same pull), which is what makes the
 	// comparison deterministic.
-	SourceCutoff string          `json:"source_cutoff"`
-	SourceEngine string          `json:"source_engine"`
-	TargetEngine string          `json:"target_engine"`
+	SourceCutoff string `json:"source_cutoff"`
+	SourceEngine string `json:"source_engine"`
+	TargetEngine string `json:"target_engine"`
+	// TargetCutoff: the PG target snapshot's now() (canonical form) —
+	// with SourceCutoff it evidences the both-sides-one-pull-point
+	// premise; empty for a SQLite file target (a file copy carries no
+	// clock; its pull point is the export the import consumed).
+	TargetCutoff string          `json:"target_cutoff,omitempty"`
 	TargetMode   string          `json:"target_mode"` // snapshot read | file read
 	Tables       []SurfaceResult `json:"tables"`
 	// Canonicalization: read-time encodings applied to BOTH sides by
@@ -241,6 +248,29 @@ func (p *pgSnapshot) close() error {
 // by the stable key columns) into memory. ponytail: full-table map in
 // memory — personal-library scale (thousands of rows); stream-merge if
 // a future corpus outgrows it.
+// openSQLiteShadow opens the imported library.sqlite for READING
+// only — never the import path's opener: that one creates missing
+// files, sets WAL and applies migrations, all of which would betray
+// the shadow's read-only premise (a target on an older schema would
+// be silently brought to head instead of surfacing as structural
+// drift, and a mistyped path would mint a fresh empty database).
+// mode=ro refuses every write INCLUDING file creation; query_only(1)
+// is the belt. A missing path fails loudly, before any open.
+func openSQLiteShadow(path string) (*sqliteSink, error) {
+	if path == "" {
+		return nil, fmt.Errorf("data bundle: a SQLite path is required")
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("shadow target %s does not exist — the shadow reads a frozen imported copy, it never creates one", path)
+	}
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)&_pragma=query_only(1)", path, 5000))
+	if err != nil {
+		return nil, fmt.Errorf("open read-only: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	return &sqliteSink{db: db}, nil
+}
+
 func (p *pgSnapshot) readTable(ctx context.Context, table string, cols []ColumnRef, keyCols []string) (map[string]string, int64, error) {
 	rows, err := p.tx.Query(ctx, fmt.Sprintf(`SELECT %s FROM %s`,
 		pgSelectList(cols), pgIdent(table)))
@@ -250,12 +280,16 @@ func (p *pgSnapshot) readTable(ctx context.Context, table string, cols []ColumnR
 	defer rows.Close()
 	out := make(map[string]string)
 	var line bytes.Buffer
+	keyIdx, err := keyIndices(cols, keyCols)
+	if err != nil {
+		return nil, 0, err
+	}
 	for rows.Next() {
 		vals, err := pgScanRow(rows, cols)
 		if err != nil {
 			return nil, 0, fmt.Errorf("scan %s: %w", table, err)
 		}
-		key, err := canonicalKey(cols, keyCols, vals)
+		key, err := canonicalKeyAt(cols, keyIdx, vals)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -276,8 +310,12 @@ func (p *pgSnapshot) readTable(ctx context.Context, table string, cols []ColumnR
 func sqliteReadTable(ctx context.Context, s *sqliteSink, table string, cols []ColumnRef, keyCols []string) (map[string]string, int64, error) {
 	out := make(map[string]string)
 	var line bytes.Buffer
-	err := s.streamOrdered(ctx, table, cols, keyCols, func(vals []any) error {
-		key, err := canonicalKey(cols, keyCols, vals)
+	keyIdx, err := keyIndices(cols, keyCols)
+	if err != nil {
+		return nil, 0, err
+	}
+	err = s.streamOrdered(ctx, table, cols, keyCols, func(vals []any) error {
+		key, err := canonicalKeyAt(cols, keyIdx, vals)
 		if err != nil {
 			return err
 		}
@@ -299,11 +337,17 @@ func sqliteReadTable(ctx context.Context, s *sqliteSink, table string, cols []Co
 
 // canonicalKey encodes the stable-key values canonically and joins
 // them — a collision-free row identity under the canonical encodings.
+// (Name-keyed convenience; the table readers precompute the key index
+// once and call canonicalKeyAt per row.)
 func canonicalKey(cols []ColumnRef, keyCols []string, vals []any) (string, error) {
 	idx, err := keyIndices(cols, keyCols)
 	if err != nil {
 		return "", err
 	}
+	return canonicalKeyAt(cols, idx, vals)
+}
+
+func canonicalKeyAt(cols []ColumnRef, idx []int, vals []any) (string, error) {
 	var buf bytes.Buffer
 	for i, ix := range idx {
 		if i > 0 {
@@ -321,7 +365,7 @@ func canonicalKey(cols []ColumnRef, keyCols []string, vals []any) (string, error
 
 // Shadow runs the shadow-read comparison over the full library data
 // set and returns the report (OK = zero unexpected deviations).
-func Shadow(ctx context.Context, opts ShadowOptions) (*ShadowReport, error) {
+func Shadow(ctx context.Context, opts ShadowOptions) (rep *ShadowReport, err error) {
 	if opts.SourceDSN == "" {
 		return nil, fmt.Errorf("shadow: --source-dsn (the legacy mirror copy) is required")
 	}
@@ -340,7 +384,7 @@ func Shadow(ctx context.Context, opts ShadowOptions) (*ShadowReport, error) {
 	}
 	defer src.close()
 
-	rep := &ShadowReport{
+	rep = &ShadowReport{
 		Format:           "axiom-shadow-report",
 		FormatVersion:    1,
 		Build:            build,
@@ -355,6 +399,21 @@ func Shadow(ctx context.Context, opts ShadowOptions) (*ShadowReport, error) {
 	// deviations anywhere. A run that compared nothing is not green.
 	rep.OK = false
 	comparedAny := false
+	// An aborted run still leaves its evidence: when --out is set and
+	// the run fails before the regular write, a best-effort failure
+	// report lands at the artifact path (OK=false, the abort reason in
+	// the warnings — the cutover window keeps its paper trail).
+	written := false
+	defer func() {
+		if err == nil || opts.Out == "" || written || rep == nil {
+			return
+		}
+		rep.OK = false
+		rep.Warnings = append(rep.Warnings, "shadow aborted: "+err.Error())
+		if b, jerr := json.MarshalIndent(rep, "", "  "); jerr == nil {
+			_ = writeFileSync(opts.Out, append(b, '\n'))
+		}
+	}()
 
 	var tgtSnap *pgSnapshot
 	var tgtSQLite *sqliteSink
@@ -366,32 +425,24 @@ func Shadow(ctx context.Context, opts ShadowOptions) (*ShadowReport, error) {
 		defer tgtSnap.close()
 		rep.TargetEngine = "postgresql"
 		rep.TargetMode = "snapshot read (REPEATABLE READ READ ONLY)"
+		rep.TargetCutoff = canonicalTimestamp(tgtSnap.cutoff)
 	} else {
-		tgtSQLite, err = openSQLiteSink(ctx, opts.SQLitePath)
+		tgtSQLite, err = openSQLiteShadow(opts.SQLitePath)
 		if err != nil {
 			return nil, fmt.Errorf("target open: %w", err)
 		}
 		defer tgtSQLite.close()
 		rep.TargetEngine = "sqlite"
-		rep.TargetMode = "file read (frozen imported copy)"
+		rep.TargetMode = "file read (mode=ro, query_only — frozen imported copy; no migration, no writes)"
 	}
 
 	for _, spec := range LibraryTables {
 		sr := SurfaceResult{Surface: ShadowSurfaceOf(spec.Name), Table: spec.Name, Samples: []RowDiff{}}
 
-		// F12 scope rule: the library.sqlite target carries the
-		// library_* namespace only — the legacy mirror set has no
-		// SQLite home. Skipped is a scope fact (counted, documented),
-		// not a deviation.
-		if tgtSQLite != nil && !spec.SQLite {
-			sr.Status = "skipped"
-			sr.Note = "outside the SQLite target namespace (F12: the legacy mirror set lands on PostgreSQL targets only)"
-			rep.Tables = append(rep.Tables, sr)
-			continue
-		}
-
 		// The comparison set is the SOURCE catalog (name + canonical
-		// tag); the target must carry exactly these columns.
+		// tag); the pull-point gate runs BEFORE any target scope rule:
+		// a table the source does not carry is red on EVERY target
+		// engine (the shadow requires the full library data set).
 		cat, err := catalogQuery(ctx, src.tx, spec.Name)
 		if err != nil {
 			return rep, fmt.Errorf("source catalog %s: %w", spec.Name, err)
@@ -413,6 +464,18 @@ func Shadow(ctx context.Context, opts ShadowOptions) (*ShadowReport, error) {
 		cols := make([]ColumnRef, len(cat.columns))
 		for i, c := range cat.columns {
 			cols[i] = ColumnRef{Name: c.Name, Type: c.Type}
+		}
+
+		// F12 scope rule (target namespace), AFTER the pull-point gate:
+		// the library.sqlite target carries the library_* namespace only
+		// — the legacy mirror set has no SQLite home. The source must
+		// carry the table on every engine; the skip documents where the
+		// target cannot land it. A scope fact, not a deviation.
+		if tgtSQLite != nil && !spec.SQLite {
+			sr.Status = "skipped"
+			sr.Note = "outside the SQLite target namespace (F12: the legacy mirror set lands on PostgreSQL targets only)"
+			rep.Tables = append(rep.Tables, sr)
+			continue
 		}
 
 		// Target structural check: same column names (and, PG target,
@@ -507,6 +570,7 @@ func Shadow(ctx context.Context, opts ShadowOptions) (*ShadowReport, error) {
 		if err := writeFileSync(opts.Out, b); err != nil {
 			return rep, fmt.Errorf("report write: %w", err)
 		}
+		written = true
 	}
 	return rep, nil
 }
@@ -631,12 +695,16 @@ func countAbsorptions(fields []FieldDiff, allow []AllowlistEntry) {
 }
 
 // decodeRowObject parses one canonical row line into raw JSON values.
-// A malformed line is an ERROR, never an empty map — two empty maps
-// would compare equal (a latent false-green).
+// A malformed line — or an empty/null object, which would leave every
+// column nil and compare "equal" — is an ERROR, never an empty map
+// (the false-green guard).
 func decodeRowObject(line []byte) (map[string]json.RawMessage, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(line, &m); err != nil {
 		return nil, fmt.Errorf("decode canonical row line: %w", err)
+	}
+	if len(m) == 0 {
+		return nil, fmt.Errorf("canonical row line carries no columns")
 	}
 	return m, nil
 }

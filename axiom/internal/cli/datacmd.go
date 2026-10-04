@@ -287,9 +287,29 @@ func cmdDataShadow(name string, args []string) int {
 			fmt.Printf("warning: %s\n", w)
 		}
 	}
-	fmt.Printf("report: %s\n", out)
+	// --json output is PURE: the report object on stdout and nothing
+	// after it — trailing human lines stay behind the flag (or on
+	// stderr), so `… --json | jq .` parses a green run.
+	if !jsonOut {
+		fmt.Printf("report: %s\n", out)
+	}
 	if res.OK {
-		fmt.Printf("shadow: OK (zero unexpected deviations)\n")
+		compared, skipped := 0, 0
+		for _, t := range res.Tables {
+			if t.Status == "skipped" {
+				skipped++
+			} else {
+				compared++
+			}
+		}
+		if !jsonOut {
+			if skipped > 0 {
+				fmt.Printf("shadow: OK — %d/%d surfaces compared, %d skipped (target scope), zero unexpected deviations\n",
+					compared, compared+skipped, skipped)
+			} else {
+				fmt.Printf("shadow: OK (zero unexpected deviations)\n")
+			}
+		}
 		return exitOK
 	}
 	fmt.Fprintf(os.Stderr, "%s data shadow: FAILED — unexpected deviations, see %s\n", name, out)

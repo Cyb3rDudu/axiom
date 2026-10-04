@@ -7,6 +7,8 @@ package databundle
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -134,15 +136,110 @@ func TestShadowAllowlistDocumented(t *testing.T) {
 			ids[e.ID] = true
 		}
 	}
-	// classification may only emit listed rule ids, and only for
-	// DIFFERING values (the caller guards equality first)
+	// classification may only emit listed rule ids — the probe pairs
+	// are DIFFERING values that actually trigger rules where rules
+	// exist (an emitting pair proves the closed-world check can fire)
+	emits := map[string]string{
+		TagNumeric:   "0.850|0.85",
+		TagFloat64:   "1e-06|0.000001",
+		TagTimestamp: "2026-10-05T09:00:00.000001Z|2026-10-05T09:00:00.000001Z",
+		TagJSONB:     `{"n":1e3}|{"n":1000}`,
+		TagText:      "a|b",
+	}
 	known := map[string]bool{}
 	for _, e := range shadowAllowlist {
 		known[e.ID] = true
 	}
-	for _, tag := range []string{TagNumeric, TagFloat64, TagTimestamp, TagJSONB, TagText} {
-		if rule, _ := classifyColumnDiff(tag, raw(`1`), raw(`2`)); rule != "" && !known[rule] {
-			t.Fatalf("unlisted rule %q emitted", rule)
+	emittedAny := false
+	for tag, pair := range emits {
+		halves := strings.SplitN(pair, "|", 2)
+		rule, _ := classifyColumnDiff(tag, raw(halves[0]), raw(halves[1]))
+		if rule != "" {
+			emittedAny = true
+			if !known[rule] {
+				t.Fatalf("unlisted rule %q emitted for tag %s", rule, tag)
+			}
 		}
+	}
+	if !emittedAny {
+		t.Fatal("no rule emitted for the probe pairs — the closed-world check is vacuous")
+	}
+}
+
+// TestColumnSetMatches — the PG-target structural gate: count, name,
+// tag and order drifts all refuse (conservative red), only exact
+// matches pass.
+func TestColumnSetMatches(t *testing.T) {
+	base := []ColumnRef{{"id", TagUUID}, {"n", TagInt64}}
+	if note, ok := columnSetMatches(base, base); !ok {
+		t.Fatalf("identical catalogs refused: %s", note)
+	}
+	cases := []struct {
+		name string
+		a, b []ColumnRef
+	}{{
+		"count drift", base, []ColumnRef{{"id", TagUUID}},
+	}, {
+		"name drift", base, []ColumnRef{{"id", TagUUID}, {"m", TagInt64}},
+	}, {
+		"type drift", base, []ColumnRef{{"id", TagUUID}, {"n", TagText}},
+	}, {
+		"order drift", base, []ColumnRef{{"n", TagInt64}, {"id", TagUUID}},
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, ok := columnSetMatches(tc.a, tc.b); ok {
+				t.Fatal("drifted target catalog passed the structural gate")
+			}
+		})
+	}
+}
+
+// TestCompareRows — the classifier's accounting over hand-built
+// canonical rows: mixed absorbed+unexpected rows count BOTH (per-rule
+// absorption and the red), the sample cap bounds but never changes
+// counts, one-sided keys are structural, and the empty-object guard
+// refuses a line that would otherwise compare equal.
+func TestCompareRows(t *testing.T) {
+	cols := []ColumnRef{{Name: "k", Type: TagUUID}, {Name: "score", Type: TagNumeric}, {Name: "title", Type: TagText}}
+	allow := newShadowAllowlist()
+	mk := func(score, title string) string {
+		return fmt.Sprintf(`{"k":"x","score":%s,"title":%s}`+"\n", score, title)
+	}
+	same := mk(`0.85`, `"T"`)
+	src := map[string]string{"\"x\"": same, "\"gone\"": same}
+	tgt := map[string]string{
+		"\"x\"":     mk(`0.850`, `"DRIFTED"`), // absorbed numeric + unexpected text
+		"\"extra\"": mk(`0.85`, `"T"`),        // extra on target
+	}
+	sr := SurfaceResult{Samples: []RowDiff{}}
+	if err := compareRows(&sr, cols, src, tgt, shadowDefaultSamples, allow); err != nil {
+		t.Fatal(err)
+	}
+	if sr.Compared != 1 || sr.Equal != 0 || sr.Normalized != 0 || sr.Unexpected != 1 {
+		t.Fatalf("counts: %+v", sr)
+	}
+	if sr.MissingOnTarget != 1 || sr.ExtraOnTarget != 1 {
+		t.Fatalf("structural counts: %+v", sr)
+	}
+	found := false
+	for _, a := range allow {
+		if a.ID == "numeric-value" && a.Applied == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("numeric-value absorption not counted inside the red row")
+	}
+	// the sample rows: one per deviating key under the cap — the
+	// field diff (x), the missing key (gone) and the extra key (extra)
+	if len(sr.Samples) != 3 {
+		t.Fatalf("samples: %+v", sr.Samples)
+	}
+
+	// empty-object guard: a null line must not compare "equal"
+	bad := SurfaceResult{Samples: []RowDiff{}}
+	if err := compareRows(&bad, cols, map[string]string{"\"x\"": "null\n"}, map[string]string{"\"x\"": same}, 5, allow); err == nil {
+		t.Fatal("null canonical line accepted — the false-green guard is missing")
 	}
 }
