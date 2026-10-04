@@ -162,7 +162,11 @@ $$;
 -- 5. Sequences: none ship today (UUID PKs); the grant is a SNAPSHOT of
 --    what exists at run time — window-added serials need this script
 --    re-run (their migration's runbook step does).
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO axiom_library;
+--    DM04 (#313): the Library role additionally carries UPDATE on
+--    sequences — the bundle import re-syncs bigserial positions with
+--    setval() after writing explicit ids (setval needs UPDATE, USAGE
+--    alone is denied). DML-class bookkeeping, no DDL.
+GRANT USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA public TO axiom_library;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO axiom_store;
 
 -- 6. The negative teeth, made explicit (re-running stays idempotent):
