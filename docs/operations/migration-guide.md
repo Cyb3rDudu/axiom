@@ -329,9 +329,15 @@ asks you to do today.
 constructed minimal environment (an allowlist — the parent's DSNs and
 secrets never ride along). The compute worker refuses to start when its
 environment carries a known credential variable, naming the key, never
-the value. `axiom serve api` in the split topology holds **no** database
-credentials at all — a DSN present in its environment is ignored with a
-loud note instead of silently booting a local stack.
+the value. `axiom serve api` in the split topology opens **no** database
+pool and holds **no** DSN in its configuration — a DSN present in its
+environment is ignored with a loud note instead of silently booting a
+local stack (its `/api/health` dependency checks proxy the library/store
+component health over the split edges). For full environment hygiene,
+feed the api deployment no DSN at all: the shipped compose and K8s
+examples keep `AXIOM_DATABASE_URL` out of the api service (a
+compromised edge process cannot leak what its environment never
+carried).
 
 **What still waits for the cutover window** (ordering matters): the
 Zotero mirror and the repair tables still ride the core (store) pool in
@@ -342,9 +348,20 @@ split-credentials shape is drilled, not deployed.
 
 **Rollback** (from the split-credentials shape back to single-DSN):
 unset `AXIOM_STORE_DATABASE_URL`/`AXIOM_LIBRARY_DATABASE_URL`, restore
-`AXIOM_DATABASE_URL`, restart — the roles and grants are inert without
-the DSNs pointing at them (optional cleanup:
-`DROP ROLE axiom_library, axiom_store;` once nothing connects as them).
+`AXIOM_DATABASE_URL`, restart — the table grants and the roles
+themselves are inert without the DSNs pointing at them. ONE step of
+the script is NOT inert, though: `roles.sql` revoked `CONNECT` from
+`PUBLIC` on the databases it ran against. If the legacy single-DSN
+role connected through that default (it is neither the database owner
+nor explicitly granted `CONNECT`), restoring the DSN alone is not
+enough — re-grant its connect right in the same rollback:
+
+```sql
+GRANT CONNECT ON DATABASE <db> TO <legacy-role>;  -- or TO PUBLIC to restore the default
+```
+
+(optional cleanup: `DROP ROLE axiom_library, axiom_store;` once nothing
+connects as them)
 
 ### 8. What stays env-only (for now)
 

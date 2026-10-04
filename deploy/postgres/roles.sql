@@ -25,9 +25,15 @@
 --   proves.
 --
 -- PASSWORDS NEVER LIVE HERE: the roles are created LOGIN-capable but
--- passwordless; the cutover window sets passwords via
---   ALTER ROLE axiom_library PASSWORD '…'   (administrator, out of band)
--- and the dev drill does the same with its throwaway passwords. No
+-- passwordless; until a password is set the role is only usable on
+-- auth paths that need no credential (trust/peer — scram/md5 reject
+-- it). The DM09 window therefore runs script + passwords as ONE
+-- indivisible sequence, no gap in between:
+--   1. psql -v ON_ERROR_STOP=1 -f deploy/postgres/roles.sql
+--   2. ALTER ROLE axiom_library PASSWORD '…'   (administrator, out of band)
+--   3. ALTER ROLE axiom_store   PASSWORD '…'
+--   4. verify: both component DSNs connect, the legacy role still does
+-- The dev drill does the same with its throwaway passwords. No
 -- credential bytes in this repo, ever.
 --
 -- WHEN/WHERE TO RUN
@@ -153,9 +159,9 @@ BEGIN
 END
 $$;
 
--- 5. Sequences: none ship today (UUID PKs); the blanket grant keeps
---    future window-added serials working for both components without
---    handing either the other's tables.
+-- 5. Sequences: none ship today (UUID PKs); the grant is a SNAPSHOT of
+--    what exists at run time — window-added serials need this script
+--    re-run (their migration's runbook step does).
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO axiom_library;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO axiom_store;
 

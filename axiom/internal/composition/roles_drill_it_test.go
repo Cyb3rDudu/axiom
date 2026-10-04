@@ -106,6 +106,18 @@ func TestIT_Dm07RoleDrill(t *testing.T) {
 	}
 
 	// (2) the scripted roles+grants, applied TWICE (idempotency).
+	// PRE-EXISTENCE GUARD: roles are cluster-global. If either already
+	// exists (a shared dev cluster also serving a reference database),
+	// the drill would reset its password mid-run and DROP it in cleanup
+	// — foreign state. Refuse instead; drill on a disposable mirror.
+	var preexist int
+	if err := admin.QueryRow(ctx,
+		`SELECT count(*) FROM pg_roles WHERE rolname IN ('axiom_library','axiom_store')`).Scan(&preexist); err != nil {
+		t.Fatalf("role pre-existence probe: %v", err)
+	}
+	if preexist > 0 {
+		t.Skipf("axiom_library/axiom_store already exist on this cluster (%d found) — refusing to touch foreign roles; run the drill on a disposable mirror", preexist)
+	}
 	sqlBytes, err := os.ReadFile(rolesSQLPath(t))
 	if err != nil {
 		t.Fatalf("read roles.sql: %v", err)
