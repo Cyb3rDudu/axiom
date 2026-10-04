@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -278,6 +279,132 @@ func TestShadowPostgresAbsentAtSourceRed(t *testing.T) {
 	if cs.Unexpected != 1 || len(cs.Samples) == 0 || cs.Samples[0].Kind != "structural" {
 		t.Fatalf("surface: %+v", cs)
 	}
+}
+
+// TestShadowPostgresDuplicateKeyAborts — a non-unique stable key on
+// either side ABORTS the run with an error (never a verdict): a silent
+// map-dedup would compare one arbitrary row and call the rest equal.
+func TestShadowPostgresDuplicateKeyAborts(t *testing.T) {
+	src, tgt := shadowPGFixture(t)
+	ctx := context.Background()
+
+	pool := mustPool(t, src)
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `ALTER TABLE zotero_selections DROP CONSTRAINT zotero_selections_pkey`); err != nil {
+		t.Fatalf("drop pk: %v", err)
+	}
+	// the schema no longer enforces uniqueness — the reader must
+	if _, err := pool.Exec(ctx, `INSERT INTO zotero_selections (document_id, mode, updated_at)
+		SELECT document_id, 'excluded', updated_at FROM zotero_selections LIMIT 1`); err != nil {
+		t.Fatalf("insert duplicate: %v", err)
+	}
+
+	_, err := Shadow(ctx, ShadowOptions{SourceDSN: src, DSN: tgt})
+	if err == nil {
+		t.Fatal("duplicate stable key did not abort the run")
+	}
+	if !strings.Contains(err.Error(), "zotero_selections") || !strings.Contains(err.Error(), "not unique") {
+		t.Fatalf("error does not name the table and the non-uniqueness: %v", err)
+	}
+}
+
+// TestShadowPostgresMixedRedRowCountsAbsorption — a red row may carry
+// absorbed fields alongside the unexpected one; the per-rule counters
+// must stay truthful (numeric-value Applied == 1 even though the row's
+// verdict is red and Normalized stays 0).
+func TestShadowPostgresMixedRedRowCountsAbsorption(t *testing.T) {
+	src, tgt := shadowPGFixture(t)
+	ctx := context.Background()
+
+	pool := mustPool(t, src)
+	defer pool.Close()
+	// one row, two differences: a lexical numeric spelling (absorbed)
+	// and a real text change (unexpected)
+	if _, err := pool.Exec(ctx, `UPDATE repair_cases SET verify_score = 0.850, blocked_reason = 'drifted'
+		WHERE id = '77777777-7777-4777-8777-777777777777'`); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := Shadow(ctx, ShadowOptions{SourceDSN: src, DSN: tgt})
+	if err != nil {
+		t.Fatalf("shadow: %v", err)
+	}
+	if rep.OK {
+		t.Fatal("row with a semantic change passed as green")
+	}
+	rc := findSurface(t, rep, "repair_cases")
+	if rc.Unexpected != 1 {
+		t.Fatalf("repair-readback: unexpected %d, want 1", rc.Unexpected)
+	}
+	if rc.Normalized != 0 {
+		t.Fatalf("red row counted as normalized: %d", rc.Normalized)
+	}
+	applied := int64(0)
+	for _, a := range rep.Allowlist {
+		if a.ID == "numeric-value" {
+			applied = a.Applied
+		}
+	}
+	if applied != 1 {
+		t.Fatalf("numeric-value Applied = %d, want 1 — absorption in a red row went uncounted", applied)
+	}
+	// the sample carries BOTH fields: one with its rule, one without
+	var sawAbsorbed, sawUnexpected bool
+	for _, f := range rc.Samples[0].Fields {
+		if f.Column == "verify_score" && f.Rule == "numeric-value" {
+			sawAbsorbed = true
+		}
+		if f.Column == "blocked_reason" && f.Rule == "" {
+			sawUnexpected = true
+		}
+	}
+	if !sawAbsorbed || !sawUnexpected {
+		t.Fatalf("sample lacks the mixed fields: %+v", rc.Samples[0].Fields)
+	}
+}
+
+// TestShadowPostgresTargetStructuralReds — target-side schema drift:
+// a table the source carries but the imported copy dropped, and a
+// column set the source does not have — both structural, both red.
+func TestShadowPostgresTargetStructuralReds(t *testing.T) {
+	t.Run("table absent on target", func(t *testing.T) {
+		src, tgt := shadowPGFixture(t)
+		execTarget(t, tgt, `DROP TABLE zotero_collection_selections`)
+
+		rep, err := Shadow(context.Background(), ShadowOptions{SourceDSN: src, DSN: tgt})
+		if err != nil {
+			t.Fatalf("shadow: %v", err)
+		}
+		if rep.OK {
+			t.Fatal("table absent on the target passed as green")
+		}
+		cs := findSurface(t, rep, "zotero_collection_selections")
+		if cs.Unexpected != 1 || len(cs.Samples) == 0 || cs.Samples[0].Kind != "structural" {
+			t.Fatalf("surface: %+v", cs)
+		}
+		if !strings.Contains(cs.Samples[0].Note, "absent from the target") {
+			t.Fatalf("note does not name the absence: %q", cs.Samples[0].Note)
+		}
+	})
+	t.Run("column drift on target", func(t *testing.T) {
+		src, tgt := shadowPGFixture(t)
+		execTarget(t, tgt, `ALTER TABLE zotero_selections ADD COLUMN drift_col int`)
+
+		rep, err := Shadow(context.Background(), ShadowOptions{SourceDSN: src, DSN: tgt})
+		if err != nil {
+			t.Fatalf("shadow: %v", err)
+		}
+		if rep.OK {
+			t.Fatal("drifted target column set passed as green")
+		}
+		sel := findSurface(t, rep, "zotero_selections")
+		if sel.Unexpected != 1 || len(sel.Samples) == 0 || sel.Samples[0].Kind != "structural" {
+			t.Fatalf("surface: %+v", sel)
+		}
+		if !strings.Contains(sel.Samples[0].Note, "column count") {
+			t.Fatalf("note does not name the column mismatch: %q", sel.Samples[0].Note)
+		}
+	})
 }
 
 func mustPool(t *testing.T, dsn string) *pgxpool.Pool {

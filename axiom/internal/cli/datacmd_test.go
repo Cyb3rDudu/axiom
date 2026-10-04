@@ -68,6 +68,32 @@ func TestDataExportRuntimeFailureSanitized(t *testing.T) {
 	}
 }
 
+// TestDataShadowRuntimeFailureSanitized — the shadow leg carries the
+// same discipline: an unreachable source is a runtime failure (exit 1)
+// whose output carries NO DSN credential material.
+func TestDataShadowRuntimeFailureSanitized(t *testing.T) {
+	const secret = "super-secret-password"
+	rds, wrs, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = wrs
+	code := cmdData("axiom", []string{"shadow", "--component", "library",
+		"--source-dsn", "postgresql://axiom_user:" + secret + "@127.0.0.1:1/none?sslmode=disable",
+		"--dsn", "postgresql://axiom_user:x@127.0.0.1:1/none?sslmode=disable",
+		"--out", t.TempDir() + "/shadow-report.json"})
+	os.Stderr = oldStderr
+	wrs.Close()
+	out, _ := io.ReadAll(rds)
+	if code != exitFailure {
+		t.Fatalf("exit = %d, want %d", code, exitFailure)
+	}
+	if strings.Contains(string(out), secret) {
+		t.Fatal("failure output leaked the DSN password")
+	}
+}
+
 // TestDataHelpSurface — the help text documents the data family.
 func TestDataHelpSurface(t *testing.T) {
 	h := help("axiom")

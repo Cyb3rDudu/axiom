@@ -22,7 +22,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"slices"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/version"
@@ -36,7 +39,6 @@ type ShadowOptions struct {
 	SQLitePath string // imported copy, library.sqlite target
 	Out        string // report artifact path (JSON); "" = no file
 	MaxSamples int    // per-surface sample rows in the report; 0 = default
-	Build      string // build identity line; "" = this binary's banner
 }
 
 // shadowDefaultSamples bounds report size; counts stay exact regardless.
@@ -74,7 +76,7 @@ type SurfaceResult struct {
 	// operator.
 	Surface string `json:"surface"`
 	Table   string `json:"table"`
-	Status  string `json:"status"` // compared | skipped | absent
+	Status  string `json:"status"` // compared | skipped
 	Note    string `json:"note,omitempty"`
 
 	SourceRows int64 `json:"source_rows"`
@@ -330,10 +332,7 @@ func Shadow(ctx context.Context, opts ShadowOptions) (*ShadowReport, error) {
 	if maxSamples <= 0 {
 		maxSamples = shadowDefaultSamples
 	}
-	build := opts.Build
-	if build == "" {
-		build = version.Banner()
-	}
+	build := version.Banner()
 
 	src, err := openPGSnapshot(ctx, opts.SourceDSN)
 	if err != nil {
@@ -460,12 +459,11 @@ func Shadow(ctx context.Context, opts ShadowOptions) (*ShadowReport, error) {
 			// timestamps, jsonb all TEXT) — names must match; values
 			// read and canonicalize under the SOURCE tags, exactly as
 			// the import/verify codec does.
-			srcNames, tgtNames := columnNames(cols), columnNames(tgtCols)
-			if !equalStrings(srcNames, tgtNames) {
+			if !slices.EqualFunc(cols, tgtCols, func(a, b ColumnRef) bool { return a.Name == b.Name }) {
 				sr.Status = "compared"
 				sr.Unexpected = 1
 				sr.Samples = append(sr.Samples, RowDiff{Key: "schema", Kind: "structural",
-					Note: fmt.Sprintf("column set mismatch: source %v vs target %v", srcNames, tgtNames)})
+					Note: fmt.Sprintf("column set mismatch: source %v vs target %v", columnNames(cols), columnNames(tgtCols))})
 				rep.Tables = append(rep.Tables, sr)
 				continue
 			}
@@ -487,7 +485,9 @@ func Shadow(ctx context.Context, opts ShadowOptions) (*ShadowReport, error) {
 		}
 		sr.Status = "compared"
 		sr.SourceRows, sr.TargetRows = srcCount, tgtCount
-		compareRows(&sr, cols, srcRows, tgtRows, maxSamples, rep.Allowlist)
+		if err := compareRows(&sr, cols, srcRows, tgtRows, maxSamples, rep.Allowlist); err != nil {
+			return rep, err
+		}
 		rep.Tables = append(rep.Tables, sr)
 		comparedAny = true
 	}
@@ -542,36 +542,39 @@ func columnNames(cols []ColumnRef) []string {
 	return out
 }
 
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// compareRows classifies every stable-key union member of one surface.
-// Structural deviations (missing/extra stable keys) are counted and
-// sampled separately from field-level unexpected diffs — both are red.
-func compareRows(sr *SurfaceResult, cols []ColumnRef, src, tgt map[string]string, maxSamples int, allow []AllowlistEntry) {
+// compareRows classifies every stable-key union member of one surface,
+// in sorted key order so sample selection and artifacts are
+// byte-stable. Structural deviations (missing/extra stable keys) are
+// counted and sampled separately from field-level unexpected diffs —
+// both are red.
+func compareRows(sr *SurfaceResult, cols []ColumnRef, src, tgt map[string]string, maxSamples int, allow []AllowlistEntry) error {
 	sample := func(d RowDiff) {
 		if len(sr.Samples) < maxSamples {
 			sr.Samples = append(sr.Samples, d)
 		}
 	}
-	for key, srow := range src {
+	keys := make([]string, 0, len(src))
+	for k := range src {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		srow := src[key]
 		trow, ok := tgt[key]
 		if !ok {
 			sr.MissingOnTarget++
-			sample(RowDiff{Key: redactKey(key), Kind: "missing_on_target"})
+			sample(RowDiff{Key: displayKey(key), Kind: "missing_on_target"})
 			continue
 		}
 		sr.Compared++
-		sv, tv := decodeRowObject([]byte(srow)), decodeRowObject([]byte(trow))
+		sv, err := decodeRowObject([]byte(srow))
+		if err != nil {
+			return fmt.Errorf("table %s key %s: %w", sr.Table, displayKey(key), err)
+		}
+		tv, err := decodeRowObject([]byte(trow))
+		if err != nil {
+			return fmt.Errorf("table %s key %s: %w", sr.Table, displayKey(key), err)
+		}
 		var fields []FieldDiff
 		absorbed := true
 		for _, c := range cols {
@@ -601,14 +604,20 @@ func compareRows(sr *SurfaceResult, cols []ColumnRef, src, tgt map[string]string
 		} else {
 			sr.Unexpected++
 		}
-		sample(RowDiff{Key: redactKey(key), Kind: "field_diff", Fields: fields})
+		sample(RowDiff{Key: displayKey(key), Kind: "field_diff", Fields: fields})
 	}
-	for key := range tgt {
-		if _, ok := src[key]; !ok {
-			sr.ExtraOnTarget++
-			sample(RowDiff{Key: redactKey(key), Kind: "extra_on_target"})
+	extras := make([]string, 0)
+	for k := range tgt {
+		if _, ok := src[k]; !ok {
+			extras = append(extras, k)
 		}
 	}
+	sort.Strings(extras)
+	for _, key := range extras {
+		sr.ExtraOnTarget++
+		sample(RowDiff{Key: displayKey(key), Kind: "extra_on_target"})
+	}
+	return nil
 }
 
 func countAbsorptions(fields []FieldDiff, allow []AllowlistEntry) {
@@ -622,12 +631,14 @@ func countAbsorptions(fields []FieldDiff, allow []AllowlistEntry) {
 }
 
 // decodeRowObject parses one canonical row line into raw JSON values.
-func decodeRowObject(line []byte) map[string]json.RawMessage {
+// A malformed line is an ERROR, never an empty map — two empty maps
+// would compare equal (a latent false-green).
+func decodeRowObject(line []byte) (map[string]json.RawMessage, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(line, &m); err != nil {
-		return map[string]json.RawMessage{}
+		return nil, fmt.Errorf("decode canonical row line: %w", err)
 	}
-	return m
+	return m, nil
 }
 
 // valueDigest renders a 12-hex digest of a canonical value — enough to
@@ -638,14 +649,37 @@ func valueDigest(v json.RawMessage) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-// redactKey keeps stable-key VALUES (identifiers: uuids, zotero keys,
-// small enums) but trims very long composite keys to a digest — the
-// library_write_audit-adjacent keys stay identifiers in practice.
+// redactKey trims very long keys to a digest (the no-leaks ceiling for
+// pathological composite keys).
 func redactKey(key string) string {
 	if len(key) > 200 {
 		return valueDigest(json.RawMessage(key)) + "…"
 	}
 	return key
+}
+
+// displayKey renders a canonical stable key for report samples and
+// error messages: the JSON-encoded key tokens are decoded to their
+// bare values (uuids, zotero keys, numbers — verbatim, UseNumber so
+// int64 keys keep their token) and joined with " | ", so operators
+// read identifiers instead of escaped JSON with \u001f separators.
+// The map identity (canonicalKey output) stays untouched; this is the
+// human-facing projection at the sample boundary, with redactKey's
+// digest ceiling applied to pathological length.
+func displayKey(key string) string {
+	parts := strings.Split(key, "\x1f")
+	out := make([]string, len(parts))
+	for i, p := range parts {
+		dec := json.NewDecoder(strings.NewReader(p))
+		dec.UseNumber()
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			out[i] = p // not a JSON token — show raw (never expected)
+			continue
+		}
+		out[i] = fmt.Sprint(v)
+	}
+	return redactKey(strings.Join(out, " | "))
 }
 
 // classifyColumnDiff decides whether a canonical-value DIFFERENCE is

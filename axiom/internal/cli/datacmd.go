@@ -221,7 +221,7 @@ func cmdDataShadow(name string, args []string) int {
 	fs.StringVar(&dsn, "dsn", "", "PostgreSQL DSN of the imported copy (target)")
 	fs.StringVar(&sqlite, "sqlite", "", "imported library.sqlite path (target)")
 	fs.StringVar(&out, "out", "", "shadow report JSON path")
-	fs.IntVar(&maxSamples, "max-samples", 20, "per-surface sample rows in the report")
+	fs.IntVar(&maxSamples, "max-samples", 0, "per-surface sample rows in the report (0 = package default)")
 	fs.BoolVar(&jsonOut, "json", false, "machine-readable output")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -264,7 +264,7 @@ func cmdDataShadow(name string, args []string) int {
 			res.SourceEngine, res.SourceCutoff, res.TargetEngine, res.TargetMode)
 		for _, t := range res.Tables {
 			switch t.Status {
-			case "skipped", "absent":
+			case "skipped":
 				fmt.Printf("table %-32s %-8s %s\n", t.Table, t.Status, t.Note)
 			default:
 				fmt.Printf("table %-32s %8d compared  %8d equal  %8d normalized  %8d unexpected",
