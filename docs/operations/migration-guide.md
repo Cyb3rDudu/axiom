@@ -216,6 +216,8 @@ export AXIOM_STORAGE_LIBRARY_DRIVER=postgres
 
 # or a dedicated library database:
 export AXIOM_LIBRARY_DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/<library-db>
+# (DSN keys are secret rows since DM07 — see section 7; the credential
+#  home is the environment / the OS secret store)
 
 # SQLite profile (single host!):
 export AXIOM_STORAGE_LIBRARY_DRIVER=sqlite
@@ -229,9 +231,11 @@ Operating rules that matter to an operator:
   PostgreSQL (SQLite on NFS is corruption).
 - **The write-along sync mirror lane** (the German term *Mits-Schrieb*
   appears in the codebase and log lines) stays wired **only** in
-  shared-database shapes (own DSN unset, or identical to the core DSN). A
-  separate library DSN or the SQLite profile unwires it — with a loud log
-  line, never silently.
+  shared-database shapes — decided by DATABASE identity (host+port+db,
+  not string equality: the split-credentials interim points both pools
+  at one database through different roles and the lane stays wired).
+  A separate library database or the SQLite profile unwires it — with a
+  loud log line, never silently.
 - **`zotero` import providers require the PostgreSQL profile** (the
   provider's source identity lives in the mirror on the shared database);
   a component-local SQLite file refuses them loudly at start.
@@ -266,7 +270,78 @@ Failures across these edges surface as typed envelopes (for example
 leaking to clients). The [container compose file](#container) is the
 maintained reference for the full split environment.
 
-### 7. What stays env-only (for now)
+### 7. Credentials and roles (DM07 #316)
+
+Components own their credentials. Two PostgreSQL runtime roles —
+`axiom_library` and `axiom_store` — one per component pool; worker
+processes carry no database credentials at all.
+
+**Canonical configuration** (the split credentials):
+
+```bash
+# the Store pool (canonical spelling):
+export AXIOM_STORE_DATABASE_URL=postgresql://axiom_store:<pass>@<host>:5432/<db>
+# the Library pool (PostgreSQL profile):
+export AXIOM_LIBRARY_DATABASE_URL=postgresql://axiom_library:<pass>@<host>:5432/<db>
+```
+
+**The single DSN stays supported until the cutover.** An installation
+running on `AXIOM_DATABASE_URL` alone keeps working unchanged (its use
+shows on the deprecation witness in `/api/health` — that counter is the
+cutover-readiness telemetry). Two rules have teeth:
+
+- Both spellings set with **different** values is a hard error at boot —
+  resolve to one. Identical values (the mid-migration overlap) pass.
+- All three DSN keys are **secret rows** in `config.sqlite`:
+  references only, never values (`axiom config set` refuses them). The
+  credential lives in the environment / the OS secret store;
+  `config get --effective` shows the credential-free projection.
+
+**The roles** ship as one idempotent script:
+`deploy/postgres/roles.sql`. It creates both LOGIN roles (passwordless —
+passwords are set via `ALTER ROLE`, never stored in the repo), revokes
+`CONNECT` from `PUBLIC`, and grants DML on exactly each component's own
+tables — runtime roles are DML-only: **schema changes are window work**,
+applied as the admin/deployer; a component boots clean on a current
+schema because its ledger check performs no DDL when the schema is
+current. Wrongly-assigned credentials fail loudly at start (the store
+pool connected as `axiom_library`, or the reverse, aborts with the
+diagnosis naming the DSN to check).
+
+**Run it on a dev mirror copy** (the drill the CI also runs per push):
+
+```bash
+psql -v ON_ERROR_STOP=1 -f deploy/postgres/roles.sql <dev-mirror-db>
+ALTER ROLE axiom_library PASSWORD '<dev-pw>';   -- throwaway on a mirror
+ALTER ROLE axiom_store   PASSWORD '<dev-pw>';
+```
+
+The application on the **reference database is DM09 cutover-window
+work, together with the administrator** — not something this section
+asks you to do today.
+
+**Workers are credential-free.** The repair worker runs on a
+constructed minimal environment (an allowlist — the parent's DSNs and
+secrets never ride along). The compute worker refuses to start when its
+environment carries a known credential variable, naming the key, never
+the value. `axiom serve api` in the split topology holds **no** database
+credentials at all — a DSN present in its environment is ignored with a
+loud note instead of silently booting a local stack.
+
+**What still waits for the cutover window** (ordering matters): the
+Zotero mirror and the repair tables still ride the core (store) pool in
+this codebase — that traffic moves onto the Library pool when the DM
+track relocates the mirror (DM04) in the same window the DSNs flip
+(DM09). Until then, production keeps running the single DSN; the
+split-credentials shape is drilled, not deployed.
+
+**Rollback** (from the split-credentials shape back to single-DSN):
+unset `AXIOM_STORE_DATABASE_URL`/`AXIOM_LIBRARY_DATABASE_URL`, restore
+`AXIOM_DATABASE_URL`, restart — the roles and grants are inert without
+the DSNs pointing at them (optional cleanup:
+`DROP ROLE axiom_library, axiom_store;` once nothing connects as them).
+
+### 8. What stays env-only (for now)
 
 Persistent runtime configuration (`axiom config set`, the `config.sqlite`
 store, config flags joining the precedence chain) follows with F13 (#307).
