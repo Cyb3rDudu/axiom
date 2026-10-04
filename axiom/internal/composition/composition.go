@@ -41,6 +41,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/Cyb3rDudu/axiom/axiom/internal/bindings"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
@@ -300,6 +303,50 @@ func (r *Root) Roles() []string {
 		}
 	}
 	return out
+}
+
+// The DM07 #316 runtime roles (deploy/postgres/roles.sql creates them;
+// the reference-DB application is DM09 window work with the
+// administrator). The guards compare NAMES, never credentials.
+const (
+	roleAxiomLibrary = "axiom_library"
+	roleAxiomStore   = "axiom_store"
+)
+
+// checkPoolRole is the DM07 loud wrong-assignment guard: a component
+// pool connected as the OTHER component's role fails the whole start
+// with a diagnosis instead of booting halfway and dying at the first
+// cross-component query. Any other under-privileged role still fails
+// loudly on its own — the next step (migrate/first query) errors with
+// the server's permission denial.
+func checkPoolRole(ctx context.Context, pool *pgxpool.Pool, component, wrongRole string) error {
+	var user string
+	if err := pool.QueryRow(ctx, "SELECT current_user").Scan(&user); err != nil {
+		return fmt.Errorf("%s pool: reading current_user: %w", component, err)
+	}
+	if user == wrongRole {
+		return fmt.Errorf("%s pool connected as role %q — the other component's role; the pools are credential-separated (#316): check the component DSNs (AXIOM_STORE_DATABASE_URL store / AXIOM_LIBRARY_DATABASE_URL library, legacy single-DSN AXIOM_DATABASE_URL)", component, user)
+	}
+	return nil
+}
+
+// sameDatabase reports whether two DSNs point at the same PostgreSQL
+// database (host+port+database identity — credentials and spelling
+// differences do not matter). DM07 #316: the split-credentials interim
+// points both component pools at ONE database through different roles;// the shared-database decisions (the legacy mirror Mits-Schrieb lane)
+// must follow the DATABASE identity, not DSN string equality. Parse
+// failures compare unequal (conservative: db.Open right after is the
+// loud authority on broken DSNs).
+func sameDatabase(a, b string) bool {
+	if a == "" || b == "" || a == b {
+		return a == b
+	}
+	pa, errA := pgconn.ParseConfig(a)
+	pb, errB := pgconn.ParseConfig(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return pa.Host == pb.Host && pa.Port == pb.Port && pa.Database == pb.Database
 }
 
 // Start starts every selected component in the documented order. A failing
@@ -588,6 +635,11 @@ func (r *Root) componentsFor() []Component {
 			if err != nil {
 				return fmt.Errorf("postgres: %w", err)
 			}
+			// DM07 #316: mirror guard — the store pool must not connect as
+			// the library role (the symmetric case sits at the library open).
+			if err := checkPoolRole(ctx, database.Pool(), "store", roleAxiomLibrary); err != nil {
+				return err
+			}
 			r.database = database
 			if err := database.Migrate(ctx); err != nil {
 				return fmt.Errorf("postgres migrate: %w", err)
@@ -640,6 +692,13 @@ func (r *Root) componentsFor() []Component {
 				if err != nil {
 					return fmt.Errorf("library postgres: %w", err)
 				}
+				// DM07 #316: the KNOWN wrong assignment fails loudly here —
+				// a library pool over the store role (or vice versa below)
+				// boots halfway today and dies at the first cross-component
+				// query with a bare permission error. Name the cause.
+				if err := checkPoolRole(ctx, libDB.Pool(), "library", roleAxiomStore); err != nil {
+					return err
+				}
 				r.libDB = libDB
 				// Own migration set, own ledger (additive; the F01
 				// fingerprint derives from the core set alone).
@@ -648,11 +707,13 @@ func (r *Root) componentsFor() []Component {
 				}
 				r.libRepo = pglib.NewStore(libDB.Pool())
 				// The legacy Mits-Schrieb lane reads the Zotero mirror on the
-				// SHARED database. A separate library DSN has no mirror — the lane
-				// unwires HONESTLY (logged; the engine's mirror reads also fold to
-				// absence defensively, but the wiring is the loud half). Revision
-				// intake is the successor lane.
-				sharedDSN := r.cfg.LibraryDatabaseURL == "" || r.cfg.LibraryDatabaseURL == r.cfg.DatabaseURL
+				// SHARED database. Since DM07 (#316) "shared" is a DATABASE
+				// identity (host+port+db), not a string-equal DSN: the interim
+				// split-credentials shape points both pools at the same
+				// database through different roles — the mirror stays
+				// reachable there, and the lane stays wired until the
+				// physical cutover moves the library DSN to its own database.
+				sharedDSN := r.cfg.LibraryDatabaseURL == "" || sameDatabase(r.cfg.LibraryDatabaseURL, r.cfg.DatabaseURL)
 				if sharedDSN {
 					r.logger.Printf("library: PostgreSQL profile (own pool over the shared database; separate engine from the store repo)")
 				} else {
