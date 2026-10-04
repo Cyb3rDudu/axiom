@@ -157,12 +157,11 @@ func cmdServe(name string, args []string, flags map[string]string) int {
 		if code != exitOK {
 			return code
 		}
-		cfg = apiServeConfig(base, func(note string) {
+		note := func(note string) {
 			fmt.Fprintln(os.Stderr, name+": note: "+note)
-		})
-		cfg = apiServeSplitCredentials(cfg, func(note string) {
-			fmt.Fprintln(os.Stderr, name+": note: "+note)
-		})
+		}
+		cfg = apiServeConfig(base, note)
+		cfg = apiServeSplitCredentials(cfg, note)
 		// F11 #305: in the split topology (AXIOM_LIBRARY_URL/
 		// AXIOM_STORE_URL set) the Library contract surface is served by
 		// the library PROCESS — a local provider here would race the
@@ -173,7 +172,11 @@ func cmdServe(name string, args []string, flags map[string]string) int {
 			cfg.LibraryImportProviders = ""
 		}
 		roles = apiRoles(cfg)
-		if len(roles) == 1 && cfg.LibraryURL == "" && cfg.StoreURL == "" {
+		// the api-only warning fires for every api-only shape EXCEPT the
+		// full split edge (both component URLs — the credential-free edge,
+		// not degraded). A HALF-configured split (one URL, no DSN) is still
+		// degraded and keeps the warning.
+		if len(roles) == 1 && !fullSplitEdge(cfg) {
 			fmt.Fprintln(os.Stderr, name+": WARNING: AXIOM_DATABASE_URL not set; serving api-only (degraded)")
 		}
 	case "library":
@@ -231,6 +234,14 @@ func apiServeConfig(cfg config.Config, note func(string)) config.Config {
 	return cfg
 }
 
+// fullSplitEdge reports the configured split topology (both component
+// URLs) — the shape whose api-only derivation is the credential-free
+// public edge, NOT the degraded no-DSN fallback. A half-configured
+// split is not an edge; it stays degraded.
+func fullSplitEdge(cfg config.Config) bool {
+	return cfg.LibraryURL != "" && cfg.StoreURL != ""
+}
+
 // apiServeSplitCredentials enforces the DM07 #316 serve-api contract
 // for the split topology: the api process is the pure public edge and
 // holds NO database credentials. A DSN present in its environment (the
@@ -240,7 +251,7 @@ func apiServeConfig(cfg config.Config, note func(string)) config.Config {
 // cannot trip Select's half-wired guard. Non-split shapes pass through
 // unchanged (the single-DSN compat rule).
 func apiServeSplitCredentials(cfg config.Config, note func(string)) config.Config {
-	if cfg.LibraryURL == "" || cfg.StoreURL == "" {
+	if !fullSplitEdge(cfg) {
 		return cfg
 	}
 	if cfg.DatabaseURL != "" {

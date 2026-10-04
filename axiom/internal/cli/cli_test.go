@@ -234,6 +234,19 @@ func TestAPIRolesSelection(t *testing.T) {
 			t.Fatal("a half-configured split must not clear the DSN — only the full split edge does")
 		}
 	})
+
+	// the degraded warning's edge: a HALF-split (one URL, no DSN) stays
+	// degraded; only the full split edge is the non-degraded api-only shape.
+	t.Run("half-split stays degraded, full split is the edge", func(t *testing.T) {
+		half := config.Config{LibraryURL: "http://127.0.0.1:8221"}
+		if fullSplitEdge(half) {
+			t.Fatal("one URL alone is not a split edge")
+		}
+		full := config.Config{LibraryURL: "http://127.0.0.1:8221", StoreURL: "http://127.0.0.1:8222"}
+		if !fullSplitEdge(full) {
+			t.Fatal("both URLs are the split edge")
+		}
+	})
 }
 
 func TestUnknownCommandIsUsageError(t *testing.T) {

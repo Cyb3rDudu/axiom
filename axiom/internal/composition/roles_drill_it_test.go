@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -121,8 +122,13 @@ func TestIT_Dm07RoleDrill(t *testing.T) {
 		t.Skipf("cannot set drill passwords on this server (role management needs admin rights — CI runs it as superuser): %v", err)
 	}
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`ALTER ROLE axiom_store PASSWORD '%s'`, storePW)); err != nil {
-		t.Fatalf("alter axiom_store: %v", err)
+		t.Skipf("cannot set drill passwords on this server (role management needs admin rights — CI runs it as superuser): %v", err)
 	}
+	// the drill's roles are CLUSTER-GLOBAL (throwaway passwords): best-effort
+	// drop so shared dev servers stay clean — CI containers are disposable.
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DROP ROLE IF EXISTS axiom_library, axiom_store`)
+	})
 
 	libDSN := roleDSN(t, scratchDSN, "axiom_library", libPW)
 	storeDSN := roleDSN(t, scratchDSN, "axiom_store", storePW)
@@ -144,6 +150,17 @@ func TestIT_Dm07RoleDrill(t *testing.T) {
 	defer storePool.Close()
 	if err := storemigrations.Migrate(ctx, storePool); err != nil {
 		t.Fatalf("store ledger check as axiom_store (must no-op on current schema): %v", err)
+	}
+	// the CORE ledger boots as axiom_store too — the store component's
+	// first boot step is database.Migrate, so the catalog short-circuit
+	// in db/migrate.go is load-bearing for the DML-only operating model.
+	coreDB, err := db.Open(ctx, storeDSN)
+	if err != nil {
+		t.Fatalf("core open as axiom_store: %v", err)
+	}
+	defer coreDB.Close()
+	if err := coreDB.Migrate(ctx); err != nil {
+		t.Fatalf("core ledger check as axiom_store (must no-op on current schema): %v", err)
 	}
 
 	// (4) the least-privilege matrix.
@@ -178,6 +195,23 @@ func TestIT_Dm07RoleDrill(t *testing.T) {
 	} {
 		if err := tc.pool.QueryRow(ctx, "SELECT count(*) FROM "+tc.tbl).Scan(&n); !isPermissionDenied(t, err) {
 			t.Fatalf("cross-component read %s → %s must be DENIED by role, got %v", tc.from, tc.tbl, err)
+		}
+	}
+
+	// (4b) grant completeness — the matrix above spot-checks; this closes
+	// the typo hole: EVERY table the roles.sql contract lists must carry
+	// the owning role's DML grant (existence-tolerant grant loops would
+	// silently skip a mistyped name).
+	for table, role := range rolesSQLContractGrants(t, rolesSQL) {
+		var got int
+		if err := admin.QueryRow(ctx,
+			`SELECT count(DISTINCT privilege_type) FROM information_schema.role_table_grants
+			 WHERE grantee = $1 AND table_name = $2
+			   AND privilege_type IN ('SELECT','INSERT','UPDATE','DELETE')`, role, table).Scan(&got); err != nil {
+			t.Fatalf("grant probe %s/%s: %v", role, table, err)
+		}
+		if got != 4 {
+			t.Fatalf("roles.sql contract table %s must carry all four DML grants for %s, got %d", table, role, got)
 		}
 	}
 
@@ -243,4 +277,27 @@ func dbNameOf(t *testing.T, dsn string) string {
 		t.Fatalf("parse DSN: %v", err)
 	}
 	return cfg.Database
+}
+
+// rolesSQLContractGrants parses deploy/postgres/roles.sql's two grant
+// DO blocks into (table → owning role) pairs — the completeness probe's
+// truth comes from the script itself, so a Go-side list can never drift
+// from what the window will actually run.
+func rolesSQLContractGrants(t *testing.T, sql string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	blockRe := regexp.MustCompile(`(?s)ARRAY\[(.*?)\].*?ON %I TO (axiom_[a-z]+)`)
+	for _, m := range blockRe.FindAllStringSubmatch(sql, -1) {
+		role := m[2]
+		for _, name := range regexp.MustCompile(`'([a-z_]+)'`).FindAllStringSubmatch(m[1], -1) {
+			if _, dup := out[name[1]]; dup {
+				t.Fatalf("table %s listed twice in roles.sql contract", name[1])
+			}
+			out[name[1]] = role
+		}
+	}
+	if len(out) < 20 {
+		t.Fatalf("roles.sql parse found only %d contract tables — the parser drifted from the script shape", len(out))
+	}
+	return out
 }

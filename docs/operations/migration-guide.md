@@ -295,7 +295,12 @@ cutover-readiness telemetry). Two rules have teeth:
 - All three DSN keys are **secret rows** in `config.sqlite`:
   references only, never values (`axiom config set` refuses them). The
   credential lives in the environment / the OS secret store;
-  `config get --effective` shows the credential-free projection.
+  `config get --effective` shows the credential-free projection. A
+  `config.sqlite` written before DM07 may carry an
+  `AXIOM_LIBRARY_DATABASE_URL` **value** row — after the upgrade boot
+  refuses it loudly; remediate with
+  `axiom config unset AXIOM_LIBRARY_DATABASE_URL` and feed the DSN via
+  the environment.
 
 **The roles** ship as one idempotent script:
 `deploy/postgres/roles.sql`. It creates both LOGIN roles (passwordless —

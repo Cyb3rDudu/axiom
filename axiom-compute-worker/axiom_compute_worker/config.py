@@ -96,6 +96,11 @@ def _env_roots(name: str) -> tuple[str, ...]:
 # environment that carries one of the KNOWN credential variable names
 # refuses to boot — names are printed, values never (the same
 # no-env-dump rule the Go-side worker check follows).
+# Deliberately NOT identical to the Go sonde's workerEnvDeniedNames
+# (axiom/internal/library/repair/workerenv.go): that sonde also denies
+# identity variables (AXIOM_OPENSEARCH_USERNAME); this boot guard lists
+# credential variables only. Review the sibling list when extending
+# either side.
 CREDENTIAL_ENV_NAMES = (
     "AXIOM_DATABASE_URL",
     "AXIOM_STORE_DATABASE_URL",

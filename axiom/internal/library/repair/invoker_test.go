@@ -322,11 +322,15 @@ func TestOCRTimeoutBudgetIndependent(t *testing.T) {
 func TestRunFixerOCRBudgetEnv(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "echo-env.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"FIXSH=[$AXIOM_FIX_SH_TIMEOUT]\"\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"FIXSH=[$AXIOM_FIX_SH_TIMEOUT] DB=[$AXIOM_DATABASE_URL]\"\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// keep the ambient env from faking either direction
 	t.Setenv("AXIOM_FIX_SH_TIMEOUT", "")
+	// DM07 #316 wiring sonde: a credential planted in the PARENT env must
+	// not reach the child — runWorker constructs the minimal environment
+	// for BOTH classes (deleting req.Env = workerEnv() turns this red).
+	t.Setenv("AXIOM_DATABASE_URL", "fixture-do-not-leak")
 	inv := New(Config{
 		Command:     script,
 		WorkRoot:    dir,
@@ -342,6 +346,9 @@ func TestRunFixerOCRBudgetEnv(t *testing.T) {
 	if !strings.Contains(out, "FIXSH=[5100]") {
 		t.Fatalf("OCR-class item must receive AXIOM_FIX_SH_TIMEOUT=5100 (90m-5m), got %q", strings.TrimSpace(out))
 	}
+	if strings.Contains(out, "fixture-do-not-leak") || !strings.Contains(out, "DB=[]") {
+		t.Fatalf("the worker child must not inherit parent credentials (OCR class), got %q", strings.TrimSpace(out))
+	}
 
 	_, out, err = inv.runWorker(context.Background(), mkItem(`{}`, "de"))
 	if err != nil {
@@ -349,6 +356,9 @@ func TestRunFixerOCRBudgetEnv(t *testing.T) {
 	}
 	if !strings.Contains(out, "FIXSH=[]") {
 		t.Fatalf("non-OCR item must NOT carry the OCR budget, got %q", strings.TrimSpace(out))
+	}
+	if strings.Contains(out, "fixture-do-not-leak") || !strings.Contains(out, "DB=[]") {
+		t.Fatalf("the worker child must not inherit parent credentials (normal class), got %q", strings.TrimSpace(out))
 	}
 }
 

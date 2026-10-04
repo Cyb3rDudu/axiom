@@ -333,7 +333,7 @@ func checkPoolRole(ctx context.Context, pool *pgxpool.Pool, component, wrongRole
 // sameDatabase reports whether two DSNs point at the same PostgreSQL
 // database (host+port+database identity — credentials and spelling
 // differences do not matter). DM07 #316: the split-credentials interim
-// points both component pools at ONE database through different roles;// the shared-database decisions (the legacy mirror Mits-Schrieb lane)
+// points both component pools at ONE database through different roles; // the shared-database decisions (the legacy mirror Mits-Schrieb lane)
 // must follow the DATABASE identity, not DSN string equality. Parse
 // failures compare unequal (conservative: db.Open right after is the
 // loud authority on broken DSNs).

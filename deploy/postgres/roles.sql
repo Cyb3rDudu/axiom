@@ -1,7 +1,7 @@
 -- roles.sql — DM07 #316: the component runtime roles and their grants.
 --
 -- Pure SQL (no psql meta-commands): the DM07 drill executes this very
--- file (axiom/internal/store/migrations/roles_drill_it_test.go), so the
+-- file (axiom/internal/composition/roles_drill_it_test.go), so the
 -- script and the tested grants cannot drift. Run it with any client:
 --
 --   psql -v ON_ERROR_STOP=1 -f deploy/postgres/roles.sql
@@ -41,6 +41,11 @@
 --   pools, one database); after the physical split each component
 --   database runs this script against its own database. Idempotent:
 --   re-running against a provisioned database changes nothing.
+--
+--   Roles are CLUSTER-GLOBAL: a drill run leaves the two roles (with
+--   throwaway passwords) behind on the server — disposable in CI
+--   containers; on shared dev servers clean up with
+--   DROP ROLE axiom_library, axiom_store;
 --
 -- TABLE LISTS ARE THE CONTRACT — the sets are frozen by the DM06 FK
 -- drop and the DM04 ownership boundary. A new table ships with a

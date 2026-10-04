@@ -16,15 +16,26 @@ import (
 
 // workerEnvAllow is the exact allowlist: tool-level basics (PATH, HOME,
 // TMPDIR, locale/timezone — tesseract, pandoc and the python stack need
-// them) plus the repair track's OWN knobs (wrapper overrides, the RAG
-// edge URL, the fixsvc's DeepSeek credentials — the worker's own, not
-// the parent's database credentials).
+// them), outbound-HTTP configuration (proxy + CA bundle names — the
+// repair track's DeepSeek/RAG calls legitimately carry them), plus the
+// repair track's OWN knobs (wrapper overrides, the RAG edge URL, the
+// fixsvc's DeepSeek credentials — the worker's own, not the parent's
+// database credentials).
 var workerEnvAllow = map[string]bool{
 	"PATH":                true,
 	"HOME":                true,
 	"TMPDIR":              true,
 	"TZ":                  true,
 	"LANG":                true,
+	"HTTP_PROXY":          true,
+	"HTTPS_PROXY":         true,
+	"NO_PROXY":            true,
+	"http_proxy":          true,
+	"https_proxy":         true,
+	"no_proxy":            true,
+	"SSL_CERT_FILE":       true,
+	"SSL_CERT_DIR":        true,
+	"REQUESTS_CA_BUNDLE":  true,
 	"AXIOM_FIXER":         true,
 	"AXIOM_FIXER_APP":     true,
 	"AXIOM_RUNNER_PYTHON": true,
@@ -41,6 +52,12 @@ var workerEnvAllowPrefix = []string{"LC_", "AXIOM_FIXSVC_"}
 // workerEnvDeniedNames is the denylist WITNESS vocabulary — the known
 // credential variable names that must never reach the worker. Used by
 // the test sonde (names only; a value would already be a bug).
+// Deliberately NOT identical to the compute worker's Python
+// CREDENTIAL_ENV_NAMES (axiom-compute-worker config.py): this sonde also
+// denies identity variables (AXIOM_OPENSEARCH_USERNAME — the worker
+// never needs the OS identity either); the Python boot guard lists
+// credential variables only. Review the sibling list when extending
+// either side.
 var workerEnvDeniedNames = []string{
 	"AXIOM_DATABASE_URL",
 	"AXIOM_STORE_DATABASE_URL",
