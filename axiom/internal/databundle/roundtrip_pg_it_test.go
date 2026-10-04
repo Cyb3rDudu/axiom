@@ -597,3 +597,55 @@ func containsStr(xs []string, s string) bool {
 	}
 	return false
 }
+
+// TestCompositeFKOrphanScanPairsColumns — the FK catalog must PAIR
+// composite-FK columns by ordinal (a plain constraint-name join
+// cross-products child×parent columns into wrong pairs). Witness over
+// a throwaway composite-FK table pair in the scratch database: one
+// paired ref, MATCH-SIMPLE orphan semantics (partial NULL child does
+// not violate; all-non-null missing parent does).
+func TestCompositeFKOrphanScanPairsColumns(t *testing.T) {
+	dsn, cleanup := scratchDB(t, "fkpair")
+	defer cleanup()
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE dm04_fk_parent (a int, b int, PRIMARY KEY (a, b));
+		CREATE TABLE dm04_fk_child (x int, y int);
+		INSERT INTO dm04_fk_parent VALUES (1, 1);
+		INSERT INTO dm04_fk_child VALUES (1, 1); -- satisfied
+		INSERT INTO dm04_fk_child VALUES (2, 2); -- orphan: all set, no parent
+		INSERT INTO dm04_fk_child VALUES (3, NULL); -- partial NULL: no violation (MATCH SIMPLE)
+		-- declared NOT VALID: the catalog carries the constraint while the
+		-- data holds the orphan — the post-drop-audit world the scan serves
+		-- (a plain enforced FK would refuse the orphan insert itself).
+		ALTER TABLE dm04_fk_child ADD CONSTRAINT fk_pair
+		  FOREIGN KEY (x, y) REFERENCES dm04_fk_parent (a, b) NOT VALID`); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	snk := &pgSink{db: &pgDB{pool: pool}}
+	fks, err := snk.foreignKeys(ctx, "dm04_fk_child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fks) != 1 {
+		t.Fatalf("expected 1 composite FK, got %d: %+v", len(fks), fks)
+	}
+	fk := fks[0]
+	if len(fk.Columns) != 2 || len(fk.RefColumns) != 2 ||
+		fk.Columns[0] != "x" || fk.Columns[1] != "y" ||
+		fk.RefColumns[0] != "a" || fk.RefColumns[1] != "b" {
+		t.Fatalf("columns not ordinally paired: %+v", fk)
+	}
+	orphans, err := orphanCount(ctx, snk, "dm04_fk_child", fk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orphans != 1 {
+		t.Fatalf("composite orphan scan: %d orphans, want exactly 1 (the all-non-null miss; partial NULL does not violate)", orphans)
+	}
+}

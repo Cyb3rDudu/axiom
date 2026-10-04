@@ -140,9 +140,6 @@ func cmdDataImport(name string, args []string) int {
 	for _, w := range res.Warnings {
 		fmt.Printf("warning: %s\n", w)
 	}
-	if err != nil {
-		return exitFailure
-	}
 	return exitOK
 }
 

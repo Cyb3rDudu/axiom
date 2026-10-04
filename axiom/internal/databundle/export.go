@@ -85,6 +85,7 @@ func Export(ctx context.Context, component string, opts ExportOptions) (*ExportR
 		FormatVersion: FormatVersion,
 		Component:     component,
 		CreatedAt:     canonicalTimestamp(time.Now().UTC()),
+		Warnings:      []string{}, // non-nil: serializes [] not null
 		Source: SourceManifest{
 			Build:        build,
 			Engine:       engine,
@@ -187,7 +188,7 @@ func exportTable(ctx context.Context, tx pgx.Tx, cat *pgCatalog, dir string, bat
 	var batchBuf bytes.Buffer
 	var line bytes.Buffer
 	var batchCount, batchIdx, total int64
-	var batches []BatchManifest
+	batches := make([]BatchManifest, 0, 1) // non-nil: empty tables serialize [] not null
 
 	flush := func() error {
 		if batchCount == 0 {
@@ -195,7 +196,9 @@ func exportTable(ctx context.Context, tx pgx.Tx, cat *pgCatalog, dir string, bat
 		}
 		name := fmt.Sprintf("%04d.jsonl", batchIdx)
 		path := filepath.Join(tableDir, name)
-		if err := os.WriteFile(path, batchBuf.Bytes(), 0o600); err != nil { // Fachdaten — not world-readable
+		// writeFileSync (tmp+rename, 0600): also on the RE-EXPORT path a
+		// pre-existing file with looser modes is replaced, never kept.
+		if err := writeFileSync(path, batchBuf.Bytes()); err != nil {
 			return err
 		}
 		batches = append(batches, BatchManifest{

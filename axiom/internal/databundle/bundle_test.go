@@ -106,21 +106,26 @@ func canonicalBytes(v any) ([]byte, error) {
 }
 
 // TestCanonicalJSONNumberTokenPreserved — int64-scale numbers survive
-// without float round-trips (the classic JSONB portability loss).
+// without float round-trips (the classic JSONB portability loss), and
+// tokens BEYOND float64 range stay verbatim (legal PostgreSQL numeric
+// — lexical validation, never ParseFloat).
 func TestCanonicalJSONNumberTokenPreserved(t *testing.T) {
-	raw := `{"id":9223372036854775807,"small":0.100000,"exp":1e3}`
+	raw := `{"id":9223372036854775807,"small":0.100000,"exp":1e3,"huge":1e400}`
 	c, err := CanonicalizeJSON([]byte(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(c, []byte("9223372036854775807")) {
-		t.Fatalf("int64 token mangled: %s", c)
+	for _, want := range []string{"9223372036854775807", "0.100000", "1e3", "1e400"} {
+		if !bytes.Contains(c, []byte(want)) {
+			t.Fatalf("token %s mangled: %s", want, c)
+		}
 	}
-	if !bytes.Contains(c, []byte("0.100000")) {
-		t.Fatalf("decimal token mangled: %s", c)
+	// invalid number grammar still refused
+	if _, err := CanonicalizeJSON([]byte(`{"x":01}`)); err == nil {
+		t.Fatal("leading-zero number accepted")
 	}
-	if !bytes.Contains(c, []byte("1e3")) {
-		t.Fatalf("exponent token mangled: %s", c)
+	if _, err := CanonicalizeJSON([]byte(`{"x":1.}`)); err == nil {
+		t.Fatal("trailing-dot number accepted")
 	}
 }
 
@@ -290,9 +295,10 @@ func TestDecodeRowTypeTeeth(t *testing.T) {
 }
 
 // TestJSONBNullValueVersusSQLNull — a JSON null under a jsonb column
-// is the jsonb VALUE 'null' (legal under NOT NULL — 32 production
-// documents carry creators='null'), never SQL NULL; the drill proved
-// the SQL-NULL misreading breaks the import with 23502.
+// is the jsonb VALUE 'null' (legal under NOT NULL — production carries
+// 32 documents with jsonb null in at least one document jsonb column,
+// 18 of them in creators), never SQL NULL; the drill proved the
+// SQL-NULL misreading breaks the import with 23502.
 func TestJSONBNullValueVersusSQLNull(t *testing.T) {
 	cols := []ColumnRef{{Name: "detail", Type: TagJSONB}}
 	vals, err := DecodeRow([]byte(`{"detail":null}`), cols, nil, 1)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -63,6 +64,13 @@ func normalizeUUID(s string) (string, error) {
 	return l, nil
 }
 
+// jsonNumberGrammar is the JSON number production (RFC 8259 §6) —
+// LEXICAL validation only: numeric tokens beyond float64 range (e.g.
+// '1e400', legal as PostgreSQL numeric) stay verbatim; parsing them
+// into float64 would silently refuse values the format promises to
+// carry.
+var jsonNumberGrammar = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
+
 // encodeCanonical writes v as canonical JSON: object keys sorted
 // recursively, compact separators, numbers as their verbatim tokens.
 // Equal values produce equal bytes regardless of input key order or
@@ -81,7 +89,7 @@ func encodeCanonical(buf *bytes.Buffer, v any) error {
 		buf.Write(b)
 	case json.Number:
 		s := x.String()
-		if _, err := strconv.ParseFloat(s, 64); err != nil {
+		if !jsonNumberGrammar.MatchString(s) {
 			return fmt.Errorf("number token %q is not a valid JSON number", s)
 		}
 		buf.WriteString(s)
@@ -318,8 +326,9 @@ func decodeTagged(c ColumnRef, raw any, enums map[string][]string) (any, error) 
 	// jsonb VALUE 'null' — NOT SQL NULL. Every jsonb column in the
 	// Library schema is NOT NULL (the export refuses nullable jsonb
 	// columns loudly), so a null token under jsonb can only be the
-	// value — the 32 production documents carrying creators='null'
-	// proved this is real data, not a corner.
+	// value — the production data proved this is real (32 documents
+	// carry jsonb null in at least one document jsonb column, 18 of
+	// them in creators), not a corner.
 	if c.Type == TagJSONB {
 		if raw == nil {
 			return []byte("null"), nil

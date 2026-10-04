@@ -222,8 +222,13 @@ type batchFile struct {
 
 // readBatch loads one batch file and verifies its digest FIRST — the
 // mismatch aborts before anything of this batch is applied (isolated)
-// and names both digests, never content.
+// and names both digests, never content. Batch paths are manifest-
+// controlled; only local bundle-relative paths are honored (no
+// absolute paths, no traversal out of the bundle root).
 func readBatch(root string, b *BatchManifest, tm *TableManifest) (*batchFile, error) {
+	if !filepath.IsLocal(b.File) {
+		return nil, fmt.Errorf("table %s: batch path %q is not a local bundle-relative path — refusing", tm.Name, b.File)
+	}
 	path := filepath.Join(root, filepath.FromSlash(b.File))
 	raw, err := os.ReadFile(path)
 	if err != nil {

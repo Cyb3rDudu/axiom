@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strings"
 )
 
 // VerifyOptions parameterize a verify run. Exactly one target engine.
@@ -23,20 +24,20 @@ type VerifyOptions struct {
 
 // TableVerify is one table's comparison verdict.
 type TableVerify struct {
-	Table      string
-	CountOK    bool
-	CountGot   int64
-	CountWant  int64
-	DigestOK   bool
-	DigestGot  string
+	Table        string
+	CountOK      bool
+	CountGot     int64
+	CountWant    int64
+	DigestOK     bool
+	DigestGot    string
 	JSONBVerdict string // semantic-envelope note when the table carries jsonb
 }
 
 // FKVerify is one FK relationship's orphan verdict.
 type FKVerify struct {
-	Table       string
-	Constraint  string
-	Orphans     int64
+	Table      string
+	Constraint string
+	Orphans    int64
 }
 
 // VerifyResult is the operator-facing outcome. OK is the one-bit
@@ -166,10 +167,12 @@ func verifyTable(ctx context.Context, snk sink, tm *TableManifest) (TableVerify,
 	return tv, nil
 }
 
-// orphanCount counts rows whose FK column is set but references an
-// absent parent — the invariant the dropped cross-component FKs used to
-// guard, checked from data. Table/column identifiers in the built query
-// come from the ENGINE'S OWN constraint catalogs (information_schema /
+// orphanCount counts rows whose FK columns are ALL set but reference
+// an absent parent (MATCH SIMPLE semantics — a partial NULL child row
+// does not violate) — the invariant the dropped cross-component FKs
+// used to guard, checked from data. Composite FKs join over ALL paired
+// columns. Table/column identifiers in the built query come from the
+// ENGINE'S OWN constraint catalogs (pg_constraint /
 // PRAGMA foreign_key_list) and are identifier-quoted — never operator
 // input; SQL identifiers cannot be parameterized.
 func orphanCount(ctx context.Context, snk sink, table string, fk fkRef) (int64, error) {
@@ -177,9 +180,15 @@ func orphanCount(ctx context.Context, snk sink, table string, fk fkRef) (int64, 
 	if snk.engineName() == "sqlite" {
 		ident = sqlIdent
 	}
-	q := fmt.Sprintf(`SELECT count(*) FROM %s c LEFT JOIN %s p ON c.%s = p.%s WHERE c.%s IS NOT NULL AND p.%s IS NULL`,
-		ident(table), ident(fk.RefTable), ident(fk.Column), ident(fk.RefColumn),
-		ident(fk.Column), ident(fk.RefColumn))
+	joins := make([]string, len(fk.Columns))
+	notNulls := make([]string, len(fk.Columns))
+	for i := range fk.Columns {
+		joins[i] = fmt.Sprintf(`c.%s = p.%s`, ident(fk.Columns[i]), ident(fk.RefColumns[i]))
+		notNulls[i] = fmt.Sprintf(`c.%s IS NOT NULL`, ident(fk.Columns[i]))
+	}
+	q := fmt.Sprintf(`SELECT count(*) FROM %s c LEFT JOIN %s p ON %s WHERE %s AND p.%s IS NULL`,
+		ident(table), ident(fk.RefTable), strings.Join(joins, " AND "),
+		strings.Join(notNulls, " AND "), ident(fk.RefColumns[0]))
 	var n int64
 	var err error
 	if s, ok := snk.(*sqliteSink); ok {

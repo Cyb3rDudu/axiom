@@ -20,9 +20,9 @@ const (
 	FormatName    = "axiom-data-bundle"
 	FormatVersion = 1
 
-	ManifestFile  = "manifest.json"
-	SidecarFile   = "bundle.sha256"
-	ComponentLib  = "library"
+	ManifestFile = "manifest.json"
+	SidecarFile  = "bundle.sha256"
+	ComponentLib = "library"
 )
 
 // ColumnRef is one column reference in a table catalog.

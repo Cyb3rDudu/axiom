@@ -198,7 +198,7 @@ func craftLibraryBundle(t *testing.T, dir string) *Manifest {
 		Source: SourceManifest{
 			Build: "axiom v0.2.2-test (commit test, release build)", Engine: "PostgreSQL 16.9",
 			ExportCutoff: "2026-10-05T10:04:00.000000Z",
-			Migrations: map[string][]string{"library_schema_migrations": {"0001_library.sql", "0002_library_writer_lease.sql", "0003_library_collection_anchor.sql"}},
+			Migrations:   map[string][]string{"library_schema_migrations": {"0001_library.sql", "0002_library_writer_lease.sql", "0003_library_collection_anchor.sql"}},
 		},
 	}
 	for _, spec := range LibraryTables {

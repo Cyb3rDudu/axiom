@@ -9,16 +9,20 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
 
-// fkRef is one declared foreign key relationship (verify's orphan scans).
+// fkRef is one declared foreign key relationship (verify's orphan
+// scans) with PAIRED column lists — composite FKs keep their
+// column-to-column correspondence (the k-th child column references
+// the k-th parent column).
 type fkRef struct {
 	Constraint string
-	Column     string
+	Columns    []string
 	RefTable   string
-	RefColumn  string
+	RefColumns []string
 }
 
 // sink is one import/verify target engine.
@@ -60,7 +64,7 @@ type pgSink struct {
 	db *pgDB
 }
 
-func (s *pgSink) close() error { s.db.Close(); return nil }
+func (s *pgSink) close() error       { s.db.Close(); return nil }
 func (s *pgSink) engineName() string { return "postgresql" }
 
 func (s *pgSink) catalogColumns(ctx context.Context, table string) ([]ColumnRef, error) {
@@ -146,16 +150,28 @@ func (s *pgSink) rowByPK(ctx context.Context, table string, cols []ColumnRef, ke
 }
 
 func (s *pgSink) foreignKeys(ctx context.Context, table string) ([]fkRef, error) {
+	// pg_constraint's conkey/confkey are PARALLEL arrays — the k-th child
+	// column references the k-th parent column. WITH ORDINALITY keeps
+	// the pairing (a plain key_column_usage × constraint_column_usage
+	// join would cross-product composite FKs into wrong pairs).
 	rows, err := s.db.pool.Query(ctx, `
-		SELECT tc.constraint_name, kcu.column_name,
-		       ccu.table_name, ccu.column_name
-		FROM information_schema.table_constraints tc
-		JOIN information_schema.key_column_usage kcu
-		  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-		JOIN information_schema.constraint_column_usage ccu
-		  ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
-		WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = current_schema() AND tc.table_name = $1
-		ORDER BY tc.constraint_name, kcu.ordinal_position`, table)
+		SELECT c.conname, rt.relname, cols.names, refcols.names
+		FROM pg_constraint c
+		JOIN pg_class ct ON ct.oid = c.conrelid
+		JOIN pg_class rt ON rt.oid = c.confrelid
+		JOIN pg_namespace n ON n.oid = c.connamespace
+		CROSS JOIN LATERAL (
+		  SELECT string_agg(a.attname, ',' ORDER BY k.ord) AS names
+		  FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+		  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+		) cols
+		CROSS JOIN LATERAL (
+		  SELECT string_agg(a.attname, ',' ORDER BY k.ord) AS names
+		  FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
+		  JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum
+		) refcols
+		WHERE c.contype = 'f' AND n.nspname = current_schema() AND ct.relname = $1
+		ORDER BY c.conname`, table)
 	if err != nil {
 		return nil, err
 	}
@@ -163,8 +179,14 @@ func (s *pgSink) foreignKeys(ctx context.Context, table string) ([]fkRef, error)
 	var out []fkRef
 	for rows.Next() {
 		var r fkRef
-		if err := rows.Scan(&r.Constraint, &r.Column, &r.RefTable, &r.RefColumn); err != nil {
+		var cols, refcols string
+		if err := rows.Scan(&r.Constraint, &r.RefTable, &cols, &refcols); err != nil {
 			return nil, err
+		}
+		r.Columns = strings.Split(cols, ",")
+		r.RefColumns = strings.Split(refcols, ",")
+		if len(r.Columns) != len(r.RefColumns) {
+			return nil, fmt.Errorf("fk %s: unpaired column lists (%d child, %d parent)", r.Constraint, len(r.Columns), len(r.RefColumns))
 		}
 		out = append(out, r)
 	}
@@ -243,7 +265,7 @@ func openSQLiteSink(ctx context.Context, path string) (*sqliteSink, error) {
 	return &sqliteSink{db: db}, nil
 }
 
-func (s *sqliteSink) close() error { return s.db.Close() }
+func (s *sqliteSink) close() error       { return s.db.Close() }
 func (s *sqliteSink) engineName() string { return "sqlite" }
 
 func (s *sqliteSink) tableExists(ctx context.Context, table string) (bool, error) {
@@ -418,17 +440,49 @@ func (s *sqliteSink) foreignKeys(ctx context.Context, table string) ([]fkRef, er
 		return nil, err
 	}
 	defer rows.Close()
-	var out []fkRef
+	// One row per column, same id per constraint, seq = the column's
+	// position (base-unspecified across engines — sort, never assume) —
+	// pair from/to by seq so composite FKs keep their column
+	// correspondence.
+	type pair struct {
+		seq      int
+		from, to string
+	}
+	byID := map[int][]pair{}
+	refTable := map[int]string{}
 	for rows.Next() {
 		var id, seq int
-		var refTable, from, to string
+		var ref, from, to string
 		var onUpdate, onDelete, match string
-		if err := rows.Scan(&id, &seq, &refTable, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+		if err := rows.Scan(&id, &seq, &ref, &from, &to, &onUpdate, &onDelete, &match); err != nil {
 			return nil, err
 		}
-		out = append(out, fkRef{Constraint: fmt.Sprintf("fk_%d_%d", id, seq), Column: from, RefTable: refTable, RefColumn: to})
+		byID[id] = append(byID[id], pair{seq, from, to})
+		refTable[id] = ref
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	var out []fkRef
+	for _, id := range ids {
+		pairs := byID[id]
+		slices.SortFunc(pairs, func(a, b pair) int { return a.seq - b.seq })
+		r := fkRef{Constraint: fmt.Sprintf("fk_%d", id), RefTable: refTable[id]}
+		for _, p := range pairs {
+			r.Columns = append(r.Columns, p.from)
+			r.RefColumns = append(r.RefColumns, p.to)
+		}
+		if len(r.Columns) == 0 {
+			return nil, fmt.Errorf("fk %d: PRAGMA foreign_key_list returned no column pairs", id)
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 func (s *sqliteSink) resyncSequences(ctx context.Context, table string) error {

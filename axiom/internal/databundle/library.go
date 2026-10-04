@@ -31,10 +31,10 @@ var (
 	importStatusVocab = []string{"received", "inspecting", "resolving_metadata", "awaiting_confirmation",
 		"ensuring_collections", "creating_record", "uploading_rendition", "verifying",
 		"committed", "retryable_failed", "terminal_failed"}
-	stepVocab     = []string{"inspecting", "resolving_metadata", "ensuring_collections", "creating_record", "uploading_rendition", "verifying"}
-	stepStateVocab = []string{"in_progress", "done"}
-	eventKindVocab = []string{"state_entered", "decision_offered", "decision_resolved", "provider_write", "provenance", "retry", "terminal"}
-	modeVocab     = []string{"included", "excluded"}
+	stepVocab           = []string{"inspecting", "resolving_metadata", "ensuring_collections", "creating_record", "uploading_rendition", "verifying"}
+	stepStateVocab      = []string{"in_progress", "done"}
+	eventKindVocab      = []string{"state_entered", "decision_offered", "decision_resolved", "provider_write", "provenance", "retry", "terminal"}
+	modeVocab           = []string{"included", "excluded"}
 	identifierKindVocab = []string{"doi", "isbn"}
 	anchorKindVocab     = []string{"record", "rendition", "collection"}
 	originVocab         = []string{"import", "sync", "heal"}
