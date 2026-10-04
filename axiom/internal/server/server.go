@@ -240,6 +240,15 @@ type healthResponse struct {
 	Readiness map[string]string `json:"readiness,omitempty"`
 }
 
+// HealthEndpoint exposes the health handler for MOUNTING (DM07 #316:
+// the F11 internal component edges serve GET /api/health from the SAME
+// checker registry as the public surface, so the credential-free api
+// edge can proxy dependency visibility over the component edges —
+// identical payload, no extra state).
+func (s *Server) HealthEndpoint() http.Handler {
+	return http.HandlerFunc(s.handleHealth)
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	checks := map[string]any{}
 	ok := true

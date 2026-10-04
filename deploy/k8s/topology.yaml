@@ -214,8 +214,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: axiom-config
-            - secretRef:
-                name: axiom-env
+            # DM07 #316: the api edge pulls NO secretRef — it opens no
+            # pools and holds no DSN; the split URLs below are its only
+            # component wiring. Library/store keep the secret; the
+            # compute worker needs neither (HTTP only).
           env:
             - name: AXIOM_API_PORT
               value: "8111"

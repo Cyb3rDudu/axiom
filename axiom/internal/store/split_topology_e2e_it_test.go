@@ -368,8 +368,12 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 	e.store = startAndWait("store", freePort(t), e.storeEdge)
 	e.api = startAndWait("api", freePort(t), 0)
 
-	// 1. public-edge health: ok + the four dependency checks (the zotero
-	// check answers from the library-side dependency via the fake probe).
+	// 1. public-edge health: ok + the component-edge checks (DM07 #316:
+	// the credential-free api process proxies its dependency visibility
+	// over the component health — each component's own /api/health folds
+	// its postgres/zotero/runner checks into ok, which startAndWait
+	// above already polices per process). The four LEGACY check names
+	// live on the component processes now, not at the edge.
 	waitFor(t, 90*time.Second, "split public edge healthy", func() error {
 		resp, err := http.Get(e.api.url() + "/api/health")
 		if err != nil {
@@ -387,7 +391,7 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 		if !health.OK {
 			return fmt.Errorf("health not ok: %s", body)
 		}
-		for _, check := range []string{"postgres", "zotero", "query-runner", "ingest-runner"} {
+		for _, check := range []string{"library", "store"} {
 			if v, has := health.Checks[check]; !has || v != "ok" {
 				return fmt.Errorf("health check %s = %v", check, v)
 			}

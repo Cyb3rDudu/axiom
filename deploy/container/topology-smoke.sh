@@ -32,15 +32,18 @@ command -v jq >/dev/null || die "jq required"
 command -v curl >/dev/null || die "curl required"
 [ -r "$FIXTURE" ] || die "fixture missing: $FIXTURE"
 
-# --- 1. health (four dependency checks over the public edge) ---------------
+# --- 1. health (component-edge checks over the public edge) --------------
+# DM07 #316: the api process holds no DB credentials — its dependency
+# visibility proxies the library/store component health (each component's
+# own /api/health folds its postgres/zotero/runner checks).
 
 health="$(curl -fsS -m 60 "$API/api/health")"
 echo "$health" | jq -e '.ok == true' >/dev/null || die "health not ok: $health"
-for check in postgres zotero query-runner ingest-runner; do
+for check in library store; do
     echo "$health" | jq -e --arg c "$check" '.checks[$c] == "ok"' >/dev/null ||
         die "health check $check: $(echo "$health" | jq -r --arg c "$check" '.checks[$c]')"
 done
-ok "health: ok=true, all four dependency checks green"
+ok "health: ok=true, both component-edge checks green"
 
 # --- 2. seed + intake through the public edge -------------------------------
 

@@ -14,7 +14,9 @@
 name: axiom-topology
 
 x-rag-env: &rag-env
-  AXIOM_DATABASE_URL: postgresql://axiom:axiom@pg:5432/axiom
+  # DM07 #316: AXIOM_DATABASE_URL deliberately NOT in the shared anchor —
+  # only the library/store services get it below; the api edge and the
+  # compute worker run credential-free by contract.
   AXIOM_OPENSEARCH_URL: http://opensearch:9200
   AXIOM_OS_INDEX: topology-chunks-v1
   AXIOM_PROCESSOR_URLS: http://worker:8112
@@ -88,6 +90,7 @@ services:
     command: ["serve", "library"]
     environment:
       <<: *rag-env
+      AXIOM_DATABASE_URL: postgresql://axiom:axiom@pg:5432/axiom
       AXIOM_API_PORT: "8113"
       AXIOM_BIND_ADDR: "0.0.0.0"
       AXIOM_LIBRARY_IMPORT_PROVIDERS: fake
@@ -108,6 +111,7 @@ services:
     command: ["serve", "store"]
     environment:
       <<: *rag-env
+      AXIOM_DATABASE_URL: postgresql://axiom:axiom@pg:5432/axiom
       AXIOM_API_PORT: "8114"
       AXIOM_BIND_ADDR: "0.0.0.0"
       AXIOM_DISPATCHER_ENABLED: "1"
@@ -144,6 +148,10 @@ services:
     ports:
       - "127.0.0.1:18111:8111"
     depends_on:
+      # both components feed the edge's proxied dependency checks — the
+      # api health stays red until each answers ok
+      library:
+        condition: service_healthy
       store:
         condition: service_healthy
     healthcheck:

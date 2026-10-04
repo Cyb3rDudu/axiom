@@ -333,7 +333,7 @@ func checkPoolRole(ctx context.Context, pool *pgxpool.Pool, component, wrongRole
 // sameDatabase reports whether two DSNs point at the same PostgreSQL
 // database (host+port+database identity — credentials and spelling
 // differences do not matter). DM07 #316: the split-credentials interim
-// points both component pools at ONE database through different roles; // the shared-database decisions (the legacy mirror Mits-Schrieb lane)
+// points both component pools at ONE database through different roles; the shared-database decisions (the legacy mirror Mits-Schrieb lane)
 // must follow the DATABASE identity, not DSN string equality. Parse
 // failures compare unequal (conservative: db.Open right after is the
 // loud authority on broken DSNs).
@@ -861,8 +861,11 @@ func (r *Root) componentsFor() []Component {
 			// api process binds its Library contract surface here. Off by
 			// default (the all-in-one topology needs no internal edge);
 			// Select refuses the edge-without-service misconfig loudly.
+			// DM07 #316: the edge also serves /api/health from the SAME
+			// checker registry as the public surface — the api edge's
+			// dependency probes ride it (credential-free visibility).
 			if err := r.serveInternalEdge(r.cfg.InternalLibraryAddr,
-				bindings.LibraryInternalRoutes(r.libSvc, nil), "library", &r.libEdge); err != nil {
+				edgeWithHealth(bindings.LibraryInternalRoutes(r.libSvc, nil), r.srv), "library", &r.libEdge); err != nil {
 				return err
 			}
 			return nil
@@ -1049,8 +1052,10 @@ func (r *Root) componentsFor() []Component {
 			r.srv.SetStoreAPI(bindings.NewLocalStoreClient(r.storeSvc))
 			// F11 #305: the internal Store edge (+ the SSE event stream
 			// the api process bridges onto its own broker in split).
+			// DM07 #316: /api/health rides this edge too (see the library
+			// edge above).
 			if err := r.serveInternalEdge(r.cfg.InternalStoreAddr,
-				bindings.StoreInternalRoutes(r.storeSvc, r.broker, nil), "store", &r.storeEdge); err != nil {
+				edgeWithHealth(bindings.StoreInternalRoutes(r.storeSvc, r.broker, nil), r.srv), "store", &r.storeEdge); err != nil {
 				return err
 			}
 			// Role probe (R4 Ziel 1/3): capability check of the query runner
@@ -1173,6 +1178,21 @@ func (r *Root) componentsFor() []Component {
 			// with the HTTP bindings (public routes unchanged; the
 			// legacy 0.1.x DB-backed surfaces stay local).
 			r.injectRemoteBindings(ctx)
+			// DM07 #316: in the split shape the api process holds no DB
+			// credentials — the dependency visibility /api/health owed
+			// the operator moves to component probes (each component's
+			// own health folds its postgres/zotero/runner checks). The
+			// tight probe budget keeps a wedged component marking the
+			// edge red instead of stalling it.
+			if r.cfg.LibraryURL != "" && r.cfg.StoreURL != "" {
+				budget := 10 * time.Second
+				if r.cfg.ComponentTimeout > 0 && r.cfg.ComponentTimeout < budget {
+					budget = r.cfg.ComponentTimeout
+				}
+				r.srv.RegisterCheck("library", server.CheckHTTP("library", r.cfg.LibraryURL+"/api/health", budget))
+				r.srv.RegisterCheck("store", server.CheckHTTP("store", r.cfg.StoreURL+"/api/health", budget))
+				r.logger.Printf("split edge: dependency checks proxy the library/store component health (credential-free, #316)")
+			}
 			r.httpSrv = &http.Server{
 				Addr:              r.srvAddr(),
 				Handler:           r.srv,
@@ -1241,6 +1261,18 @@ type internalEdge struct {
 // loud start failure, like the public listener; serve-loop errors after
 // a successful bind only log (clients degrade to typed 503s — the
 // fault-parity contract).
+// edgeWithHealth mounts the process's health endpoint on an internal
+// component edge (DM07 #316): GET /api/health answers from the SAME
+// checker registry as the public surface, so the credential-free api
+// edge can proxy dependency visibility over the component edges. The
+// contract routes are untouched underneath.
+func edgeWithHealth(contract http.Handler, srv *server.Server) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/api/health", srv.HealthEndpoint())
+	mux.Handle("/", contract)
+	return mux
+}
+
 func (r *Root) serveInternalEdge(addr string, handler http.Handler, component string, edge *internalEdge) error {
 	if addr == "" {
 		return nil
