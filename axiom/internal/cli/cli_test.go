@@ -199,6 +199,41 @@ func TestAPIRolesSelection(t *testing.T) {
 			t.Fatalf("db-less apiRoles = %v, want [api]", got)
 		}
 	})
+
+	// DM07 #316: the split edge is the SECOND legal api-only shape (not
+	// degraded): the DSN is cleared loudly, the loops env suppressed so
+	// the cleared DSN cannot trip the half-wired guard.
+	t.Run("split topology clears DSN loudly", func(t *testing.T) {
+		cfg := config.Config{
+			DatabaseURL:       "postgresql://u:pw@h/db",
+			LibraryURL:        "http://127.0.0.1:8221",
+			StoreURL:          "http://127.0.0.1:8222",
+			DispatcherEnabled: true,
+		}
+		var notes []string
+		out := apiServeSplitCredentials(cfg, func(n string) { notes = append(notes, n) })
+		if out.DatabaseURL != "" {
+			t.Fatalf("the split edge must hold no DSN, got %q", out.DatabaseURL)
+		}
+		if out.DispatcherEnabled {
+			t.Fatal("the split edge must suppress the claim-loop env")
+		}
+		if len(notes) != 2 || !strings.Contains(notes[0], "credential-free") {
+			t.Fatalf("both suppressions must note loudly, got %v", notes)
+		}
+		if apiRoles(out)[0] != composition.RoleAPI || len(apiRoles(out)) != 1 {
+			t.Fatalf("cleared DSN must derive the api-only set, got %v", apiRoles(out))
+		}
+	})
+
+	t.Run("non-split keeps the DSN (single-DSN compat)", func(t *testing.T) {
+		cfg := config.Config{DatabaseURL: "postgresql://u:pw@h/db", LibraryURL: "http://127.0.0.1:8221"}
+		var noted bool
+		out := apiServeSplitCredentials(cfg, func(string) { noted = true })
+		if out.DatabaseURL == "" || noted {
+			t.Fatal("a half-configured split must not clear the DSN — only the full split edge does")
+		}
+	})
 }
 
 func TestUnknownCommandIsUsageError(t *testing.T) {

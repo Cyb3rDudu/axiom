@@ -160,6 +160,9 @@ func cmdServe(name string, args []string, flags map[string]string) int {
 		cfg = apiServeConfig(base, func(note string) {
 			fmt.Fprintln(os.Stderr, name+": note: "+note)
 		})
+		cfg = apiServeSplitCredentials(cfg, func(note string) {
+			fmt.Fprintln(os.Stderr, name+": note: "+note)
+		})
 		// F11 #305: in the split topology (AXIOM_LIBRARY_URL/
 		// AXIOM_STORE_URL set) the Library contract surface is served by
 		// the library PROCESS — a local provider here would race the
@@ -170,7 +173,7 @@ func cmdServe(name string, args []string, flags map[string]string) int {
 			cfg.LibraryImportProviders = ""
 		}
 		roles = apiRoles(cfg)
-		if len(roles) == 1 {
+		if len(roles) == 1 && cfg.LibraryURL == "" && cfg.StoreURL == "" {
 			fmt.Fprintln(os.Stderr, name+": WARNING: AXIOM_DATABASE_URL not set; serving api-only (degraded)")
 		}
 	case "library":
@@ -228,11 +231,38 @@ func apiServeConfig(cfg config.Config, note func(string)) config.Config {
 	return cfg
 }
 
+// apiServeSplitCredentials enforces the DM07 #316 serve-api contract
+// for the split topology: the api process is the pure public edge and
+// holds NO database credentials. A DSN present in its environment (the
+// shared-env-file shape) used to silently boot the local store stack
+// and shadow the component proxies; now it is ignored, loudly. The
+// loops env follows the same "no loops" contract so the cleared DSN
+// cannot trip Select's half-wired guard. Non-split shapes pass through
+// unchanged (the single-DSN compat rule).
+func apiServeSplitCredentials(cfg config.Config, note func(string)) config.Config {
+	if cfg.LibraryURL == "" || cfg.StoreURL == "" {
+		return cfg
+	}
+	if cfg.DatabaseURL != "" {
+		note("AXIOM_STORE_DATABASE_URL/AXIOM_DATABASE_URL set but serve api runs the split edge (AXIOM_LIBRARY_URL+AXIOM_STORE_URL) — the api process stays credential-free (#316); the DSN is ignored here")
+		cfg.DatabaseURL = ""
+	}
+	if cfg.DispatcherEnabled {
+		note("AXIOM_DISPATCHER_ENABLED=1 but serve api runs no claim loop in the split topology — the store process owns it")
+		cfg.DispatcherEnabled = false
+	}
+	return cfg
+}
+
 // apiRoles is the API-relevant selection out of the F04 registry: every
 // role that serves the HTTP surface (store, events, sync, repair API,
 // search, ingest wiring) — minus the background claim/fixer loops. A
 // db-less config degrades to api-only with today's warning (the degraded
 // shape is legal; Select would otherwise refuse the unstartable store).
+// Since DM07 #316 the split topology (AXIOM_LIBRARY_URL + AXIOM_STORE_URL
+// set) is the SECOND legal api-only shape — the pure public edge, NOT
+// degraded: cmdServe clears the DSN before this derivation so the api
+// process never opens a pool it must not hold.
 func apiRoles(cfg config.Config) []composition.Role {
 	if cfg.DatabaseURL == "" {
 		return []composition.Role{composition.RoleAPI}
