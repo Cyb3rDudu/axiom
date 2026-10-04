@@ -81,6 +81,8 @@ func Run(name string, args []string) int {
 			return code
 		}
 		return cmdConfig(name, rest, flags)
+	case "data":
+		return cmdData(name, args[2:])
 	case "--version":
 		return cmdVersion(false)
 	case "-help", "--help", "help":
@@ -439,6 +441,16 @@ Commands:
   config import-env             one-shot: import the current environment
                                 into config.sqlite (secrets as references
                                 only, never values)
+  data export --component library --dsn URL --out DIR
+                                write the backend-neutral bundle (versioned,
+                                streamable, hash-verified; DM03)
+  data import --component library --from DIR (--dsn URL | --sqlite PATH) [--merge]
+                                apply a bundle (idempotent; non-empty
+                                targets need --merge; in-flight imports
+                                survive verbatim; DM04)
+  data verify --component library --from DIR (--dsn URL | --sqlite PATH) [--json]
+                                counts, digests, FK invariants, semantic
+                                readbacks (+ PRAGMA integrity on SQLite)
   --set KEY=VALUE               one-shot override for serve/doctor/config
                                 (the CLI-flag stage of the chain)
   (KG mode flags)               the legacy one-shot modes (#244) keep
