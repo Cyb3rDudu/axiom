@@ -113,6 +113,18 @@ func LoadResolved(flags map[string]string) (Config, Chain, error) {
 	if problems := ValidateFlags(flags); len(problems) > 0 {
 		return Config{}, Chain{}, fmt.Errorf("--set invalid:\n\t%s", strings.Join(problems, "\n\t"))
 	}
+	// DM07 #316 — the store-DSN conflict guard. Both spellings set with
+	// DIFFERENT values is two operators asserting two truths: precedence
+	// would improvise one. Refuse instead (the hard compat rule: the
+	// single-DSN AXIOM_DATABASE_URL keeps working until the cutover —
+	// an operator moving to the canonical spelling unsets the legacy
+	// one; identical values are the harmless overlap and pass). Secret
+	// keys never materialize from file or flags, so the environment is
+	// the only value source — this check is exact. The message names
+	// keys, never values.
+	if legacy, canonical := os.Getenv("AXIOM_DATABASE_URL"), os.Getenv("AXIOM_STORE_DATABASE_URL"); legacy != "" && canonical != "" && legacy != canonical {
+		return Config{}, Chain{}, fmt.Errorf("AXIOM_DATABASE_URL and AXIOM_STORE_DATABASE_URL are both set but differ — resolve to ONE spelling (AXIOM_DATABASE_URL stays the supported single-DSN form until the cutover; unset it when moving to AXIOM_STORE_DATABASE_URL)")
+	}
 
 	ch := Chain{
 		Flag:   map[string]bool{},

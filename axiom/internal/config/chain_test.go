@@ -345,7 +345,11 @@ func TestValidateSettingsTeeth(t *testing.T) {
 		"AXIOM_LIBRARY_DATABASE_URL": "postgresql://u:pw@h/lib",
 	}, map[string]string{"AXIOM_WS_SECRET": "env"})
 	joined := strings.Join(problems, "\n")
-	for _, want := range []string{"AXIOM_NOPE", "AXIOM_DATABASE_URL", "AXIOM_SEARCH_RERANK", "AXIOM_DISPATCHER_LEASE", "AXIOM_API_PORT", "out of range", "AXIOM_LIBRARY_DATABASE_URL", "credential"} {
+	// DM07 #316: both DSN rows are secret — the password-bearing library
+	// DSN now trips the SECRET refusal (references only) before any
+	// inline-credential check; the inline-credential teeth stay pinned on
+	// non-secret URL rows (TestValidateFlagsTeeth / TestValidateSettingsTeeth above).
+	for _, want := range []string{"AXIOM_NOPE", "AXIOM_DATABASE_URL", "AXIOM_SEARCH_RERANK", "AXIOM_DISPATCHER_LEASE", "AXIOM_API_PORT", "out of range", "AXIOM_LIBRARY_DATABASE_URL", "secret keys carry references"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("problems must name %s, got: %v", want, problems)
 		}
@@ -353,8 +357,15 @@ func TestValidateSettingsTeeth(t *testing.T) {
 	if problems := ValidateSettings(map[string]string{"AXIOM_OPENSEARCH_URL": ""}, nil); len(problems) != 0 {
 		t.Fatalf("the set-empty disable row is legal, got %v", problems)
 	}
-	if problems := ValidateSettings(map[string]string{"AXIOM_LIBRARY_DATABASE_URL": "postgresql://h/lib"}, nil); len(problems) != 0 {
-		t.Fatalf("a credential-free DSN is a legal file row, got %v", problems)
+	// DM07 #316: every DSN row is secret — config.sqlite carries the
+	// reference only, even credential-free projections (the value rides
+	// env / the OS secret store; WHERE the pool points stays visible via
+	// `config get --effective`, sanitized).
+	if problems := ValidateSettings(map[string]string{"AXIOM_LIBRARY_DATABASE_URL": "postgresql://h/lib"}, nil); len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "secret keys carry references") {
+		t.Fatalf("a DSN row must be reference-only (DM07), got %v", problems)
+	}
+	if problems := ValidateSettings(map[string]string{"AXIOM_STORE_DATABASE_URL": "postgresql://h/store"}, nil); len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "secret keys carry references") {
+		t.Fatalf("the canonical store DSN row must be reference-only (DM07), got %v", problems)
 	}
 	if problems := ValidateSettings(nil, map[string]string{"AXIOM_WS_SECRET": "keychain"}); len(problems) == 0 {
 		t.Fatal("unknown ref source must be a problem")

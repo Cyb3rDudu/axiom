@@ -261,9 +261,13 @@ func Load() Config {
 		quarantineDefault = root + "/quarantine"
 	}
 	cfg := Config{
-		ZoteroBaseURL:              env("AXIOM_ZOTERO_BASE", defaultZoteroBase),
-		ZoteroLibraryID:            env("AXIOM_ZOTERO_LIBRARY", defaultLibraryID),
-		DatabaseURL:                env("AXIOM_DATABASE_URL", ""),
+		ZoteroBaseURL:   env("AXIOM_ZOTERO_BASE", defaultZoteroBase),
+		ZoteroLibraryID: env("AXIOM_ZOTERO_LIBRARY", defaultLibraryID),
+		// DM07 #316: the store DSN — canonical AXIOM_STORE_DATABASE_URL
+		// over the legacy single-DSN AXIOM_DATABASE_URL (witness). The
+		// both-set-and-different conflict refuses in LoadResolved
+		// (chain.go), never resolves by precedence.
+		DatabaseURL:                computeWorkerEnv("AXIOM_STORE_DATABASE_URL", "AXIOM_DATABASE_URL", ""),
 		OpenSearchURL:              envEmptyDisables("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200"),
 		OpenSearchUsername:         env("AXIOM_OPENSEARCH_USERNAME", ""),
 		OpenSearchPassword:         env("AXIOM_OPENSEARCH_PASSWORD", ""),

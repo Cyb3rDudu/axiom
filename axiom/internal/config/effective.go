@@ -49,7 +49,13 @@ type envRow struct {
 var envRows = []envRow{
 	{"AXIOM_ZOTERO_BASE", "ZoteroBaseURL", false},
 	{"AXIOM_ZOTERO_LIBRARY", "ZoteroLibraryID", false},
+	// DM07 #316: the store DSN is dual-fed — canonical AXIOM_STORE_DATABASE_URL,
+	// legacy single-DSN AXIOM_DATABASE_URL (kept working through the
+	// deprecation witness until the cutover window). Both DSN rows are
+	// secret: config.sqlite carries references only, the value rides
+	// env / the OS secret store.
 	{"AXIOM_DATABASE_URL", "DatabaseURL", true},
+	{"AXIOM_STORE_DATABASE_URL", "DatabaseURL", true},
 	{"AXIOM_OPENSEARCH_URL", "OpenSearchURL", false},
 	{"AXIOM_OPENSEARCH_USERNAME", "OpenSearchUsername", false},
 	{"AXIOM_OPENSEARCH_PASSWORD", "OpenSearchPassword", true},
@@ -103,9 +109,12 @@ var envRows = []envRow{
 	{"AXIOM_LIBRARY_IMPORT_MAX_BYTES", "LibraryImportMaxBytes", false},
 	{"AXIOM_LIBRARY_IMPORT_PROVIDERS", "LibraryImportProviders", false},
 	// F12 #306: per-component persistence profile (library engine + own
-	// DSN / sqlite path). Not secret — operator-debuggable wiring state.
+	// DSN / sqlite path). The library DSN row is secret since DM07 #316
+	// (a DSN is a credential unit — reference-only in config.sqlite,
+	// value in env / the OS secret store; the effective view still
+	// renders its credential-free projection via sanitizeDSN below).
 	{"AXIOM_STORAGE_LIBRARY_DRIVER", "StorageLibraryDriver", false},
-	{"AXIOM_LIBRARY_DATABASE_URL", "LibraryDatabaseURL", false},
+	{"AXIOM_LIBRARY_DATABASE_URL", "LibraryDatabaseURL", true},
 	{"AXIOM_LIBRARY_SQLITE_PATH", "LibrarySQLitePath", false},
 	{"AXIOM_ZOTERO_WRITE_KEY_FILE", "ZoteroWriteKeyFile", false},
 	{"AXIOM_QUARANTINE_ROOT", "QuarantineRoot", false},
@@ -132,6 +141,7 @@ const RedactedValue = "<redacted>"
 // or empty var renders default (its health-counter witness in
 // /api/health/deprecations is the "is it set?" surface).
 var dualFedEnv = map[string][2]string{
+	"DatabaseURL":             {"AXIOM_STORE_DATABASE_URL", "AXIOM_DATABASE_URL"},
 	"FixerCommand":            {"AXIOM_REPAIR_WORKER_CMD", "AXIOM_FIXER_CMD"},
 	"ProcessorURL":            {"AXIOM_COMPUTE_WORKER_URL", "AXIOM_PROCESSOR_URL"},
 	"ProcessorURLs":           {"AXIOM_COMPUTE_WORKER_URLS", "AXIOM_PROCESSOR_URLS"},
@@ -182,7 +192,7 @@ func render(cfg Config, source func(envRow) string) []Entry {
 		}
 		var value any
 		switch {
-		case row.env == "AXIOM_DATABASE_URL", row.env == "AXIOM_LIBRARY_DATABASE_URL":
+		case row.env == "AXIOM_DATABASE_URL", row.env == "AXIOM_STORE_DATABASE_URL", row.env == "AXIOM_LIBRARY_DATABASE_URL":
 			value = sanitizeDSN(f.String())
 		case row.secret:
 			value = RedactedValue

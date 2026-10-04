@@ -93,17 +93,22 @@ func TestConfigSetGoodAndBad(t *testing.T) {
 		{"AXIOM_SEARCH_RERANK", "maybe", "not a boolean"},
 		{"AXIOM_STORAGE_LIBRARY_DRIVER", "oracle", "unknown driver"},
 		{"AXIOM_WS_SECRET", "the-ws-secret", "secret"},
-		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://u:pw@h/lib", "credential"},
-		// the three probe-confirmed leak forms of the credential review:
-		// DSN keyword/value, query parameter, percent-encoded query key.
-		{"AXIOM_LIBRARY_DATABASE_URL", "host=dbhost password=KWVALSECRET user=axiom dbname=lib", "credential"},
-		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://h/lib?password=QSECRET", "credential"},
-		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://h/lib?pass%77ord=PCTSECRET", "credential"},
+		// DM07 #316: every DSN row is secret — a set on it refuses as
+		// reference-only, before any inline-credential check (the DSN's
+		// credential home is env / the OS secret store).
+		{"AXIOM_LIBRARY_DATABASE_URL", "postgresql://u:pw@h/lib", "secret keys carry references"},
+		{"AXIOM_STORE_DATABASE_URL", "postgresql://u:pw@h/store", "secret keys carry references"},
+		// the three probe-confirmed leak forms of the credential review
+		// (DSN keyword/value, query parameter, percent-encoded query key),
+		// pinned on a NON-secret URL row — the DSN rows refuse earlier now.
+		{"AXIOM_QUERY_RUNNER_URL", "host=dbhost password=KWVALSECRET user=axiom dbname=lib", "credential"},
+		{"AXIOM_QUERY_RUNNER_URL", "postgresql://h/lib?password=QSECRET", "credential"},
+		{"AXIOM_QUERY_RUNNER_URL", "postgresql://h/lib?pass%77ord=PCTSECRET", "credential"},
 		// the whitespace keyword/value spelling: pgconn TRIMS whitespace
 		// from keyword keys, so `password =…` (space or tab) is a working
 		// credential the literal-equals pattern misses.
-		{"AXIOM_LIBRARY_DATABASE_URL", "host=dbhost password =KWVALSECRET user=axiom dbname=lib", "credential"},
-		{"AXIOM_LIBRARY_DATABASE_URL", "host=dbhost password\t=KWVALSECRET user=axiom dbname=lib", "credential"},
+		{"AXIOM_QUERY_RUNNER_URL", "host=dbhost password =KWVALSECRET user=axiom dbname=lib", "credential"},
+		{"AXIOM_QUERY_RUNNER_URL", "host=dbhost password\t=KWVALSECRET user=axiom dbname=lib", "credential"},
 		// the render-symmetry over-match, pinned as DELIBERATE: a free-text
 		// value containing a credential-shaped fragment is refused too —
 		// what the effective view would redact is never a stored form.
@@ -345,7 +350,10 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 		}
 	}
 	// the hostile rows were skipped LOUDLY: each named with its form.
-	for _, key := range []string{"AXIOM_LIBRARY_DATABASE_URL", "AXIOM_OPENSEARCH_URL", "AXIOM_QUERY_RUNNER_URL"} {
+	// DM07 #316: AXIOM_LIBRARY_DATABASE_URL left this list — DSN keys
+	// are secret rows now, so the importer records a REFERENCE (env
+	// keeps owning the value; the leak sonde above still holds).
+	for _, key := range []string{"AXIOM_OPENSEARCH_URL", "AXIOM_QUERY_RUNNER_URL"} {
 		if !strings.Contains(out, "skipped: "+key) {
 			t.Fatalf("credential row %s must be skipped loudly, got: %s", key, out)
 		}
@@ -376,8 +384,13 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 		t.Fatalf("effective moved across import:\n%+v\nvs\n%+v", before, after)
 	}
 	// secrets as references only; values never in the file bytes.
-	if len(first.SecretRefs) != len(secrets) {
-		t.Fatalf("secret refs = %v, want one per secret env", first.SecretRefs)
+	// DM07 #316: the library DSN counts among the refs now (secret row;
+	// its hostile VALUE stays in env — the sonde above proves that).
+	if len(first.SecretRefs) != len(secrets)+1 {
+		t.Fatalf("secret refs = %v, want one per secret env plus the library DSN reference", first.SecretRefs)
+	}
+	if first.SecretRefs["AXIOM_LIBRARY_DATABASE_URL"] != "env" {
+		t.Fatalf("library DSN must import as a reference, got %v", first.SecretRefs)
 	}
 	// the hostile rows never entered the settings, and the
 	// username-only userinfo DID (identity, not credential).
