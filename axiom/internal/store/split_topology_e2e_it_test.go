@@ -343,6 +343,15 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 	// TYPE (duplicate pg_type) — the first process up migrates, the rest
 	// no-op. Order: library (owns the api's library edge), store (owns the
 	// dispatcher + the api's store edge), api last.
+	// Per-process expected CHECK NAMES (DM07 review round 2): a silently
+	// lost registration (e.g. ingest-runner never registered) must fail
+	// HERE by name again — the public edge only asserts the component
+	// probes. The api process is exempt (its checks are the library/store
+	// probes, asserted at the public edge below).
+	wantChecks := map[string][]string{
+		"library": {"postgres", "zotero"},
+		"store":   {"postgres", "query-runner", "ingest-runner"},
+	}
 	startAndWait := func(role string, port, edge int) *splitProc {
 		proc := startSplitProc(t, e, role, port, edge)
 		waitFor(t, 90*time.Second, role+" process healthy", func() error {
@@ -355,10 +364,16 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 			defer resp.Body.Close()
 			body, _ := io.ReadAll(resp.Body)
 			var h struct {
-				OK bool `json:"ok"`
+				OK     bool           `json:"ok"`
+				Checks map[string]any `json:"checks"`
 			}
 			if err := json.Unmarshal(body, &h); err != nil || !h.OK {
 				return fmt.Errorf("health not ok: %s", tailLogs(proc.logs))
+			}
+			for _, name := range wantChecks[role] {
+				if v, has := h.Checks[name]; !has || v != "ok" {
+					return fmt.Errorf("%s process lost check %s = %v", role, name, v)
+				}
 			}
 			return nil
 		})

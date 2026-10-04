@@ -9,6 +9,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -36,7 +37,12 @@ func CheckHTTP(component, healthURL string, timeout time.Duration) *HTTPHealthCh
 // Ready reports the component healthy when its health endpoint answers
 // ok — the component's OWN dependency checks fold into that verdict.
 func (c *HTTPHealthChecker) Ready() error {
-	if c == nil || c.url == "" {
+	if c == nil {
+		// no field access on the nil receiver — a typed-nil registration
+		// is a wiring error, not a panic (review round 2 NIT)
+		return errors.New("component health probe not configured")
+	}
+	if c.url == "" {
 		return fmt.Errorf("%s edge not configured", c.component)
 	}
 	resp, err := c.client.Get(c.url)

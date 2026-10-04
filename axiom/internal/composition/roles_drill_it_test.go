@@ -110,13 +110,21 @@ func TestIT_Dm07RoleDrill(t *testing.T) {
 	// exists (a shared dev cluster also serving a reference database),
 	// the drill would reset its password mid-run and DROP it in cleanup
 	// — foreign state. Refuse instead; drill on a disposable mirror.
+	// AXIOM_REQUIRE_DRILL=1 (set in CI) turns every skip into a failure:
+	// a skip is never silently green where the drill is a gate.
+	drillRefuse := func(format string, args ...any) {
+		if os.Getenv("AXIOM_REQUIRE_DRILL") == "1" {
+			t.Fatalf("drill required (AXIOM_REQUIRE_DRILL=1) but refused: "+format, args...)
+		}
+		t.Skipf(format, args...)
+	}
 	var preexist int
 	if err := admin.QueryRow(ctx,
 		`SELECT count(*) FROM pg_roles WHERE rolname IN ('axiom_library','axiom_store')`).Scan(&preexist); err != nil {
 		t.Fatalf("role pre-existence probe: %v", err)
 	}
 	if preexist > 0 {
-		t.Skipf("axiom_library/axiom_store already exist on this cluster (%d found) — refusing to touch foreign roles; run the drill on a disposable mirror", preexist)
+		drillRefuse("axiom_library/axiom_store already exist on this cluster (%d found) — refusing to touch foreign roles; run the drill on a disposable mirror", preexist)
 	}
 	sqlBytes, err := os.ReadFile(rolesSQLPath(t))
 	if err != nil {
@@ -131,10 +139,10 @@ func TestIT_Dm07RoleDrill(t *testing.T) {
 	// drill passwords (throwaway; the ALTER never echoes them anywhere)
 	const libPW, storePW = "dm07-drill-lib", "dm07-drill-store"
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`ALTER ROLE axiom_library PASSWORD '%s'`, libPW)); err != nil {
-		t.Skipf("cannot set drill passwords on this server (role management needs admin rights — CI runs it as superuser): %v", err)
+		drillRefuse("cannot set drill passwords on this server (role management needs admin rights — CI runs it as superuser): %v", err)
 	}
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`ALTER ROLE axiom_store PASSWORD '%s'`, storePW)); err != nil {
-		t.Skipf("cannot set drill passwords on this server (role management needs admin rights — CI runs it as superuser): %v", err)
+		drillRefuse("cannot set drill passwords on this server (role management needs admin rights — CI runs it as superuser): %v", err)
 	}
 	// the drill's roles are CLUSTER-GLOBAL (throwaway passwords): best-effort
 	// drop so shared dev servers stay clean — CI containers are disposable.

@@ -283,6 +283,7 @@ jobs:
       AXIOM_TEST_DATABASE_URL:
         "postgresql://axiom_user:axiom_password@localhost:5432/axiom_ci_test?sslmode=\
         disable"
+      AXIOM_REQUIRE_DRILL: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -294,6 +295,9 @@ jobs:
       # No manual schema application: db.Migrate() owns the schema (tracks
       # applied files itself — pre-applying via psql desyncs its ledger and
       # 42710s on CREATE TYPE). The IT harnesses call Migrate on fresh DBs.
+      # DM07 #316: AXIOM_REQUIRE_DRILL=1 — the role drill is a GATE here,
+      # not a best-effort: a skip (foreign roles, missing admin rights)
+      # must be red, never silently green.
       - name: full suites incl. DB ITs
         run: go test -p 1 -count=1 ./...
 

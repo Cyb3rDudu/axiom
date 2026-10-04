@@ -3,13 +3,14 @@
 package server
 
 import (
-	"github.com/Cyb3rDudu/axiom/axiom/internal/events"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/deprecate"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/events"
 	axlibrary "github.com/Cyb3rDudu/axiom/axiom/internal/library"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/version"
@@ -30,6 +31,7 @@ type Checker interface {
 type Server struct {
 	addr          string
 	checkers      map[string]Checker
+	checkersMu    sync.RWMutex
 	jobsSvc       SyncService
 	repo          JobRepo
 	log           *log.Logger
@@ -93,7 +95,16 @@ func New(addr string, log *log.Logger) *Server {
 }
 
 // RegisterCheck adds a named dependency checker reported by /api/health.
-func (s *Server) RegisterCheck(name string, c Checker) { s.checkers[name] = c }
+// The registry is mutex-guarded (DM07 #316, review round 2): the F11
+// internal edges serve /api/health from a listener that starts while
+// LATER components still register their checks — an unsynchronized
+// map write next to handleHealth's range is a fatal race, not an
+// recoverable error.
+func (s *Server) RegisterCheck(name string, c Checker) {
+	s.checkersMu.Lock()
+	defer s.checkersMu.Unlock()
+	s.checkers[name] = c
+}
 
 // SetContextualState wires the #262 /api/health contextual field: "active"
 // or "degraded_no_sync" while rules are configured (omitted otherwise) — a
@@ -253,7 +264,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	checks := map[string]any{}
 	ok := true
 
+	// Snapshot under the read lock, probe WITHOUT it: Ready() performs
+	// real work (HTTP probes up to their budget) — holding RLock through
+	// it would park boot-time RegisterCheck writes behind a slow probe.
+	s.checkersMu.RLock()
+	snapshot := make(map[string]Checker, len(s.checkers))
 	for name, checker := range s.checkers {
+		snapshot[name] = checker
+	}
+	s.checkersMu.RUnlock()
+	for name, checker := range snapshot {
 		if checker == nil {
 			checks[name] = "unknown"
 			ok = false
