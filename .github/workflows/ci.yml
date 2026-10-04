@@ -148,6 +148,17 @@ jobs:
           go-version-file: axiom/go.mod
       - name: "library repository contract suite (engine: postgres + sqlite)"
         run: go test -count=1 -v ./internal/library/reposuite ./internal/library/sqlite ./internal/library/pglib -run 'TestRepositoryContractSuite|TestSkipGuardProbes'
+      # DM03/DM04 (#312/#313): the bundle evidence chain needs the real
+      # PostgreSQL — PG→PG identity, digest/bit-flip teeth, enum teeth,
+      # in-flight verbatim, retry sonde, and the import under the DM07
+      # DML-only role (AXIOM_REQUIRE_DRILL turns skips into failures —
+      # this leg owns a disposable service, the drill must run).
+      - name: "data bundle roundtrip (engine: postgres)"
+        env:
+          AXIOM_REQUIRE_DRILL: "1"
+        run: >-
+          go test -count=1 -v ./internal/databundle
+          -run 'TestBundlePostgres|TestImportUnderDMLRole'
 
   library-engine-sqlite:
     runs-on: ubuntu-latest
@@ -161,6 +172,13 @@ jobs:
       # the environment.
       - name: "library repository contract suite (engine: sqlite, PG-free)"
         run: go test -count=1 -v ./internal/library/reposuite ./internal/library/sqlite -run 'TestRepositoryContractSuite|TestSkipGuardProbes'
+      # DM03/DM04: the bundle's SQLite leg must run green with NO
+      # PostgreSQL anywhere (bundle→library.sqlite import, verify with
+      # PRAGMA integrity, retry sonde, the imported file passing the
+      # repository contract suite, unknown-enum teeth; the PG-gated
+      # tests skip by DSN absence — that skip IS this leg's point).
+      - name: "data bundle roundtrip (engine: sqlite, PG-free)"
+        run: go test -count=1 -v ./internal/databundle
 
   # --- F14 #308: deployment-topology witnesses --------------------------------
   # The split-process leg: the SAME functional gates as the dev-host
@@ -220,11 +238,12 @@ jobs:
         working-directory: .
         run: |
           python -m venv /tmp/f14-worker-venv
-          /tmp/f14-worker-venv/bin/pip install -r axiom-compute-worker/requirements.txt
+          /tmp/f14-worker-venv/bin/pip install \
+            -r axiom-compute-worker/requirements.txt
       - name: wait for OpenSearch
         working-directory: .
         run: |
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             curl -fsS localhost:9200 >/dev/null && exit 0
             sleep 5
           done
@@ -235,7 +254,9 @@ jobs:
           AXIOM_F14_E2E: "1"
           AXIOM_F14_OS_URL: http://localhost:9200
           AXIOM_F14_WORKER_PYTHON: /tmp/f14-worker-venv/bin/python
-        run: go test -count=1 -v -timeout 15m ./internal/store -run 'TestF14SplitTopologyE2E'
+        run: >-
+          go test -count=1 -v -timeout 15m ./internal/store
+          -run 'TestF14SplitTopologyE2E'
 
   # The container leg: ONE image (roles per argument), the split roles as
   # containers, the compute worker in its own network namespace (the
@@ -254,7 +275,9 @@ jobs:
         run: docker build -f deploy/container/Dockerfile -t axiom-topology .
       - name: container split up (sequential role boot)
         working-directory: .
-        run: docker compose -f deploy/container/compose.topology.yml up -d --wait
+        run: >-
+          docker compose -f deploy/container/compose.topology.yml
+          up -d --wait
       - name: container split smoke
         working-directory: .
         env:

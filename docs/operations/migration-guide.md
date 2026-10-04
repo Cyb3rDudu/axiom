@@ -547,6 +547,52 @@ and an automated cutover with rollback. Its runbook ships with the release
 train once the cutover rehearsals are done; until then there is **no
 operator action** — and nothing in this guide depends on it.
 
+The bundle format and the Library data commands HAVE shipped (DM03/DM04,
+#312/#313):
+
+```bash
+# write a bundle from a source database (read-only, one snapshot):
+axiom data export --component library --dsn "$SOURCE_URL" --out bundle/
+
+# apply it (idempotent; an occupied target needs --merge):
+axiom data import --component library --from bundle/ --dsn "$TARGET_URL"
+# or into the SQLite profile's file:
+axiom data import --component library --from bundle/ --sqlite ~/.axiom/library.sqlite
+
+# verify: per-table counts + canonical digests, FK-invariant scans,
+# semantic envelope readbacks, PRAGMA integrity on SQLite:
+axiom data verify --component library --from bundle/ --dsn "$TARGET_URL" [--json]
+```
+
+Properties that matter to an operator:
+
+- **Engine-portable, verifiable.** Canonical mappings (UUID strings, UTC
+  RFC3339-µs timestamps, permutation-stable canonical JSON, validated
+  enums, verbatim decimal tokens) make a bundle digest-comparable across
+  PostgreSQL and SQLite; `manifest.json` is pinned by a `bundle.sha256`
+  sidecar (SHA256SUMS pattern) and every batch file by a SHA-256 in the
+  manifest. A tampered batch aborts the import ISOLATED (nothing of it
+  applied); an unknown enum/status aborts loudly — never a silent default.
+- **Idempotent by stable key + payload.** Re-running an import never
+  duplicates; diverged rows abort as merge conflicts instead of being
+  overwritten. The import is data-only (zero DDL) and runs under the
+  `axiom_library` runtime role — the `setval` sequence resync after
+  explicit-id inserts is why that role carries `UPDATE` on sequences
+  (roles.sql section 5).
+- **In-flight imports survive verbatim** — `awaiting_confirmation`
+  imports land byte-identical, neither completed nor dropped.
+- **No document texts, no secrets** in any log line or error: failures
+  name tables, columns, counts, digests and key identifiers only.
+- The legacy mirror tables (zotero_*, repair_cases) import into
+  PostgreSQL targets; a `library.sqlite` target carries the `library_*`
+  namespace only and skips the legacy set with counted warnings (F12).
+
+The SQLite target additionally proves `PRAGMA integrity_check` and
+`PRAGMA foreign_key_check` clean, and the imported file passes the
+Library repository contract suite (F12 engine matrix). The dev
+rehearsal against a fresh production mirror copy — export → import →
+verify, all green — is documented in #313.
+
 ## Clean-machine walkthrough
 
 Nothing but this page: a fresh machine (or an empty directory), no
