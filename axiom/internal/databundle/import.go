@@ -46,7 +46,9 @@ type ImportResult struct {
 }
 
 // Import applies a bundle to the target. The whole import is resumable:
-// re-running after an abort skips identical rows and continues.
+// re-running after an abort skips identical rows and continues (the
+// occupied-target guard fires first — a resume needs the explicit merge
+// mode, which is also the no-duplication discipline).
 func Import(ctx context.Context, opts ImportOptions) (*ImportResult, error) {
 	man, err := LoadManifest(opts.From)
 	if err != nil {
@@ -57,6 +59,9 @@ func Import(ctx context.Context, opts ImportOptions) (*ImportResult, error) {
 	}
 	var snk sink
 	if opts.DSN != "" {
+		if opts.SQLitePath != "" {
+			return nil, fmt.Errorf("two targets given — pass exactly one of DSN (PostgreSQL) or SQLitePath")
+		}
 		p, err := openPG(ctx, opts.DSN)
 		if err != nil {
 			return nil, err
@@ -103,6 +108,9 @@ func importTable(ctx context.Context, snk sink, opts ImportOptions, tm *TableMan
 
 	// Structural validation: the target must carry exactly the bundle's
 	// column set — migration-stand drift is loud, never best-effort.
+	// On PostgreSQL the canonical TYPES are compared too (the engine
+	// reports real types); SQLite column tags are nominal by design
+	// (TEXT affinity under the documented dialect mapping) — names only.
 	tcols, err := snk.catalogColumns(ctx, tm.Name)
 	if err != nil {
 		return ti, fmt.Errorf("table %s: read target catalog: %w", tm.Name, err)
@@ -113,10 +121,15 @@ func importTable(ctx context.Context, snk sink, opts ImportOptions, tm *TableMan
 	if len(tcols) != len(tm.Columns) {
 		return ti, fmt.Errorf("table %s: target carries %d columns, bundle declares %d — migration-stand mismatch, refusing", tm.Name, len(tcols), len(tm.Columns))
 	}
+	strictTypes := snk.engineName() == "postgresql"
 	for i, c := range tm.Columns {
 		if tcols[i].Name != c.Name {
 			return ti, fmt.Errorf("table %s: column %d is %q in the target but %q in the bundle — migration-stand mismatch, refusing",
 				tm.Name, i+1, tcols[i].Name, c.Name)
+		}
+		if strictTypes && tcols[i].Type != c.Type {
+			return ti, fmt.Errorf("table %s column %s: target type is %q, bundle declares %q — type drift, refusing",
+				tm.Name, c.Name, tcols[i].Type, c.Type)
 		}
 	}
 	cols := make([]ColumnRef, len(tm.Columns))

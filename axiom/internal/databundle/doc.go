@@ -29,9 +29,9 @@
 //
 // No DB-generated defaults apply on import: every column of every row is
 // written explicitly (bigserial ids included; PostgreSQL sequences are
-// re-synced after import via setval, which needs only the sequence USAGE
-// grant the runtime role already holds — DM07's axiom_library can run
-// the whole import).
+// re-synced after import via setval, which needs the sequence UPDATE
+// grant roles.sql §5 gives the DM07 axiom_library role — the whole
+// import runs under that DML-only role).
 //
 // # Integrity (hash-verified, SHA256SUMS-signed)
 //

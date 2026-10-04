@@ -71,11 +71,11 @@ func Export(ctx context.Context, component string, opts ExportOptions) (*ExportR
 		return nil, err
 	}
 
-	engine, err := db.engineVersion(ctx)
+	engine, err := db.engineVersionInTx(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	ledgers, err := db.migrationLedgers(ctx)
+	ledgers, err := db.migrationLedgersInTx(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +94,8 @@ func Export(ctx context.Context, component string, opts ExportOptions) (*ExportR
 	}
 
 	tablesDir := filepath.Join(opts.Out, "tables")
-	if err := os.MkdirAll(tablesDir, 0o755); err != nil {
+	// 0700: bundle content is document metadata (Fachdaten).
+	if err := os.MkdirAll(tablesDir, 0o700); err != nil {
 		return nil, err
 	}
 
@@ -162,7 +163,7 @@ func exportTable(ctx context.Context, tx pgx.Tx, cat *pgCatalog, dir string, bat
 		pgSelectList(cols), pgIdent(cat.table), strings.Join(order, ", "))
 
 	tableDir := filepath.Join(dir, cat.table)
-	if err := os.MkdirAll(tableDir, 0o755); err != nil {
+	if err := os.MkdirAll(tableDir, 0o700); err != nil {
 		return nil, err
 	}
 
@@ -194,7 +195,7 @@ func exportTable(ctx context.Context, tx pgx.Tx, cat *pgCatalog, dir string, bat
 		}
 		name := fmt.Sprintf("%04d.jsonl", batchIdx)
 		path := filepath.Join(tableDir, name)
-		if err := os.WriteFile(path, batchBuf.Bytes(), 0o644); err != nil {
+		if err := os.WriteFile(path, batchBuf.Bytes(), 0o600); err != nil { // Fachdaten — not world-readable
 			return err
 		}
 		batches = append(batches, BatchManifest{

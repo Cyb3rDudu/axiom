@@ -158,7 +158,7 @@ func writeManifest(root string, m *Manifest) error {
 	}
 	sum := sha256.Sum256(mb)
 	sidecar := fmt.Sprintf("%x  %s\n", sum, ManifestFile)
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o700); err != nil {
 		return err
 	}
 	if err := writeFileSync(filepath.Join(root, ManifestFile), mb); err != nil {
@@ -169,7 +169,9 @@ func writeManifest(root string, m *Manifest) error {
 
 func writeFileSync(path string, content []byte) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, content, 0o644); err != nil {
+	// 0600: the bundle carries document metadata (titles, abstracts,
+	// creators) — Fachdaten, not world-readable on a shared host.
+	if err := os.WriteFile(tmp, content, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

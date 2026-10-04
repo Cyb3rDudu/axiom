@@ -45,8 +45,8 @@ type sink interface {
 	// foreignKeys lists the table's declared FKs (engine catalog truth).
 	foreignKeys(ctx context.Context, table string) ([]fkRef, error)
 	// resyncSequences re-aligns sequence-backed PKs after explicit-id
-	// inserts (PG: setval under the runtime role's USAGE grant; SQLite:
-	// AUTOINCREMENT self-updates — no-op).
+	// inserts (PG: setval under the runtime role's UPDATE-on-sequence
+	// grant, roles.sql §5; SQLite: AUTOINCREMENT self-updates — no-op).
 	resyncSequences(ctx context.Context, table string) error
 	// pragmaChecks returns engine-specific integrity verdicts (SQLite:
 	// integrity_check + foreign_key_check; PG: none — FK scans cover it).
@@ -197,8 +197,9 @@ func (s *pgSink) resyncSequences(ctx context.Context, table string) error {
 		return err
 	}
 	for _, p := range pairs {
-		// setval to the current max, is_called — next val is max+1; an
-		// empty table keeps the sequence untouched (nothing imported).
+		// setval to max+1, is_called=false — next val is max+1; an empty
+		// table resets the sequence to its initial position (identical
+		// to the fresh-schema state).
 		q := fmt.Sprintf(`SELECT setval(%s, COALESCE((SELECT MAX(%s) FROM %s), 0) + 1, false)`,
 			quoteLit(p.seq), pgIdent(p.col), pgIdent(table))
 		if _, err := s.db.pool.Exec(ctx, q); err != nil {
@@ -313,10 +314,6 @@ func sqliteScanDests(n int) []any {
 	}
 	return dests
 }
-
-// sqliteNormalize folds a driver value into the canonical value shape
-// (bools as 0/1 ints are folded back; everything else passes).
-func sqliteNormalize(v any) any { return v }
 
 func (s *sqliteSink) streamOrdered(ctx context.Context, table string, cols []ColumnRef, keyCols []string, fn func([]any) error) error {
 	order := make([]string, len(keyCols))

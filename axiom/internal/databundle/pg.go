@@ -40,8 +40,19 @@ func (p *pgDB) Close() { p.pool.Close() }
 
 // engineVersion is the manifest's engine identity line.
 func (p *pgDB) engineVersion(ctx context.Context) (string, error) {
+	return engineVersionQ(ctx, p.pool)
+}
+
+// engineVersionInTx reads the identity INSIDE the export snapshot (the
+// manifest's provenance must describe the same database state as the
+// exported rows).
+func (p *pgDB) engineVersionInTx(ctx context.Context, q pgQuerier) (string, error) {
+	return engineVersionQ(ctx, q)
+}
+
+func engineVersionQ(ctx context.Context, q pgQuerier) (string, error) {
 	var v string
-	err := p.pool.QueryRow(ctx, `SELECT version()`).Scan(&v)
+	err := q.QueryRow(ctx, `SELECT version()`).Scan(&v)
 	if err != nil {
 		return "", err
 	}
@@ -54,11 +65,21 @@ func (p *pgDB) engineVersion(ctx context.Context) (string, error) {
 // migrationLedgers snapshots every migration ledger that exists — the
 // manifest's migration-state provenance.
 func (p *pgDB) migrationLedgers(ctx context.Context) (map[string][]string, error) {
+	return migrationLedgersQ(ctx, p.pool)
+}
+
+// migrationLedgersInTx snapshots every ledger INSIDE the export
+// snapshot (same-state guarantee as the rows).
+func (p *pgDB) migrationLedgersInTx(ctx context.Context, q pgQuerier) (map[string][]string, error) {
+	return migrationLedgersQ(ctx, q)
+}
+
+func migrationLedgersQ(ctx context.Context, q pgQuerier) (map[string][]string, error) {
 	ledgers := []string{"schema_migrations", "library_schema_migrations", "store_schema_migrations"}
 	out := map[string][]string{}
 	for _, l := range ledgers {
 		var exists bool
-		if err := p.pool.QueryRow(ctx,
+		if err := q.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, l,
 		).Scan(&exists); err != nil {
 			return nil, err
@@ -66,7 +87,7 @@ func (p *pgDB) migrationLedgers(ctx context.Context) (map[string][]string, error
 		if !exists {
 			continue
 		}
-		rows, err := p.pool.Query(ctx, fmt.Sprintf(`SELECT version FROM %s ORDER BY version`, pgx.Identifier{l}.Sanitize()))
+		rows, err := q.Query(ctx, fmt.Sprintf(`SELECT version FROM %s ORDER BY version`, pgx.Identifier{l}.Sanitize()))
 		if err != nil {
 			return nil, err
 		}
