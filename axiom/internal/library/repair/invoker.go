@@ -418,6 +418,11 @@ func repairArtifactName(item *RepairItem) string {
 func (inv *Invoker) runWorker(ctx context.Context, item *RepairItem) (int, string, error) {
 	req := buildRequest(item)
 	req.Budget = inv.cfg.Timeout
+	// DM07 #316: the worker child ALWAYS runs on the constructed minimal
+	// environment — the parent's credentials (DSNs, secrets) never ride
+	// along, normal class included (the pre-DM07 shape passed nothing and
+	// inherited os.Environ wholesale).
+	req.Env = workerEnv()
 	if ocrCase(item) {
 		// #293: OCR-class repairs run under their OWN wedge-guard budget
 		// (the rebuild takes as long as it takes — 10m or 10h; the
@@ -429,7 +434,7 @@ func (inv *Invoker) runWorker(ctx context.Context, item *RepairItem) (int, strin
 		// contract, pinned by TestRunFixerOCRBudgetEnv).
 		req.Budget = inv.cfg.OCRTimeout
 		inv.logger.Printf("case: key %s: OCR-class wedge-guard %s (wrapper kills at %s) — no tempo limit, orphan prevention only", item.AttachmentKey, req.Budget, fixShBudget(req.Budget))
-		req.Env = append(os.Environ(), fmt.Sprintf("AXIOM_FIX_SH_TIMEOUT=%d", int(fixShBudget(req.Budget).Seconds())))
+		req.Env = append(req.Env, fmt.Sprintf("AXIOM_FIX_SH_TIMEOUT=%d", int(fixShBudget(req.Budget).Seconds())))
 	}
 	res, err := inv.executor().Execute(ctx, req)
 	return res.ExitCode, res.Output, err
