@@ -66,6 +66,12 @@ jobs:
           fi
       - name: go vet
         run: go vet ./...
+      # DM07 #316: the checker-registry concurrency guarantee as a
+      # first-class gate — the regression test also dies without -race on
+      # the full race form, but PARTIAL regressions (snapshot lock
+      # without the write lock) only surface under the race detector.
+      - name: race gate (server registry)
+        run: go test -race -count=1 ./internal/server
       - name: dev scripts lint
         working-directory: .
         run: |
