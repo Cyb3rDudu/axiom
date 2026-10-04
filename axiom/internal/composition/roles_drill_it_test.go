@@ -126,8 +126,17 @@ func TestIT_Dm07RoleDrill(t *testing.T) {
 	}
 	// the drill's roles are CLUSTER-GLOBAL (throwaway passwords): best-effort
 	// drop so shared dev servers stay clean — CI containers are disposable.
+	// t.Cleanup runs AFTER the test defers closed freshScratch's pools, so
+	// the drop needs its own fresh admin connection on the base DSN.
 	t.Cleanup(func() {
-		_, _ = admin.Exec(context.Background(), `DROP ROLE IF EXISTS axiom_library, axiom_store`)
+		base := os.Getenv("AXIOM_TEST_DATABASE_URL")
+		if base == "" {
+			return
+		}
+		if p, err := pgxpool.New(context.Background(), base); err == nil {
+			_, _ = p.Exec(context.Background(), `DROP ROLE IF EXISTS axiom_library, axiom_store`)
+			p.Close()
+		}
 	})
 
 	libDSN := roleDSN(t, scratchDSN, "axiom_library", libPW)
@@ -299,5 +308,33 @@ func rolesSQLContractGrants(t *testing.T, sql string) map[string]string {
 	if len(out) < 20 {
 		t.Fatalf("roles.sql parse found only %d contract tables — the parser drifted from the script shape", len(out))
 	}
+	// The floor alone cannot detect a silently-lost BLOCK (the library
+	// list alone carries 20 tables): both component roles must own tables.
+	roles := map[string]bool{}
+	for _, r := range out {
+		roles[r] = true
+	}
+	if !roles["axiom_library"] || !roles["axiom_store"] {
+		t.Fatalf("roles.sql parse must find contract tables for BOTH component roles, saw %v", roles)
+	}
 	return out
+}
+
+// TestRolesSQLContractParserPinsBothRoles — the DB-free half of the
+// parser witness: the contract lists stay complete and both blocks stay
+// attributable even on machines without a drill database (the IT itself
+// is DSN-gated; this parse runs everywhere).
+func TestRolesSQLContractParserPinsBothRoles(t *testing.T) {
+	sqlBytes, err := os.ReadFile(rolesSQLPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants := rolesSQLContractGrants(t, string(sqlBytes))
+	byRole := map[string]int{}
+	for _, r := range grants {
+		byRole[r]++
+	}
+	if byRole["axiom_library"] < 20 || byRole["axiom_store"] < 17 {
+		t.Fatalf("contract lists must keep both full blocks, saw %v", byRole)
+	}
 }
