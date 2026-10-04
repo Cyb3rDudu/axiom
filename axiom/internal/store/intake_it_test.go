@@ -637,12 +637,19 @@ func TestRevisionIntakeClaimObsoletesOnGhostSourceAndDocument(t *testing.T) {
 	claim(t)
 	assertObsoleted(t, job.ID, "REVISION_REF_UNRESOLVED")
 
-	// Ghost DOCUMENT: the source and rendition exist, the record does not.
-	rev2 := seedRevision(srcID, hash)
+	// Ghost DOCUMENT: the source exists, the record does not — the claim
+	// resolves source first and must obsolete at the document branch.
+	// Own rendition key AND own content hash: the two ghost rows must stay
+	// identical-free under EVERY index shape, including the status-blind
+	// legacy identity index the ledger-wipe IT rebuilds (rendition+hash
+	// alone) — a shared pair would poison that IT with 23505.
+	docHash := revision.HashContent([]byte("ghost doc bytes"))
+	rev2 := seedRevision(srcID, docHash)
+	rev2.RenditionID = "ATTGHOSTDOC"
 	rev2.Bibliography.RecordID = "GONEDOC"
 	job2, minted2, err := rep.EnqueueRevisionIntake(ctx, repo.IntakeRequest{
 		IdempotencyKey: "ghost-doc-1", RevisionSourceID: srcID, RevisionRecordID: "GONEDOC",
-		RevisionRenditionID: "ATTIT1", RevisionNo: "1", ContentHash: hash,
+		RevisionRenditionID: "ATTGHOSTDOC", RevisionNo: "1", ContentHash: docHash,
 		RevisionJSON: mustCanonical(t, rev2),
 	})
 	if err != nil || !minted2 {
