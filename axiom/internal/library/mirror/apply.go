@@ -1,6 +1,11 @@
-// Atomic canonical apply: in ONE transaction writes canonical rows, applies
-// deletions, derives projections from the full active zotero_items state,
-// updates memberships, writes pending/failed jobs and the cursor.
+// Atomic canonical apply: in ONE transaction on the LIBRARY database
+// writes canonical rows, applies deletions, derives projections from the
+// full active zotero_items state, updates memberships and recomputes the
+// contextual citation class. Store-side effects are NOT written here
+// (#358): the apply returns the changed-rendition set and the sync
+// drives them (revision intake, projection upserts, failed-file records,
+// snapshot reconciliation) in a separate transaction on the Store
+// database.
 package mirror
 
 import (
@@ -8,7 +13,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
 	"github.com/jackc/pgx/v5"
 )
@@ -31,24 +35,56 @@ type AttachmentFileInfo struct {
 // CanonicalApplyResult summarises an atomic canonical apply.
 type CanonicalApplyResult struct {
 	Flags               []CanonicalDocFlag
-	Enqueued            int
-	FailedJobs          int
 	DocumentProjections int
+	// Renditions are the preferred processable renditions the sync offers
+	// to the Store (processable files become revision intakes; missing
+	// files become failed-job records). Selection gating happens in the
+	// sync, not here — the mirror stays a full projection.
+	Renditions []SyncRendition
+	// DeletedAttachmentIDs are attachments whose mirror row flipped to
+	// deleted THIS run: the sync's store phase marks their projection rows
+	// deleted so claims obsolesce and the snapshot reconciliation retires
+	// their active snapshots.
+	DeletedAttachmentIDs []string
+	// TombstonedDocuments counts documents deactivated THIS run (deleted
+	// in Zotero, no longer projectable, or no live processable attachment)
+	// — the held-row reconciliation made visible (#358).
+	TombstonedDocuments int
 }
 
-// ApplyCanonicalBatch atomically applies a canonical batch. markMissing of
-// absent items only happens when batch.FullSnapshot is true (since==0);
-// incremental batches never infer deletions from absence. Explicit
-// deleteEvents are applied by resolving each key against documents or
-// attachments. Projections are derived from the complete active state of
-// zotero_items (not the delta). Pending and failed jobs plus the cursor are
-// written in the same transaction via the caller-provided tx.
-// The selection map gates job creation (#166): entries "excluded" suppress
-// both pending and failed jobs for that document; nil = no gate (everything
-// is selected — today's behavior). Projections stay a FULL mirror regardless.
+// SyncRendition is one preferred rendition the sync offers to the Store:
+// the durable mirror identities plus the file facts the store-phase
+// needs. ErrCode empty = processable; otherwise the file-resolution
+// failure to record.
+type SyncRendition struct {
+	DocumentID    string
+	AttachmentID  string
+	DocumentKey   string
+	AttachmentKey string
+	Version       int64
+	LocalPath     string
+	Hash          string
+	FileSize      int64
+	MtimeMS       int64
+	ContentType   string
+	Filename      string
+	LinkMode      string
+	ErrCode       string
+	ErrMsg        string
+	Retryable     bool
+}
+
+// ApplyCanonicalBatch atomically applies a canonical batch on the LIBRARY
+// database. markMissing of absent items only happens when
+// batch.FullSnapshot is true (since==0); incremental batches never infer
+// deletions from absence. Explicit deleteEvents are applied by resolving
+// each key against documents or attachments. Projections are derived from
+// the complete active state of zotero_items (not the delta). The caller's
+// transaction carries the cursor write; Store-side effects are the SYNC's
+// separate phase (see Renditions/DeletedAttachmentIDs).
 // contextual (#255) is the boot-resolved rule set; citation_class is
 // recomputed from memberships + tags inside this same transaction.
-func (m *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID string, batch zoteroprovider.CanonicalBatch, collections []zoteroprovider.CanonicalCollection, files map[string]AttachmentFileInfo, selection map[string]string, contextual ContextualRules) (CanonicalApplyResult, error) {
+func (m *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID string, batch zoteroprovider.CanonicalBatch, collections []zoteroprovider.CanonicalCollection, files map[string]AttachmentFileInfo, contextual ContextualRules) (CanonicalApplyResult, error) {
 	var res CanonicalApplyResult
 
 	// 1. Upsert canonical items (version guarded).
@@ -106,44 +142,14 @@ func (m *Repo) ApplyCanonicalBatch(ctx context.Context, tx pgx.Tx, sourceID stri
 		return res, err
 	}
 
-	// 6b. Deleted attachments must stop serving: retire their active
-	// snapshots (+ OS tombstones) in the same sync transaction. This runs
-	// AFTER the projections — THEY write zotero_attachments.deleted, and a
-	// retire placed earlier sees only the PREVIOUS sync's flag (the Mullins
-	// zombie: the one sync that projected the fix-service deletion retired
-	// nothing; every earlier heal survived only because follow-up syncs
-	// ran). Same-tx same-sync is the contract the Durchpfad IT pins.
-	if err := m.store.ReconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
-		return res, fmt.Errorf("reconcile attachment snapshots: %w", err)
-	}
-
-	// 7. Pending + failed jobs in the same transaction, gated by the
-	// selection (#166): excluded documents get no jobs; everything else
-	// keeps the ON CONFLICT (attachment_id, content_hash) dedup — a
-	// re-selected document with no existing job row gets one WITHOUT any
-	// Zotero-side change (the acceptance case: the full derivation offers
-	// every doc on every sync; only the gate held it back).
-	if selection != nil {
-		gatedPending := make([]repo.PendingJob, 0, len(proj.pending))
-		for _, p := range proj.pending {
-			if !JobGated(selection, p.DocumentID) {
-				gatedPending = append(gatedPending, p)
-			}
-		}
-		gatedFailed := make([]repo.FailedJob, 0, len(proj.failed))
-		for _, f := range proj.failed {
-			if !JobGated(selection, f.DocumentID) {
-				gatedFailed = append(gatedFailed, f)
-			}
-		}
-		proj.pending, proj.failed = gatedPending, gatedFailed
-	}
-	enqueued, failed, err := m.store.WriteSyncJobsTx(ctx, tx, sourceID, proj.pending, proj.failed)
-	if err != nil {
-		return res, err
-	}
-	res.Enqueued = enqueued
-	res.FailedJobs = failed
+	// 7. Hand the changed-rendition set + deletion bookkeeping to the
+	// caller: the sync's STORE phase (separate transaction, separate
+	// database) turns renditions into revision intakes / failed records
+	// and marks deleted projections so the snapshot reconciliation retires
+	// them.
+	res.Renditions = proj.renditions
+	res.DeletedAttachmentIDs = proj.deletedAttachmentIDs
+	res.TombstonedDocuments = proj.tombstoned
 
 	return res, nil
 }

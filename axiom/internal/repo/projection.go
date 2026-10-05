@@ -26,7 +26,7 @@ type DocumentProjection struct {
 	ServerID     string
 	RecordKey    string
 	RenditionKey string
-	ZoteroVersion int64
+	SourceVersion int64
 	ContentHash  *string
 	Title        string
 	Creators     []string
@@ -86,7 +86,7 @@ func (r *Repo) UpsertDocumentProjectionTx(ctx context.Context, tx pgx.Tx, p Docu
 		WHERE EXCLUDED.source_version >= store_documents.source_version
 		RETURNING (xmax = 0) AS inserted`,
 		p.DocumentID, p.AttachmentID, p.SourceID, p.ServerID,
-		p.RecordKey, p.RenditionKey, p.ZoteroVersion, p.ContentHash,
+		p.RecordKey, p.RenditionKey, p.SourceVersion, p.ContentHash,
 		p.Title, creators, p.Year, p.Publisher, p.Language, tags,
 		class, p.ContentType, p.ItemType, p.Filename, p.LocalPath,
 		p.FileSize, p.MtimeMS, p.LinkMode).Scan(&applied); err != nil {

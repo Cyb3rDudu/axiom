@@ -1,14 +1,14 @@
 // Package mirror is the Zotero-mirror persistence — Library-owned since
-// F09 (#303) moved it out of internal/repo so the Store-side packages stay
-// Zotero-free in the dependency graph. It owns the zotero_* mirror tables'
-// reads/writes, the canonical apply and the selection/contextual rule reads.
+// F09 (#303), and Library-DATABASE-resident since #358: the mirror repo
+// runs on the Library component's own PostgreSQL pool. It owns the
+// zotero_* mirror tables' reads/writes, the canonical apply and the
+// selection/contextual rule reads.
 //
-// Transition note (documented dual-write, abated by F12/DM06): the legacy
-// sync lane still writes STORE-owned rows (ingest_jobs, the snapshot
-// retire/restore reconciliation) inside the canonical apply transaction —
-// via the exported repo methods — until revision intake replaces the
-// legacy lane wholesale. internal/repo stays the Store-owned persistence
-// and must never import the Zotero adapter again (store-boundary lint).
+// The canonical apply is deliberately mirror-only (no Store writes): the
+// sync orchestrates the Store-side effects (revision intake, projection
+// upserts, failed-file records, snapshot reconciliation) in a separate
+// transaction on the Store database after the mirror commits — one
+// component, one database, per transaction.
 package mirror
 
 import (
@@ -20,27 +20,20 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Repo wraps the pgx pool with the Zotero-mirror methods. It also carries
-// the Store repo for the legacy sync lane's job writes (see the package
-// transition note) — the composition constructs both from one pool.
+// Repo wraps the LIBRARY pool with the Zotero-mirror methods.
 type Repo struct {
-	pool  *pgxpool.Pool
-	store *repo.Repo
+	pool *pgxpool.Pool
 }
 
-// New builds a mirror Repo on the same pool as the given Store repo.
-// A nil store is tolerated (nil pool, nil store): the degraded sync boot
-// path constructs the service before any database exists and must not
-// dereference one — mirror calls on such a Repo fail loudly at first use,
-// exactly like the pre-split nil *repo.Repo did.
-func New(store *repo.Repo) *Repo {
-	if store == nil {
-		return &Repo{}
-	}
-	return &Repo{pool: store.Pool(), store: store}
+// New builds a mirror Repo on the Library component's pool. A nil pool is
+// tolerated: the degraded sync boot path constructs the service before
+// any database exists and must not dereference one — mirror calls on
+// such a Repo fail loudly at first use.
+func New(pool *pgxpool.Pool) *Repo {
+	return &Repo{pool: pool}
 }
 
-// Pool returns the underlying pgx pool (used by canonical sync orchestration).
+// Pool returns the underlying pgx pool.
 func (m *Repo) Pool() *pgxpool.Pool { return m.pool }
 
 // EnsureSource returns the id of a zotero_sources row for the given base URL
@@ -60,9 +53,9 @@ func (m *Repo) EnsureSource(ctx context.Context, baseURL, libraryID, serverID st
 	return id, nil
 }
 
-// AcquireSourceLock acquires a session-level advisory lock for a source on a
-// dedicated connection and returns a release function. The lock serialises a
-// whole sync (cursor read, reconciliation, cursor commit) per source_id across
+// AcquireSourceLock acquires a session-level advisory lock for a source on
+// a dedicated connection and returns a release function. The lock serialises
+// a whole sync (cursor read, reconciliation, cursor commit) per source_id across
 // pool connections, so a slow stale delta cannot overwrite a newer
 // reconciliation.
 //
@@ -70,6 +63,11 @@ func (m *Repo) EnsureSource(ctx context.Context, baseURL, libraryID, serverID st
 // connection (with its own timeout context) before returning the connection to
 // the pool; a plain conn.Release() would not end the session-level lock. If the
 // unlock fails the physical connection is closed instead of being reused.
+//
+// #358 note: this lock lives on the LIBRARY database (the mirror's home) and
+// serialises syncs against each other; the claim's transaction-scoped twin
+// (same key, same definition) lives on the Store database and serializes
+// claims against the sync's store-effect phase there.
 func (m *Repo) AcquireSourceLock(ctx context.Context, sourceID string) (func(), error) {
 	conn, err := m.pool.Acquire(ctx)
 	if err != nil {

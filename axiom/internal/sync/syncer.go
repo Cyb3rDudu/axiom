@@ -17,15 +17,21 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Service coordinates a Zotero source with the ingest queue.
+// Service coordinates a Zotero source with the ingest queue. #358: the
+// mirror runs on the LIBRARY pool; the Store-side effects (revision
+// intake, projection upserts, failed-file records, snapshot
+// reconciliation) run in their own transaction on the Store pool after
+// the mirror commits — one component, one database, per transaction.
 type Service struct {
-	src     zoteroprovider.Source
-	repo    *repo.Repo
-	baseURL string
-	libID   string
-	log     *log.Logger
+	src        zoteroprovider.Source
+	store      *repo.Repo
+	mirrorPool *pgxpool.Pool
+	baseURL    string
+	libID      string
+	log        *log.Logger
 
 	// contextual (#255/#262): the resolved rules (collection zotero_keys +
 	// tag names). Zero value = no rules = everything citable. ctxPaths/ctxTags
@@ -236,14 +242,16 @@ func (s *Service) StopConsolidation() {
 	}
 }
 
-// New builds a sync service for one Zotero source and the ingest queue.
-// mir derives the mirror repo from the CURRENT store repo (cheap: two
-// pointers). Derived per call — not cached at construction — because ITs
-// (and the degraded boot path) legitimately swap s.repo after New.
-func (s *Service) mir() *mirror.Repo { return mirror.New(s.repo) }
+// mir derives the mirror repo from the Library pool. Derived per call —
+// not cached at construction — because ITs legitimately swap pools after
+// New, and the degraded boot path constructs with none.
+func (s *Service) mir() *mirror.Repo { return mirror.New(s.mirrorPool) }
 
-func New(src zoteroprovider.Source, r *repo.Repo, baseURL, libID string, log *log.Logger) *Service {
-	return &Service{src: src, repo: r, baseURL: baseURL, libID: libID, log: log}
+// New builds a sync service: the Zotero source, the LIBRARY pool (the
+// mirror's home since #358) and the Store repo (the store-effect phase's
+// handle). Both may be nil on the degraded boot path.
+func New(src zoteroprovider.Source, mirrorPool *pgxpool.Pool, store *repo.Repo, baseURL, libID string, log *log.Logger) *Service {
+	return &Service{src: src, store: store, mirrorPool: mirrorPool, baseURL: baseURL, libID: libID, log: log}
 }
 
 // Result is a summary of one canonical sync run exposed by POST /api/zotero/sync.
@@ -253,6 +261,10 @@ type Result struct {
 	Collections int    `json:"canonical_collections"`
 	Documents   int    `json:"document_projections"`
 	Enqueued    int    `json:"enqueued_jobs"`
+	FailedJobs  int    `json:"failed_jobs"`
+	// Tombstoned counts documents deactivated THIS run (deleted in Zotero,
+	// held rows reconciled away — #358).
+	Tombstoned  int    `json:"tombstoned_documents"`
 	NewVersion  int64  `json:"library_version"`
 }
 
@@ -266,10 +278,15 @@ type Result struct {
 // for the same content hash (#294 — the snapshot is the proof of processing).
 // SyncOverride is the one-run selection override from the sync request body
 // (#166): include/exclude document-id lists applied ON TOP of the persisted
-// selection for THIS run only (never persisted).
+// selection for THIS run only (never persisted). Full requests a
+// since=0 FULL reconciliation (#358): every item is re-listed, absent
+// items are marked missing — the held-row reconciliation pass that
+// clears Zotero-absent phantoms into tombstones. The post-switch catch-up
+// sync and operator-initiated reconciles use it.
 type SyncOverride struct {
 	Include []string
 	Exclude []string
+	Full    bool
 }
 
 func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, error) {
@@ -290,6 +307,12 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	since, err := s.mir().CanonicalCursor(ctx, sourceID)
 	if err != nil {
 		return Result{}, err
+	}
+	if override != nil && override.Full {
+		// #358 full reconciliation: re-list everything, mark absent items
+		// missing (held-row tombstones). The post-switch catch-up sync
+		// rides this; deltas stay the default for steady state.
+		since = 0
 	}
 	batch, err := s.src.ListCanonicalItems(since)
 	if err != nil {
@@ -322,9 +345,12 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 		return Result{}, fmt.Errorf("loading selections: %w", err)
 	}
 
-	// One atomic transaction: canonical rows + deletions + projections +
-	// memberships + pending/failed jobs + cursor.
-	tx, err := s.repo.Pool().Begin(ctx)
+	// One atomic transaction on the LIBRARY database: canonical rows +
+	// deletions + projections + memberships + citation class + cursor.
+	// Store effects are deliberately NOT in this transaction (they live
+	// on the Store database — #358); the sync's store phase runs after
+	// this commit.
+	tx, err := s.mir().Pool().Begin(ctx)
 	if err != nil {
 		return Result{}, err
 	}
@@ -335,7 +361,7 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 		defer s.ctxMu.Unlock()
 		return s.contextual
 	}()
-	applyRes, err := s.mir().ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, selection, applyRules)
+	applyRes, err := s.mir().ApplyCanonicalBatch(ctx, tx, sourceID, batch, collections, files, applyRules)
 	if err != nil {
 		return Result{}, err
 	}
@@ -343,6 +369,18 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 		return Result{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
+		return Result{}, err
+	}
+
+	// The STORE phase (#358): projection upserts + revision intake +
+	// failed-file records + deleted marks + snapshot reconciliation, in
+	// ONE transaction on the Store database (advisory-locked per source —
+	// the claim's xact lock twin, same key, same database). A failure
+	// here is loud: the mirror already committed, and the next sync's
+	// full derivation re-offers every rendition, so the retry is
+	// structural, not bookkeeping.
+	enqueued, failedJobs, err := s.applyStoreEffects(ctx, sourceID, serverID, applyRes, selection)
+	if err != nil {
 		return Result{}, err
 	}
 
@@ -374,7 +412,9 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 		Items:       len(batch.Items),
 		Collections: len(collections),
 		Documents:   applyRes.DocumentProjections,
-		Enqueued:    applyRes.Enqueued,
+		Enqueued:    enqueued,
+		FailedJobs:  failedJobs,
+		Tombstoned:  applyRes.TombstonedDocuments,
 		NewVersion:  batch.NewVersion,
 	}, nil
 }
@@ -387,9 +427,9 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, batch []zoteroprovider.CanonicalItem) (map[string]mirror.AttachmentFileInfo, error) {
 	out := map[string]mirror.AttachmentFileInfo{}
 
-	// 1. Committed store state: attachment key -> version + envelope path.
+	// 1. Committed mirror state: attachment key -> version + envelope path.
 	storeVer := map[string]int64{}
-	rows, err := s.repo.Pool().Query(ctx, `
+	rows, err := s.mir().Pool().Query(ctx, `
 		SELECT zotero_key, zotero_version, raw_envelope::text
 		FROM zotero_items WHERE source_id=$1 AND deleted=false AND item_type='attachment'`, sourceID)
 	if err != nil {

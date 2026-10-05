@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
@@ -25,11 +26,16 @@ import (
 )
 
 // SetRepairAPI wires the repair surface (Library-owned state machine,
-// F08 #302): the repair Store is built over the shared pool. writeBaseURL
-// is the Zotero LOCAL server root (http://localhost:23119 — no /api
-// suffix).
-func (s *Server) SetRepairAPI(r *repo.Repo, write *zoteroprovider.WriteClient, quarantineRoot string) {
-	s.repairStore = repair.NewStore(r.Pool())
+// F08 #302). #358: the repair Store runs over the LIBRARY pool
+// (repair_cases + the mirror's attachment rows are Library-database
+// residents); storeRepo is the optional Store-side retention seam
+// (repair-linked flag). writeBaseURL is the Zotero LOCAL server root
+// (http://localhost:23119 — no /api suffix).
+func (s *Server) SetRepairAPI(libPool *pgxpool.Pool, write *zoteroprovider.WriteClient, quarantineRoot string, storeRepo *repo.Repo) {
+	s.repairStore = repair.NewStore(libPool)
+	if storeRepo != nil {
+		s.repairStore.SetStoreLink(storeRepo)
+	}
 	s.zoteroWrite = write
 	s.quarantineRoot = quarantineRoot
 	// routes are registered in Handler() (only when repairStore != nil)

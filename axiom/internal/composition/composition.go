@@ -185,6 +185,9 @@ type Root struct {
 	broker       *events.Broker
 	syncSvc      *axsync.Service
 	storeSvc     *store.Service
+	// mirrorRepo is the Zotero mirror over the LIBRARY pool (#358); set
+	// by the store component's library gate (PostgreSQL profile only).
+	mirrorRepo   *mirror.Repo
 	httpSrv      *http.Server
 	ln           net.Listener
 	srv          *server.Server
@@ -651,7 +654,6 @@ func (r *Root) componentsFor() []Component {
 			r.srv.SetForceRebuildAPI(r.rep)
 			r.srv.SetKGService(r.rep)
 			r.srv.SetConsolidateService(r.rep)
-			r.srv.SetSelectionRepo(mirror.New(r.rep))
 			// F09 #303: the Store component's ledger — the revision-intake
 			// columns on ingest_jobs (additive; same fingerprint rule as
 			// the library ledger below).
@@ -701,28 +703,23 @@ func (r *Root) componentsFor() []Component {
 				}
 				r.libDB = libDB
 				// Own migration set, own ledger (additive; the F01
-				// fingerprint derives from the core set alone).
+				// fingerprint derives from the core set alone). Since #358
+				// the set also carries the Zotero mirror schema (idempotent
+				// against the cutover-copied production database) — the
+				// mirror's home IS the Library database.
 				if err := pglib.Migrate(ctx, libDB.Pool()); err != nil {
 					return fmt.Errorf("library migrate: %w", err)
 				}
 				r.libRepo = pglib.NewStore(libDB.Pool())
-				// The legacy Mits-Schrieb lane reads the Zotero mirror on the
-				// SHARED database. Since DM07 (#316) "shared" is a DATABASE
-				// identity (host+port+db), not a string-equal DSN: the interim
-				// split-credentials shape points both pools at the same
-				// database through different roles — the mirror stays
-				// reachable there, and the lane stays wired until the
-				// physical cutover moves the library DSN to its own database.
-				sharedDSN := r.cfg.LibraryDatabaseURL == "" || sameDatabase(r.cfg.LibraryDatabaseURL, r.cfg.DatabaseURL)
-				if sharedDSN {
-					r.logger.Printf("library: PostgreSQL profile (own pool over the shared database; separate engine from the store repo)")
-				} else {
-					r.logger.Printf("library: PostgreSQL profile over its OWN database — legacy sync-lane revision Mits-Schreib UNWIRED (no Zotero mirror reachable from the library DSN; revision intake is the successor lane)")
-				}
-				// Source-revision Mits-Schrieb: sync completion and heal/ custody
-				// publish through the same store (F09 turns the Store onto these
-				// rows) — shared-database shape only.
-				if rp, ok := r.libRepo.(library.RevisionPublisher); ok && sharedDSN {
+				r.mirrorRepo = mirror.New(libDB.Pool())
+				r.logger.Printf("library: PostgreSQL profile (own database; the Zotero mirror lives here since #358)")
+				// The documents/selection surface is the CODE-MERGED listing:
+				// mirror rows (Library DB) + job/snapshot truth (Store DB).
+				r.srv.SetSelectionRepo(&selectionListing{mir: r.mirrorRepo, store: r.rep})
+				// Source-revision Mits-Schrieb: sync completion and heal/
+				// custody publish through the same store — always wired in
+				// the PostgreSQL profile (the mirror is Library-resident).
+				if rp, ok := r.libRepo.(library.RevisionPublisher); ok {
 					r.srv.SetRevisionPublisher(rp)
 					r.revPublisher = rp
 				}
@@ -798,7 +795,7 @@ func (r *Root) componentsFor() []Component {
 					return fmt.Errorf("library: AXIOM_LIBRARY_IMPORT_PROVIDERS=zotero requires the PostgreSQL profile (the Zotero mirror lives on the shared database); AXIOM_STORAGE_LIBRARY_DRIVER=%q is not combinable with it", r.cfg.StorageLibraryDriver)
 				}
 				serverID := r.src.ServerID()
-				sourceID, serr := mirror.New(r.rep).EnsureSource(ctx, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, serverID)
+				sourceID, serr := r.mirrorRepo.EnsureSource(ctx, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, serverID)
 				if serr != nil {
 					return fmt.Errorf("library zotero source: %w", serr)
 				}
@@ -924,7 +921,10 @@ func (r *Root) componentsFor() []Component {
 		name: "sync",
 		role: RoleSync,
 		start: func(ctx context.Context) error {
-			r.syncSvc = axsync.New(r.src, r.rep, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, r.logger)
+			if r.mirrorRepo == nil {
+				return fmt.Errorf("sync: no Zotero mirror (the library PostgreSQL profile did not boot — the mirror is Library-database-resident since #358)")
+			}
+			r.syncSvc = axsync.New(r.src, r.mirrorRepo.Pool(), r.rep, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, r.logger)
 			// #255/#262 contextual source class: resolve + validate the
 			// configured rule inputs against the SYNCED canonical state. Boot
 			// ALWAYS succeeds (#262 owner ruling): a never-synced DB degrades
@@ -974,8 +974,11 @@ func (r *Root) componentsFor() []Component {
 			}
 			writeBase := strings.TrimSuffix(strings.TrimSuffix(r.cfg.ZoteroBaseURL, "/api"), "/")
 			zoteroWrite := zoteroprovider.NewWriteClient(writeBase, r.src.ServerID(), strings.TrimSpace(string(keyBytes)))
-			repairStore := repair.NewStore(r.rep.Pool())
-			r.srv.SetRepairAPI(r.rep, zoteroWrite, r.cfg.QuarantineRoot)
+			repairStore := repair.NewStore(r.mirrorRepo.Pool())
+			if r.rep != nil {
+				repairStore.SetStoreLink(r.rep)
+			}
+			r.srv.SetRepairAPI(r.mirrorRepo.Pool(), zoteroWrite, r.cfg.QuarantineRoot, r.rep)
 			r.logger.Printf("repair API enabled (zotero write gateway, quarantine under %s)", r.cfg.QuarantineRoot)
 			// #206 repair orchestrator: the mail-ingest side of the repair
 			// queue, Library-owned since F08 (#302).
@@ -1134,7 +1137,9 @@ func (r *Root) componentsFor() []Component {
 			// F09 #303: the repair-case seam — the adapter over the
 			// Library-owned repair store keeps internal/library/* out of
 			// the dispatcher's production imports.
-			r.disp.SetRepairQueue(&repairQueueAdapter{store: repair.NewStore(r.rep.Pool())})
+			rq := repair.NewStore(r.mirrorRepo.Pool())
+			rq.SetStoreLink(r.rep)
+			r.disp.SetRepairQueue(&repairQueueAdapter{store: rq})
 			// #214: a fatal dispatcher error must exit the process non-zero
 			// so launchd/KeepAlive restarts it. A graceful shutdown
 			// (rootCtx cancelled) returns nil and never lands here.

@@ -171,3 +171,15 @@ func (r *Repo) WriteFailedJobsTx(ctx context.Context, tx pgx.Tx, failed []Failed
 	}
 	return failedWritten, nil
 }
+
+// ResolveAttachmentFailuresTx closes prior unresolved failed rows for a
+// rendition once fresh work is minted again (the intake-mint successor of
+// the legacy pending-insert resolution): a stale FILE_NOT_FOUND must not
+// mask or outrank the new attempt. Like its predecessor it never touches
+// updated_at — bookkeeping must not re-rank the outcome read model.
+func (r *Repo) ResolveAttachmentFailuresTx(ctx context.Context, tx pgx.Tx, attachmentID string) error {
+	_, err := tx.Exec(ctx, `UPDATE ingest_jobs
+		SET resolved_at=now()
+		WHERE attachment_id=$1::uuid AND status='failed' AND resolved_at IS NULL`, attachmentID)
+	return err
+}

@@ -33,11 +33,30 @@ import (
 // RAG-side repo by construction (same database, own transactions).
 type Store struct {
 	pool *pgxpool.Pool
+	// link is the optional Store-side retention seam (#358): repair_cases
+	// live on the Library database; the Store's retention guard reads the
+	// set-once repair_linked flag on its own store_documents projection.
+	// The seam is best-effort-loud: a failed flag write returns an error
+	// naming the created case (the case itself is durable).
+	link StoreLink
 }
 
-// NewStore builds a repair Store over a pool (the library-package
-// naming convention; the orchestrator constructor keeps New).
+// StoreLink is the Store-side retention seam: mark a rendition
+// repair-linked (job rows survive retention pruning). Implemented by
+// *repo.Repo; nil disables the flag (retention then prunes unrestrained —
+// wired compositions always set it).
+type StoreLink interface {
+	MarkAttachmentRepairLinked(ctx context.Context, attachmentID string) error
+}
+
+// NewStore builds a repair Store over the LIBRARY pool (repair_cases and
+// the mirror's attachment rows are Library-database residents since
+// #358; the loop-guard column zotero_attachments.repair_attempts lives
+// there too).
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+
+// SetStoreLink wires the Store-side retention seam.
+func (s *Store) SetStoreLink(l StoreLink) { s.link = l }
 
 // Pool exposes the underlying pool (read-side JOINs that resolve repair
 // metadata, e.g. the server's queue-item listing).
@@ -116,13 +135,32 @@ func (s *Store) CreateRepairCase(ctx context.Context, attachmentID, documentID, 
 		attachmentID, documentID, suspicionClass, analysis)
 	c, err := scanRepairCase(row)
 	if err == nil {
+		if lerr := s.markLinked(ctx, attachmentID); lerr != nil {
+			return c, true, fmt.Errorf("repair case created but the store retention link failed: %w", lerr)
+		}
 		return c, true, nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		c, err := s.OpenRepairCase(ctx, attachmentID)
+		if c != nil {
+			// recycled open case: retry the flag (idempotent; self-heals a
+			// earlier failed link write)
+			if lerr := s.markLinked(ctx, attachmentID); lerr != nil {
+				return c, false, fmt.Errorf("store retention link failed: %w", lerr)
+			}
+		}
 		return c, false, err
 	}
 	return nil, false, err
+}
+
+// markLinked flags the rendition repair-linked on the Store side (set
+// once; a nil seam is a no-op — unwired compositions only).
+func (s *Store) markLinked(ctx context.Context, attachmentID string) error {
+	if s.link == nil {
+		return nil
+	}
+	return s.link.MarkAttachmentRepairLinked(ctx, attachmentID)
 }
 
 // OpenRepairCase fetches the open case of an attachment (nil if none).

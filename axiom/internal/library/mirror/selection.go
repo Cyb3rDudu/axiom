@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 )
 
 // SelectionInput is one entry of a batch PUT: mode "included"/"excluded"
@@ -77,26 +79,41 @@ type AttachmentState struct {
 
 // ZoteroDocumentState is one row of the client's sync-state listing (#166
 // Ziel 4): Zotero bestand + ingest status + preferred attachment info.
+// #358: the row is a CODE merge of the Library's mirror truth and the
+// Store's job/snapshot truth; #356 adds the serving outcome.
 type ZoteroDocumentState struct {
 	DocumentID    string           `json:"document_id"`
 	ZoteroKey     string           `json:"zotero_key"`
 	Title         string           `json:"title"`
 	ItemType      string           `json:"item_type"`
-	SyncState     string           `json:"sync_state"` // synced | held | processing | pending
+	SyncState     string           `json:"sync_state"` // synced | held | processing | pending | tombstoned
 	JobStatus     string           `json:"job_status,omitempty"`
 	Attachment    *AttachmentState `json:"attachment,omitempty"`
+	// AttachmentID is the preferred rendition's durable uuid — the join
+	// key the listing merge resolves the Store's job truth by (internal).
+	AttachmentID  string           `json:"-"`
 	RepairStatus  string           `json:"repair_status,omitempty"` // newest repair_cases.status, live
-	Outcome       string           `json:"outcome"`                 // completed | in_repair | needs_ocr | failed | processing | pending | excluded
+	SelectionMode string           `json:"-"`                       // persisted selection mode (internal)
+	Outcome       string           `json:"outcome"`                 // completed | serving | in_repair | needs_ocr | failed | removed | processing | pending | excluded
 	OutcomeReason string           `json:"outcome_reason,omitempty"`
 	UpdatedAt     time.Time        `json:"updated_at"`
 }
 
-// DeriveOutcome projects job/repair/selection truth into the human answer
-// for "what happened to my document?" (#252). No new truth — precedence:
-// excluded → running → needs_ocr (textless scan, from the job's
-// quality_state pagination_state, set by the #254 preflight) → live repair
-// track → completed → failed+reason excerpt → never enqueued.
-func DeriveOutcome(selMode, jobStatus, errCode, errMsg, paginationState, repairStatus string) (outcome, reason string) {
+// DeriveOutcome projects job/snapshot/repair/selection truth into the
+// human answer for "what happened to my document?" (#252, truth fix #356).
+// No new truth — precedence:
+//
+//	excluded → running → pending → needs_ocr (textless scan, from the
+//	job's quality_state pagination_state, set by the #254 preflight) →
+//	live repair track → completed → serving (terminal job closure BUT an
+//	active snapshot keeps the document served — cancelled waves, cleanup
+// closures, skips) → failed+reason excerpt → never enqueued/served.
+//
+// #356 semantics: `failed` is reserved for documents with NO active
+// snapshot whose last attempt failed; an administrative closure with a
+// surviving snapshot derives `serving` with the closure named in the
+// reason. The docs' API reference carries the semantics table.
+func DeriveOutcome(selMode, jobStatus, errCode, errMsg, paginationState, repairStatus string, hasActiveSnapshot bool) (outcome, reason string) {
 	switch {
 	case selMode == "excluded":
 		return "excluded", "selection-excluded"
@@ -112,6 +129,13 @@ func DeriveOutcome(selMode, jobStatus, errCode, errMsg, paginationState, repairS
 	case jobStatus == "completed":
 		return "completed", ""
 	case jobStatus == "failed" || jobStatus == "skipped" || jobStatus == "cancelled":
+		if hasActiveSnapshot {
+			r := "last job closed as " + jobStatus
+			if errCode != "" {
+				r += " (" + errCode + ")"
+			}
+			return "serving", r + " — the active snapshot keeps the document served"
+		}
 		r := errCode
 		if errMsg != "" {
 			// rune-safe cap: byte slicing could split a multi-byte rune mid-sequence
@@ -128,37 +152,44 @@ func DeriveOutcome(selMode, jobStatus, errCode, errMsg, paginationState, repairS
 		}
 		return "failed", r
 	default:
+		if hasActiveSnapshot {
+			// no job row at all (pruned history, lost bookkeeping): the
+			// snapshot is the proof of processing — served, not phantom.
+			return "serving", "no job row — active snapshot serves"
+		}
 		return "pending", "never enqueued"
 	}
 }
 
-// ListZoteroDocuments returns the full non-deleted Zotero projection with
-// per-document sync state: synced = a completed job exists for the preferred
-// attachment; held = selection-excluded or no job ever; processing/pending
-// from the newest job's status. syncState filter ("") returns everything.
-func (m *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]ZoteroDocumentState, error) {
+// TombstoneVisibility bounds how long a reconciled deletion stays visible
+// in the documents listing (#358 held-row reconciliation): a Zotero-absent
+// item surfaces ONCE as a tombstone (sync_state="tombstoned",
+// outcome="removed") for this window after its mirror row flipped deleted,
+// then drops out of the listing instead of lingering as a phantom.
+const TombstoneVisibility = 7 * 24 * time.Hour
+
+// ListDocumentsMirror is the listing's LIBRARY half (#358: no
+// cross-database SQL): the full non-deleted mirror projection with
+// per-document selection mode and repair status, plus FRESH tombstones
+// (reconciled deletions inside the visibility window). Job truth and
+// active-snapshot truth live on the Store database — the caller merges
+// them in code via DocumentListing.
+func (m *Repo) ListDocumentsMirror(ctx context.Context, syncState string) ([]ZoteroDocumentState, error) {
 	rows, err := m.pool.Query(ctx, `
 		SELECT d.id::text, d.zotero_key, COALESCE(d.title,''), COALESCE(d.item_type,''), d.updated_at,
-		       COALESCE(a.zotero_key,''), COALESCE(a.filename,''), COALESCE(a.content_type,''), COALESCE(a.content_hash,''),
-		       COALESCE(j.status::text,''),
-		       COALESCE(j.error_code,''), COALESCE(j.error_message,''),
-		       COALESCE(j.pagination_state,''),
+		       d.deleted,
+		       COALESCE(a.id::text,''), COALESCE(a.zotero_key,''), COALESCE(a.filename,''), COALESCE(a.content_type,''), COALESCE(a.content_hash,''),
 		       COALESCE(rc.status,''),
 		       COALESCE(s.mode,'')
 	FROM zotero_documents d
 	LEFT JOIN zotero_attachments a ON a.document_id=d.id AND a.preferred AND NOT a.deleted
 	LEFT JOIN LATERAL (
-		SELECT status, error_code, error_message, quality_state->>'pagination_state' AS pagination_state
-		FROM ingest_jobs j WHERE j.attachment_id=a.id
-		ORDER BY j.updated_at DESC, j.id DESC LIMIT 1
-	) j ON true
-	LEFT JOIN LATERAL (
 		SELECT status::text FROM repair_cases rc WHERE rc.attachment_id=a.id
 		ORDER BY rc.updated_at DESC, rc.id DESC LIMIT 1
 	) rc ON true
 	LEFT JOIN zotero_selections s ON s.document_id=d.id
-		WHERE NOT d.deleted
-		ORDER BY COALESCE(d.title,'')`)
+		WHERE NOT d.deleted OR (d.deleted AND d.updated_at > now() - make_interval(secs => $1))
+		ORDER BY COALESCE(d.title,'')`, int64(TombstoneVisibility.Seconds()))
 	if err != nil {
 		return nil, err
 	}
@@ -166,30 +197,22 @@ func (m *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]Zot
 	out := []ZoteroDocumentState{}
 	for rows.Next() {
 		var z ZoteroDocumentState
-		var attKey, attName, attType, attHash, jobStatus, selMode string
-		var errCode, errMsg, pagination, repairStatus string
+		var attID, attKey, attName, attType, attHash, selMode, repairStatus string
+		var deleted bool
 		if err := rows.Scan(&z.DocumentID, &z.ZoteroKey, &z.Title, &z.ItemType, &z.UpdatedAt,
-			&attKey, &attName, &attType, &attHash, &jobStatus,
-			&errCode, &errMsg, &pagination, &repairStatus, &selMode); err != nil {
+			&deleted,
+			&attID, &attKey, &attName, &attType, &attHash,
+			&repairStatus, &selMode); err != nil {
 			return nil, err
 		}
-		switch {
-		case selMode == "excluded":
-			z.SyncState = "held"
-		case jobStatus == "completed":
-			z.SyncState = "synced"
-		case jobStatus == "claimed" || jobStatus == "running" || jobStatus == "processing":
-			z.SyncState = "processing"
-		case jobStatus == "pending":
-			z.SyncState = "pending"
-		default:
-			// no job at all and not explicitly excluded: never selected for
-			// processing in this configuration (e.g. file was missing once)
-			z.SyncState = "held"
-		}
-		z.JobStatus = jobStatus
+		z.AttachmentID = attID
 		z.RepairStatus = repairStatus
-		z.Outcome, z.OutcomeReason = DeriveOutcome(selMode, jobStatus, errCode, errMsg, pagination, repairStatus)
+		z.SelectionMode = selMode
+		if deleted {
+			z.SyncState = "tombstoned"
+			z.Outcome = "removed"
+			z.OutcomeReason = "deleted in Zotero — reconciled at " + z.UpdatedAt.Format(time.RFC3339)
+		}
 		if attKey != "" {
 			z.Attachment = &AttachmentState{ZoteroKey: attKey, Filename: attName, ContentType: attType, ContentHash: attHash}
 		}
@@ -198,6 +221,57 @@ func (m *Repo) ListZoteroDocuments(ctx context.Context, syncState string) ([]Zot
 		}
 	}
 	return out, rows.Err()
+}
+
+// DocumentListing merges the listing's two halves in code (#358): the
+// Library's mirror rows (with selection + repair truth) and the Store's
+// job/snapshot truth per rendition. Tombstoned rows pass through
+// untouched (their truth is mirror-only).
+func DocumentListing(mirrorRows []ZoteroDocumentState, jobs map[string]repo.JobState, serving map[string]bool) []ZoteroDocumentState {
+	out := make([]ZoteroDocumentState, 0, len(mirrorRows))
+	for _, z := range mirrorRows {
+		if z.SyncState == "tombstoned" {
+			out = append(out, z)
+			continue
+		}
+		var job repo.JobState
+		hasJob := false
+		if z.AttachmentID != "" {
+			job, hasJob = jobs[z.AttachmentID]
+		}
+		snap := serving[z.DocumentID]
+		status := ""
+		if hasJob {
+			status = job.Status
+		}
+		switch {
+		case z.SelectionMode == "excluded":
+			z.SyncState = "held"
+		case status == "completed":
+			z.SyncState = "synced"
+		case status == "claimed" || status == "running" || status == "processing":
+			z.SyncState = "processing"
+		case status == "pending":
+			z.SyncState = "pending"
+		case snap:
+			// the snapshot is the serving truth (#356): an administratively
+			// closed document that still serves is synced, not held
+			z.SyncState = "synced"
+		default:
+			// no job at all and not explicitly excluded: never selected for
+			// processing in this configuration (e.g. file was missing once)
+			z.SyncState = "held"
+		}
+		z.JobStatus = status
+		var pagination string
+		if hasJob {
+			pagination = job.PaginationState
+		}
+		z.Outcome, z.OutcomeReason = DeriveOutcome(z.SelectionMode, status, job.ErrorCode, job.ErrorMessage,
+			pagination, z.RepairStatus, snap)
+		out = append(out, z)
+	}
+	return out
 }
 
 // SetSelectionBatch writes document AND collection selections in ONE
