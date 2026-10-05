@@ -1,6 +1,9 @@
-// Package sync orchestrates pulling documents from a Zotero source, mirroring
-// them into the PostgreSQL store and enqueuing processing work for their
-// preferred attachments.
+// Package sync orchestrates pulling documents from a Zotero source into
+// the Library database's mirror and offering processing work for their
+// preferred renditions: the mirror apply commits on the Library pool;
+// the store-effect phase (projection upserts, revision intake, failed
+// records, snapshot reconciliation) commits separately on the Store pool
+// (#358, ADR 0002).
 package sync
 
 import (

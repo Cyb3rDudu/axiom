@@ -11,10 +11,10 @@
 // carrier — transitively, which the boundary lint in this package proves
 // (boundary_lint_test.go).
 //
-// Transition (documented dual-read, abated by F12/DM06): the legacy
-// sync→enqueue lane still writes ingest_jobs via internal/repo's exported
-// sync-job effects, and the claim path resolves revision identities
-// against the shared Zotero mirror tables (SQL, not imports) until the
-// revision lane replaces the legacy lane and the persistence split drops
-// the cross-component FKs.
+// #358 (ADR 0002): the transition is complete. The revision lane is the
+// only claim lane (legacy-lane rows drain as LEGACY_LANE_RETIRED); the
+// claim resolves rendition identities against the Store's OWN
+// store_documents projection, written at intake/sync time — the repo
+// package contains no mirror-table SQL (the boundary lint's grep sonde
+// proves it, with teeth).
 package store

@@ -792,7 +792,7 @@ func (r *Root) componentsFor() []Component {
 				// cross-component queries). The combination is refused
 				// loudly instead of degrading silently.
 				if r.libSQLite != nil {
-					return fmt.Errorf("library: AXIOM_LIBRARY_IMPORT_PROVIDERS=zotero requires the PostgreSQL profile (the Zotero mirror lives on the shared database); AXIOM_STORAGE_LIBRARY_DRIVER=%q is not combinable with it", r.cfg.StorageLibraryDriver)
+					return fmt.Errorf("library: AXIOM_LIBRARY_IMPORT_PROVIDERS=zotero requires the PostgreSQL profile (the Zotero mirror lives on the Library database); AXIOM_STORAGE_LIBRARY_DRIVER=%q is not combinable with it", r.cfg.StorageLibraryDriver)
 				}
 				serverID := r.src.ServerID()
 				sourceID, serr := r.mirrorRepo.EnsureSource(ctx, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, serverID)
