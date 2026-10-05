@@ -1894,3 +1894,49 @@ func TestReclaimNeverInheritsStaleLease(t *testing.T) {
 		t.Fatalf("row lease_until = %v, want fresh (after %v)", r.leaseUntil, before)
 	}
 }
+
+// TestProjectionUpsertSkipsStaleVersion pins the version-guard skip (#358
+// review): an offer with an OLDER source version than the stored row is
+// skipped without error (a delayed sync's stale delta must not abort the
+// store-effect phase).
+func TestProjectionUpsertSkipsStaleVersion(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	proj := func(version int64) DocumentProjection {
+		return DocumentProjection{
+			DocumentID:   "11111111-1111-1111-1111-111111111111",
+			AttachmentID: "22222222-2222-2222-2222-222222222222",
+			SourceID:     "33333333-3333-3333-3333-333333333333",
+			RecordKey:    "STALE1", RenditionKey: "STALEATT1",
+			SourceVersion: version, Title: "Stale Guard",
+			ContentType: "application/pdf", LocalPath: "/tmp/s.pdf",
+		}
+	}
+	upsert := func(version int64) {
+		t.Helper()
+		tx, err := lr.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if err := lr.rep.UpsertDocumentProjectionTx(ctx, tx, proj(version)); err != nil {
+			t.Fatalf("upsert v%d: %v", version, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upsert(5)
+	upsert(3) // stale offer: must skip, not error
+	var title string
+	var version int64
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT title, source_version FROM store_documents WHERE rendition_key='STALEATT1'`).Scan(&title, &version); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Stale Guard" || version != 5 {
+		t.Fatalf("stale offer must not touch the row: title=%q version=%d, want Stale Guard/5", title, version)
+	}
+}

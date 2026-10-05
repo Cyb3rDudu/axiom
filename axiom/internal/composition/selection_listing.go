@@ -11,6 +11,7 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library/mirror"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/server"
 )
 
 // selectionListing is the composite SelectionRepo: selection writes and
@@ -21,9 +22,7 @@ type selectionListing struct {
 	store *repo.Repo
 }
 
-var _ interface {
-	SetSelectionBatch(ctx context.Context, docs []mirror.SelectionInput, colls []mirror.CollectionSelectionInput) error
-} = (*selectionListing)(nil)
+var _ server.SelectionRepo = (*selectionListing)(nil)
 
 func (c *selectionListing) SetSelectionBatch(ctx context.Context, docs []mirror.SelectionInput, colls []mirror.CollectionSelectionInput) error {
 	return c.mir.SetSelectionBatch(ctx, docs, colls)

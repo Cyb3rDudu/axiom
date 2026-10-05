@@ -42,6 +42,7 @@ type bibRow struct {
 	Tags          []byte
 	CitationClass string
 	DocVersion    int64
+	ItemType      string
 }
 
 // readBibliographies loads the bibliographic block for the changed
@@ -62,7 +63,8 @@ func (s *Service) readBibliographies(ctx context.Context, sourceID string, rendi
 	rows, err := s.mir().Pool().Query(ctx, `
 		SELECT id::text, title, creators, publication_year,
 		       COALESCE(publisher,''), COALESCE(language,''), tags,
-		       COALESCE(citation_class,'citable'), zotero_version
+		       COALESCE(citation_class,'citable'), zotero_version,
+		       COALESCE(item_type,'')
 		FROM zotero_documents
 		WHERE id = ANY($1::uuid[])`, ids)
 	if err != nil {
@@ -72,7 +74,7 @@ func (s *Service) readBibliographies(ctx context.Context, sourceID string, rendi
 	for rows.Next() {
 		var id string
 		var b bibRow
-		if err := rows.Scan(&id, &b.Title, &b.Creators, &b.Year, &b.Publisher, &b.Language, &b.Tags, &b.CitationClass, &b.DocVersion); err != nil {
+		if err := rows.Scan(&id, &b.Title, &b.Creators, &b.Year, &b.Publisher, &b.Language, &b.Tags, &b.CitationClass, &b.DocVersion, &b.ItemType); err != nil {
 			return nil, err
 		}
 		out[id] = b
@@ -206,10 +208,14 @@ func (s *Service) applyStoreEffects(ctx context.Context, sourceID, serverID stri
 			Title:         b.Title, Creators: authorStrings(b.Creators), Year: b.Year,
 			Publisher: b.Publisher, Language: b.Language, Tags: tagStrings(b.Tags),
 			CitationClass: b.CitationClass, ContentType: r.ContentType,
-			ItemType: "", Filename: r.Filename, LocalPath: r.LocalPath,
+			ItemType: b.ItemType, Filename: r.Filename, LocalPath: r.LocalPath,
 			FileSize: fileSize, MtimeMS: mtime, LinkMode: r.LinkMode,
 		}
 		if r.ErrCode != "" {
+			// A missing/unreadable file carries no verified hash: the
+			// projection's content_hash stays NULL (#358 review — the
+			// claim's CONTENT_HASH_MISSING guard consumes it; the next
+			// full re-offer self-heals when the file returns).
 			failed = append(failed, repo.FailedJob{
 				SourceID: sourceID, DocumentID: r.DocumentID, AttachmentID: r.AttachmentID,
 				ErrorCode: r.ErrCode, ErrorMessage: r.ErrMsg, Retryable: r.Retryable,

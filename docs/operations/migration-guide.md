@@ -492,8 +492,13 @@ is suppressed — the active-snapshot defense). The response's
 a frozen archive through the v0.2.3 soak — a bestand backfill (store
 migration 0004) mints the projection rows from the archive so search
 hydration, retention anchors and in-flight claims keep working from the
-first boot. Dropping the archive tables is documented follow-up after
-the soak.
+first boot (historical repair cases seed the retention flag with it).
+Dropping the archive tables is documented follow-up after the soak.
+
+The backfill and the documents listing key on mirror UUIDs: the Library
+database's cutover copy and the Store archive MUST share the zotero_*
+uuids (they do — the copy is physical); that identity continuity is the
+load-bearing invariant of the migration.
 
 ## Troubleshooting: 0.2.0 patterns
 

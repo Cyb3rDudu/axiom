@@ -140,8 +140,8 @@ func DeriveOutcome(selMode, jobStatus, errCode, errMsg, paginationState, repairS
 		r := errCode
 		if errMsg != "" {
 			// rune-safe cap: byte slicing could split a multi-byte rune mid-sequence
-			if r := []rune(errMsg); len(r) > 160 {
-				errMsg = string(r[:160]) + "…"
+			if runes := []rune(errMsg); len(runes) > 160 {
+				errMsg = string(runes[:160]) + "…"
 			}
 			if r != "" {
 				r += ": "
@@ -215,7 +215,6 @@ func (m *Repo) ListDocumentsMirror(ctx context.Context) ([]ZoteroDocumentState, 
 			z.Outcome = "removed"
 			z.OutcomeReason = "deleted in Zotero — reconciled at " + z.UpdatedAt.Format(time.RFC3339)
 		}
-		_ = deleted // filtering happens in DocumentListing (post-merge)
 		if attKey != "" {
 			z.Attachment = &AttachmentState{ZoteroKey: attKey, Filename: attName, ContentType: attType, ContentHash: attHash}
 		}
@@ -232,7 +231,12 @@ func DocumentListing(mirrorRows []ZoteroDocumentState, jobs map[string]repo.JobS
 	out := make([]ZoteroDocumentState, 0, len(mirrorRows))
 	for _, z := range mirrorRows {
 		if z.SyncState == "tombstoned" {
-			out = append(out, z)
+			// Filter symmetry (#358 review): "" keeps tombstones visible
+			// (the visible-once window), "tombstoned" isolates them, any
+			// other filter excludes them.
+			if syncState == "" || syncState == "tombstoned" {
+				out = append(out, z)
+			}
 			continue
 		}
 		var job repo.JobState

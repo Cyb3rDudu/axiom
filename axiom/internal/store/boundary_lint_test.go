@@ -469,8 +469,8 @@ func repoMirrorSQLViolations(dir string) []string {
 		}
 		return nil
 	})
-	_ = err // walk errors fail closed via the empty result being treated as clean only when nil; keep loud:
 	if err != nil {
+		// fail closed: a broken scan reports as a violation, never clean
 		return []string{"scan error: " + err.Error()}
 	}
 	return out

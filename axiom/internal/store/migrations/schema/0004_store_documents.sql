@@ -95,11 +95,11 @@ SELECT
        WHEN COALESCE(c->>'name', '') <> '' THEN c->>'name'
        ELSE btrim(COALESCE(c->>'firstName','') || ' ' || COALESCE(c->>'lastName',''))
      END), '[]'::jsonb)
-   FROM jsonb_array_elements(d.creators) AS c
+   FROM jsonb_array_elements(CASE WHEN jsonb_typeof(d.creators)='array' THEN d.creators ELSE '[]'::jsonb END) AS c
    WHERE btrim(COALESCE(c->>'name','') || ' ' || COALESCE(c->>'firstName','') || ' ' || COALESCE(c->>'lastName','')) <> ''),
   d.publication_year, COALESCE(d.publisher,''), COALESCE(d.language,''),
   (SELECT COALESCE(jsonb_agg(t->>'tag'), '[]'::jsonb)
-   FROM jsonb_array_elements(d.tags) AS t
+   FROM jsonb_array_elements(CASE WHEN jsonb_typeof(d.tags)='array' THEN d.tags ELSE '[]'::jsonb END) AS t
    WHERE COALESCE(t->>'tag','') <> ''),
   COALESCE(d.citation_class, 'citable'),
   COALESCE(a.content_type,''), COALESCE(d.item_type,''),
@@ -111,3 +111,10 @@ JOIN zotero_attachments a ON a.document_id = d.id AND a.preferred AND NOT a.dele
 JOIN zotero_sources s ON s.id = d.source_id
 WHERE NOT d.deleted
 ON CONFLICT (attachment_id) DO NOTHING;
+
+-- Historical repair cases keep their retention protection: the pre-#358
+-- guard counted ANY repair_cases row for the attachment; the successor
+-- flag is set-once, so the backfill seeds it for every attachment with a
+-- case in the archive.
+UPDATE store_documents p SET repair_linked=true
+WHERE EXISTS (SELECT 1 FROM repair_cases rc WHERE rc.attachment_id = p.attachment_id);

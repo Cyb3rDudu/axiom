@@ -168,8 +168,9 @@ type Dispatcher struct {
 
 // SetRepairQueue wires the repair-case seam (F09 #303). Nil keeps the
 // dispatcher repair-blind: repair-track failures mark the job terminal
-// with their code and log, but no case is created (composition always
-// wires the real adapter; tests inject fakes).
+// with their code and log, but no case is created. Wiring is conditional
+// (#358/ADR 0002): store-slice processes run without the Library plane
+// and stay repair-blind; tests inject fakes.
 func (d *Dispatcher) SetRepairQueue(q RepairQueue) { d.repairs = q }
 
 // SetEventBroker attaches the observer-only event bus. Nil (the zero value)

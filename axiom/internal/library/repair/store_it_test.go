@@ -359,3 +359,77 @@ func TestRepairRequeueIT(t *testing.T) {
 		t.Fatal("requeue from queued (not parked) must refuse")
 	}
 }
+
+// TestCreateRepairCaseSetsStoreLinkFlag — the #358 review witness: the
+// repair track's Store-side retention seam (repair_linked) must flip when
+// a case is created — deleting the markLinked call goes red here.
+func TestCreateRepairCaseSetsStoreLinkFlag(t *testing.T) {
+	e := openStoreDB(t)
+	e.truncateFixtures(t)
+	ctx := context.Background()
+
+	// A rendition with its Store projection row (the harness wires
+	// SetStoreLink to the repo).
+	attID, docID := seedProjectionFixture(t, e)
+	c, created, err := e.store.CreateRepairCase(ctx, attID, docID, "reparierbar", []byte(`{}`))
+	if err != nil || c == nil || !created {
+		t.Fatalf("CreateRepairCase: %v %v created=%v", err, c, created)
+	}
+	var linked bool
+	if err := e.pool.QueryRow(ctx,
+		`SELECT repair_linked FROM store_documents WHERE attachment_id=$1::uuid`, attID).Scan(&linked); err != nil {
+		t.Fatal(err)
+	}
+	if !linked {
+		t.Fatal("case creation must set the Store-side repair_linked retention flag")
+	}
+	// The recycled-open-case path re-attempts the flag (self-heals a
+	// failed link write).
+	if _, err := e.pool.Exec(ctx, `UPDATE store_documents SET repair_linked=false WHERE attachment_id=$1::uuid`, attID); err != nil {
+		t.Fatal(err)
+	}
+	c2, created2, err := e.store.CreateRepairCase(ctx, attID, docID, "reparierbar", []byte(`{}`))
+	if err != nil || c2 == nil || created2 {
+		t.Fatalf("recycled case: %v %v created=%v", err, c2, created2)
+	}
+	if err := e.pool.QueryRow(ctx,
+		`SELECT repair_linked FROM store_documents WHERE attachment_id=$1::uuid`, attID).Scan(&linked); err != nil {
+		t.Fatal(err)
+	}
+	if !linked {
+		t.Fatal("the recycled-open-case path must re-attempt the repair_linked flag")
+	}
+}
+
+// seedProjectionFixture seeds source/document/attachment + the Store
+// projection row; returns the attachment and document ids.
+func seedProjectionFixture(t *testing.T, e *storeEnv) (attID, docID string) {
+	t.Helper()
+	ctx := context.Background()
+	var srcID string
+	if err := e.pool.QueryRow(ctx, `
+		INSERT INTO zotero_sources (base_url, library_id, server_id)
+		VALUES ('https://linkflag.local','users/0','srv') RETURNING id::text`).Scan(&srcID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.pool.QueryRow(ctx, `
+		INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+		VALUES ($1,'LINKDOC1',1,'book','Link Flag') RETURNING id::text`, srcID).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.pool.QueryRow(ctx, `
+		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+		   parent_zotero_key, link_mode, content_type, filename, local_path, preferred)
+		VALUES ($1,$2,'LINKATT1',1,'LINKDOC1','imported_file','application/pdf','x.pdf','/tmp/x.pdf',true)
+		RETURNING id::text`, srcID, docID).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, title, content_type, local_path, preferred)
+		VALUES ($1, $2, $3, 'LINKDOC1', 'LINKATT1', 'Link Flag', 'application/pdf', '/tmp/x.pdf', true)`,
+		docID, attID, srcID); err != nil {
+		t.Fatal(err)
+	}
+	return attID, docID
+}

@@ -1,13 +1,13 @@
 // revisions.go — the source revision Mits-Schrieb (F06 #300 Ziel 8),
-// PostgreSQL dialect (the legacy Zotero-sync lane is a PostgreSQL-profile
-// feature: it reads the zotero_* mirror on the shared database; the
-// SQLite profile has no mirror and does not wire this lane).
-// Revisions are published at the points where Zotero state changes are
-// observed today: sync completion (RecordSyncRevisions) and heal/custody
-// (RecordAttachmentRevision — both the fixer auto-apply and the manual
-// custody route run through repair.Apply). Additive only: the Store turns
-// onto revision intake in F09; until then these rows are the historized
-// publication ledger.
+// PostgreSQL dialect. The zotero_* mirror is Library-database-resident
+// since #358 (ADR 0002): the PostgreSQL profile carries it (schema/0004)
+// and always wires this lane; the SQLite profile has no mirror and no
+// sync role. Revisions are published at the points where Zotero state
+// changes are observed: sync completion (RecordSyncRevisions) and
+// heal/custody (RecordAttachmentRevision — both the fixer auto-apply and
+// the manual custody route run through repair.Apply). The Store consumes
+// them through revision intake (F09 landed; the sync drives it directly
+// since #358 — this ledger is the historized publication record).
 //
 // Idempotence: a revision row is minted only when the rendition's content
 // hash (or rendition identity) CHANGED — a re-sync that changes nothing

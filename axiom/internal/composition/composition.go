@@ -41,7 +41,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/bindings"
@@ -331,25 +330,6 @@ func checkPoolRole(ctx context.Context, pool *pgxpool.Pool, component, wrongRole
 		return fmt.Errorf("%s pool connected as role %q — the other component's role; the pools are credential-separated (#316): check the component DSNs (AXIOM_STORE_DATABASE_URL store / AXIOM_LIBRARY_DATABASE_URL library, legacy single-DSN AXIOM_DATABASE_URL)", component, user)
 	}
 	return nil
-}
-
-// sameDatabase reports whether two DSNs point at the same PostgreSQL
-// database (host+port+database identity — credentials and spelling
-// differences do not matter). DM07 #316: the split-credentials interim
-// points both component pools at ONE database through different roles; the shared-database decisions (the legacy mirror Mits-Schrieb lane)
-// must follow the DATABASE identity, not DSN string equality. Parse
-// failures compare unequal (conservative: db.Open right after is the
-// loud authority on broken DSNs).
-func sameDatabase(a, b string) bool {
-	if a == "" || b == "" || a == b {
-		return a == b
-	}
-	pa, errA := pgconn.ParseConfig(a)
-	pb, errB := pgconn.ParseConfig(b)
-	if errA != nil || errB != nil {
-		return false
-	}
-	return pa.Host == pb.Host && pa.Port == pb.Port && pa.Database == pb.Database
 }
 
 // Start starts every selected component in the documented order. A failing

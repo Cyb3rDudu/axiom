@@ -11,15 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// PendingJob describes a processing unit the sync layer wants to enqueue.
-type PendingJob struct {
-	SourceID     string
-	DocumentID   string
-	AttachmentID string
-	ContentHash  string
-	ForceRebuild bool
-}
-
 // Job is a row of ingest_jobs. The FK projections are nullable because a job may
 // reference a source/document/attachment that no longer resolves (a legacy or
 // broken job); nil means the reference is absent in SQL. This keeps GetJob/
@@ -92,19 +83,20 @@ var (
 // outside every identity arbiter by design.
 func (r *Repo) EnqueueForceRebuild(ctx context.Context, documentID string) (*Job, error) {
 	// Resolve the preferred, non-deleted rendition from the projection.
-	var sourceID, attID, recKey, rendKey, class, title, publisher, language string
+	var sourceID, attID, recKey, rendKey, class, title, publisher, language, contentType string
 	var attHash *string
 	var year *int
 	var creators, tags []byte
 	err := r.pool.QueryRow(ctx, `
 		SELECT p.source_id::text, p.attachment_id::text, p.record_key, p.rendition_key,
 		       p.content_hash, p.title, p.creators, p.publication_year, COALESCE(p.publisher,''),
-		       COALESCE(p.language,''), p.tags, COALESCE(p.citation_class,'citable')
+		       COALESCE(p.language,''), p.tags, COALESCE(p.citation_class,'citable'),
+		       COALESCE(p.content_type,'')
 		FROM store_documents p
 		WHERE p.document_id = $1::uuid AND p.preferred AND NOT p.deleted
 		ORDER BY p.updated_at DESC
 		LIMIT 1`, documentID).Scan(&sourceID, &attID, &recKey, &rendKey, &attHash,
-		&title, &creators, &year, &publisher, &language, &tags, &class)
+		&title, &creators, &year, &publisher, &language, &tags, &class, &contentType)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNoPreferredAttachment
 	} else if err != nil {
@@ -298,4 +290,13 @@ func (r *Repo) CountJobsForSource(ctx context.Context, sourceID string) (int, er
 		return 0, err
 	}
 	return n, nil
+}
+
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

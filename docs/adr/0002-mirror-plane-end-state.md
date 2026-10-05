@@ -119,6 +119,15 @@ where repair is visible.
 
 ## Consequences
 
+- **Residual (two-database topology):** mirror phases serialize on the
+  Library session lock and store phases on the Store xact lock, but the
+  two orders are independent across databases — a delayed stale sync's
+  store phase can transiently un-delete a projection that a newer sync
+  already reconciled. The deletion report is LEVEL-triggered (every sync
+  re-reports every currently-deleted rendition), so the next run repairs
+  it: eventual consistency bounded by one sync. The single-database
+  topology is safe by construction (both locks share one namespace and
+  force mirror-store ordering).
 - The Library database's mirror is the single live mirror; the frozen
   divergence ends at the catch-up sync.
 - The Store survives Library unavailability for everything already

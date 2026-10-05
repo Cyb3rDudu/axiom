@@ -112,9 +112,9 @@ func (e *storeEnv) truncateFixtures(t *testing.T) {
 	}
 	if _, err := e.pool.Exec(ctx, `
 		TRUNCATE kg_superseded_entities,
-		         ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
+		         ingest_jobs, store_documents, zotero_attachments, zotero_documents, zotero_items,
 		         zotero_item_collections, zotero_collections, zotero_sources,
-		         zotero_selections, zotero_collection_selections
+		         zotero_selections, zotero_collection_selections, repair_cases
 		CASCADE`); err != nil {
 		t.Fatalf("truncate fixtures: %v", err)
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/contractsuite"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/library"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
+	axiomdb "github.com/Cyb3rDudu/axiom/axiom/internal/db"
 	lib "github.com/Cyb3rDudu/axiom/axiom/internal/library"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -1604,5 +1605,61 @@ func TestNamingConventionFromImport(t *testing.T) {
 	want := lib.SchemaFilename([]lib.Creator{{LastName: "Example", CreatorType: "author"}}, 2019, "Document Title From Content")
 	if filename != want {
 		t.Fatalf("filename %q, want the schema name from verified metadata %q", filename, want)
+	}
+}
+
+// TestMirrorSchemaIdempotentOverCoreSchema — #358 review: the production
+// Library database carries the CORE schema's zotero_* tables (the cutover
+// copy); pglib 0004 must apply cleanly ON TOP of that shape (and
+// idempotently re-run) — the fresh-database CREATE IF NOT EXISTS path is
+// NOT the shape production rides.
+func TestMirrorSchemaIdempotentOverCoreSchema(t *testing.T) {
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping pglib IT")
+	}
+	if base := dbOf(dsn); !strings.HasSuffix(base, "_test") {
+		t.Fatalf("refusing to run against non-_test database %q", base)
+	}
+	scratch := strings.TrimSuffix(dbOf(dsn), "_test") + fmt.Sprintf("_core%d_test", os.Getpid())
+	ctx := context.Background()
+	admin, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin.Exec(ctx, fmt.Sprintf(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='%s' AND pid<>pg_backend_pid()`, scratch))
+	admin.Exec(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, scratch))
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE DATABASE %s`, scratch)); err != nil {
+		admin.Close()
+		t.Fatalf("create scratch: %v", err)
+	}
+	admin.Close()
+	t.Cleanup(func() {
+		c, err := pgxpool.New(context.Background(), dsn)
+		if err == nil {
+			c.Exec(context.Background(), fmt.Sprintf(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='%s' AND pid<>pg_backend_pid()`, scratch))
+			c.Exec(context.Background(), fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, scratch))
+			c.Close()
+		}
+	})
+	core, err := axiomdb.Open(ctx, withDB(dsn, scratch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(core.Close)
+	if err := core.Migrate(ctx); err != nil {
+		t.Fatalf("core migrate (the cutover-copy shape): %v", err)
+	}
+	st := NewStore(core.Pool())
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("pglib migrate over core schema: %v", err)
+	}
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("pglib re-migrate must be idempotent: %v", err)
+	}
+	// the mirror tables answer (the shape the production library DB has)
+	var n int
+	if err := core.Pool().QueryRow(ctx, `SELECT count(*) FROM zotero_sources`).Scan(&n); err != nil {
+		t.Fatalf("mirror readable after overlay: %v", err)
 	}
 }

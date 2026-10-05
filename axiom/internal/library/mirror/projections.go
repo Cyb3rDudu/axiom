@@ -225,20 +225,30 @@ func preferredActive(atts []zoteroprovider.Attachment, deleted map[string]attMet
 	return zoteroprovider.PreferredAttachment(active)
 }
 
-// deactivateDocumentAttachments marks all attachment projections of a document
-// as deleted (used when a parent is deleted or loses its processable file)
-// and returns the ids of the rows that flipped THIS run (the sync's store
-// phase marks their projections deleted too, so claims obsolesce and the
-// snapshot reconciliation retires their active snapshots).
+// deactivateDocumentAttachments marks all attachment projections of a
+// document as deleted (used when a parent is deleted or loses its
+// processable file) and returns the ids to report to the Store —
+// LEVEL-triggered (#358 review C1): every currently-deleted attachment of
+// the parent is reported on every sync, so a store phase that failed
+// after its mirror commit gets its deletion marks repaired by the next
+// run (the store's mark is idempotent).
 func (m *Repo) deactivateDocumentAttachments(ctx context.Context, tx pgx.Tx, sourceID, parentKey string) ([]string, error) {
-	rows, err := tx.Query(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE zotero_attachments
 		SET deleted=true, preferred=false, updated_at=now()
 		WHERE source_id=$1 AND parent_zotero_key=$2 AND deleted=false
-		RETURNING id::text
 	`, sourceID, parentKey)
 	if err != nil {
 		return nil, fmt.Errorf("deactivate document attachments %s: %w", parentKey, err)
+	}
+	_ = tag
+	rows, err := tx.Query(ctx, `
+		SELECT id::text FROM zotero_attachments
+		WHERE source_id=$1 AND parent_zotero_key=$2 AND deleted=true
+		ORDER BY zotero_key
+	`, sourceID, parentKey)
+	if err != nil {
+		return nil, fmt.Errorf("report document attachments %s: %w", parentKey, err)
 	}
 	defer rows.Close()
 	var ids []string

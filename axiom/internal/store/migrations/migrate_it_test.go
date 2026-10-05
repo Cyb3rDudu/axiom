@@ -15,9 +15,17 @@ import (
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestStoreMigrateIdempotentAfterLedgerWipe(t *testing.T) {
+	// These ledger tests own the database's ingest_jobs shape; leftovers
+	// from other packages' ITs can legally carry duplicate ACTIVE
+	// revision identities that break the index re-creation below.
+	if pool := migOwnedPool(t); pool != nil {
+		_, _ = pool.Exec(context.Background(), `TRUNCATE ingest_jobs CASCADE`)
+		pool.Close()
+	}
 	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping migrations IT")
@@ -96,6 +104,10 @@ func TestStoreMigrateIdempotentAfterLedgerWipe(t *testing.T) {
 // carries the old status-blind identity index) must be repaired by a
 // plain Migrate run, no ledger wipe: 0002 always runs on such DBs.
 func TestStoreMigrate0002FixesLedgeredOldIndex(t *testing.T) {
+	if pool := migOwnedPool(t); pool != nil {
+		_, _ = pool.Exec(context.Background(), `TRUNCATE ingest_jobs CASCADE`)
+		pool.Close()
+	}
 	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping migrations IT")
@@ -469,4 +481,146 @@ func TestStoreMigrate0003DropsExactlyTheFiveCrossFKs(t *testing.T) {
 	if got := fkInventory(); !maps.Equal(got, after) {
 		t.Fatalf("the probes changed the FK inventory: %d baseline entries, %d final", len(after), len(got))
 	}
+}
+
+// TestStoreMigrate0004BackfillsPopulatedArchive — the bestand backfill
+// against a POPULATED archive (#358 review): preferred live renditions
+// project with the bibliography translation (creators flattened to
+// strings, tags extracted), non-preferred and deleted rows stay out,
+// historical repair cases seed the retention flag — and a re-run is a
+// no-op.
+func TestStoreMigrate0004BackfillsPopulatedArchive(t *testing.T) {
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping migrations IT")
+	}
+	if !strings.HasSuffix(strings.Split(dsn, "?")[0], "_test") {
+		t.Fatalf("refusing to run against non-_test database %s", dsn)
+	}
+	scratch := "axiom_0004_backfill_test"
+	admin, err := db.Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("open admin: %v", err)
+	}
+	ctx := context.Background()
+	admin.Pool().Exec(ctx,
+		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, scratch)
+	admin.Pool().Exec(ctx, "DROP DATABASE IF EXISTS "+scratch)
+	if _, err := admin.Pool().Exec(ctx, "CREATE DATABASE "+scratch); err != nil {
+		admin.Close()
+		t.Fatalf("create scratch: %v", err)
+	}
+	admin.Close()
+	t.Cleanup(func() {
+		c, err := db.Open(context.Background(), dsn)
+		if err == nil {
+			c.Pool().Exec(context.Background(),
+				`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, scratch)
+			c.Pool().Exec(context.Background(), "DROP DATABASE IF EXISTS "+scratch)
+			c.Close()
+		}
+	})
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Path = "/" + scratch
+	d, err := db.Open(ctx, u.String())
+	if err != nil {
+		t.Fatalf("open scratch: %v", err)
+	}
+	t.Cleanup(d.Close)
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("core migrate: %v", err)
+	}
+	pool := d.Pool()
+
+	seed := `
+	INSERT INTO zotero_sources (base_url, library_id, server_id)
+	VALUES ('https://backfill.local','users/0','srv-1');
+	INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title,
+		creators, publication_year, publisher, language, tags, citation_class, deleted)
+	SELECT (SELECT id FROM zotero_sources), k, 3, 'book', t,
+	       c::jsonb, 2001, 'Pub', 'en', g::jsonb, 'citable', false
+	FROM (VALUES
+	  ('BFDOC1', 'Backfill Book', '[{"creatorType":"author","firstName":"Ada","lastName":"Lovelace"}]', '[{"tag":"VWL_HA"},{"tag":"neutral"}]'),
+	  ('BFDOC2', 'Deleted Book', '[]', '[]'),
+	  ('BFDOC3', 'No Preferred Live', '[]', '[]')
+	) AS v(k, t, c, g);
+	UPDATE zotero_documents SET deleted=true WHERE zotero_key='BFDOC2';
+	INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
+	   parent_zotero_key, link_mode, content_type, filename, local_path, content_hash, file_size, mtime_ms, preferred, deleted)
+	SELECT d.source_id, d.id, a.k, 4, d.zotero_key,
+	       'imported_file', 'application/pdf', a.k||'.pdf', '/tmp/'||a.k||'.pdf', a.h, 1024, 5, a.p, false
+	FROM (VALUES
+	  ('BFDOC1', 'BFATT1', 'sha256:one', true),
+	  ('BFDOC1', 'BFATT2', 'sha256:two', false),
+	  ('BFDOC3', 'BFATT3', 'sha256:three', false)
+	) AS a(doc, k, h, p)
+	JOIN zotero_documents d ON d.zotero_key = a.doc;
+	UPDATE zotero_attachments SET preferred=true, deleted=true
+	 WHERE document_id=(SELECT id FROM zotero_documents WHERE zotero_key='BFDOC2');
+	INSERT INTO repair_cases (attachment_id, document_id, status, suspicion_class)
+	VALUES ((SELECT id FROM zotero_attachments WHERE zotero_key='BFATT1'),
+	        (SELECT id FROM zotero_documents WHERE zotero_key='BFDOC1'), 'healed', 'x');
+	`
+	if _, err := pool.Exec(ctx, seed); err != nil {
+		t.Fatalf("seed archive: %v", err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM store_documents`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("backfill projected %d rows, want exactly the 1 preferred live rendition (BFDOC1/BFATT1)", n)
+	}
+	var creators, tags []byte
+	var repairLinked bool
+	var title, hash string
+	if err := pool.QueryRow(ctx,
+		`SELECT title, creators, tags, content_hash, repair_linked FROM store_documents WHERE rendition_key='BFATT1'`,
+	).Scan(&title, &creators, &tags, &hash, &repairLinked); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Backfill Book" || hash != "sha256:one" {
+		t.Fatalf("backfill identity: title=%q hash=%q", title, hash)
+	}
+	if string(creators) != `["Ada Lovelace"]` {
+		t.Fatalf("creators translation: %s, want [\"Ada Lovelace\"]", creators)
+	}
+	if string(tags) != `["VWL_HA", "neutral"]` {
+		t.Fatalf("tags translation: %s", tags)
+	}
+	if !repairLinked {
+		t.Fatal("the repair-cased rendition must backfill repair_linked=true (retention anchor)")
+	}
+	// re-run is a no-op
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("re-migrate: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM store_documents`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("re-migrate changed the projection: %d rows", n)
+	}
+}
+
+// migOwnedPool opens the shared test DB when the migration-IT environment
+// is present (nil otherwise — the caller then skips the hygiene step).
+func migOwnedPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("AXIOM_TEST_DATABASE_URL")
+	if dsn == "" {
+		return nil
+	}
+	d, err := db.Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("open shared db: %v", err)
+	}
+	return d.Pool()
 }

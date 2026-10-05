@@ -4,9 +4,10 @@
 // lives here and nowhere else: per-import advisory-lock serialization,
 // event sequence minting, revision minting, anchor+audit atomicity.
 //
-// The zotero_* mirror reads (mirror_reads.go) are the shared-database
-// strangler lane: Library-owned tables on the legacy Store database,
-// until the DM track retires the sync lane (they die with the mirror).
+// The zotero_* mirror (mirror_reads.go, revisions.go, schema/0004) is
+// Library-database-resident since #358 (ADR 0002): this engine OWNS the
+// mirror schema and its reads; a never-synced or pre-0004 database folds
+// mirror reads to absence, never an error.
 //
 // Boot order for the PostgreSQL profile: Migrate (own ledger), then
 // optionally VerifyAdoption — the read-only Bestands-DB check (fresh /

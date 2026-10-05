@@ -37,6 +37,19 @@ func tombItem(key, parent, title string, v int64) zoteroprovider.CanonicalItem {
 func TestZoteroDeleteBecomesTombstoneIT(t *testing.T) {
 	ctx := context.Background()
 	d := openTestDB(t, ctx)
+	// The persistent test DB carries tombstones from earlier runs (same
+	// doc keys, different sources); clear the fixture keys AND their
+	// orphaned store rows (snapshots lost their FKs with DM06) so
+	// "exactly one tombstone" and the identity insert are well-defined.
+	for _, stmt := range []string{
+		`DELETE FROM processing_snapshots WHERE content_hash IN ('sha256:tomb','sha256:phantom')`,
+		`DELETE FROM store_documents WHERE record_key IN ('TB1','PB1')`,
+		`DELETE FROM zotero_documents WHERE zotero_key IN ('TB1','PB1')`,
+	} {
+		if _, err := d.Pool().Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
 	pdf := makePdf(t, "tomb")
 
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 10}
@@ -122,6 +135,24 @@ func TestZoteroDeleteBecomesTombstoneIT(t *testing.T) {
 	if !deleted {
 		t.Fatal("the deleted rendition's projection row must be marked deleted")
 	}
+
+	// The failure-path repair (#358 review C1): simulate a store phase
+	// whose deletion mark was lost (rolled back after the mirror commit),
+	// then a PLAIN delta sync (nothing changed in Zotero) — the
+	// level-triggered re-report must re-apply the mark.
+	if _, err := d.Pool().Exec(ctx,
+		`UPDATE store_documents SET deleted=false, preferred=true WHERE attachment_id=$1::uuid`, attID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Run(ctx, nil); err != nil {
+		t.Fatalf("repair sync: %v", err)
+	}
+	if err := d.Pool().QueryRow(ctx, `SELECT deleted FROM store_documents WHERE attachment_id=$1::uuid`, attID).Scan(&deleted); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("a lost deletion mark must be re-applied by the next sync (level-triggered report)")
+	}
 }
 
 // TestFullReconcileClearsHeldPhantomsIT — the catch-up probe: items that
@@ -131,6 +162,15 @@ func TestZoteroDeleteBecomesTombstoneIT(t *testing.T) {
 func TestFullReconcileClearsHeldPhantomsIT(t *testing.T) {
 	ctx := context.Background()
 	d := openTestDB(t, ctx)
+	for _, stmt := range []string{
+		`DELETE FROM processing_snapshots WHERE content_hash IN ('sha256:tomb','sha256:phantom')`,
+		`DELETE FROM store_documents WHERE record_key IN ('TB1','PB1')`,
+		`DELETE FROM zotero_documents WHERE zotero_key IN ('TB1','PB1')`,
+	} {
+		if _, err := d.Pool().Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
 	pdf := makePdf(t, "phantom")
 
 	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 10}

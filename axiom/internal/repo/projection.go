@@ -11,6 +11,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -91,6 +92,12 @@ func (r *Repo) UpsertDocumentProjectionTx(ctx context.Context, tx pgx.Tx, p Docu
 		p.Title, creators, p.Year, p.Publisher, p.Language, tags,
 		class, p.ContentType, p.ItemType, p.Filename, p.LocalPath,
 		p.FileSize, p.MtimeMS, p.LinkMode).Scan(&applied); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The version guard suppressed the update: a STALE offer
+			// (an older delta or a delayed sync) — the documented skip,
+			// never a phase-aborting error (#358 review).
+			return nil
+		}
 		return err
 	}
 	// Exactly one preferred rendition per document.

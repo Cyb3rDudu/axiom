@@ -123,9 +123,9 @@ func (s *Server) handleZoteroDocuments(w http.ResponseWriter, r *http.Request) {
 	}
 	state := r.URL.Query().Get("sync_state")
 	switch state {
-	case "", "synced", "held", "processing", "pending":
+	case "", "synced", "held", "processing", "pending", "tombstoned":
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync_state must be synced|held|processing|pending"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sync_state must be synced|held|processing|pending|tombstoned"})
 		return
 	}
 	docs, err := s.selectionRepo.ListZoteroDocuments(r.Context(), state)
