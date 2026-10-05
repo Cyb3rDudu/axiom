@@ -30,7 +30,7 @@ case "$1" in
     if [ -n "$AXIOM_STUB_LSFILES" ]; then
       printf '%s\\n' $AXIOM_STUB_LSFILES
     else
-      printf '%s\n' $AXIOM_STUB_FILES
+      printf '%s\\n' $AXIOM_STUB_FILES
     fi
     ;;
 esac
@@ -85,26 +85,41 @@ CASES = [
 def main():
     failed = 0
     for label, files, expected in CASES:
-        got = classify(files)[:2]
+        go_sql, topology, _ = classify(files)
+        got = (go_sql, topology)
         ok = got == expected
         failed += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {label:16} files={files} -> {got} (want {expected})")
 
     # Fail-open: an unresolvable diff base must classify from ls-files
     # (everything tracked => heavy legs run), never skip verification.
-    got = classify(["docs/only.md"], diff_ok=False,
-                   lsfiles=["README.md", "axiom/cmd/x/main.go"])[:2]
-    ok = got == ("true", "true")
+    # The subcommand pin matters: the stub's wildcard arm would answer
+    # ANY non-diff subcommand, so only asserting the outputs would not
+    # prove the fallback actually used ls-files.
+    go_sql, topology, called = classify(
+        ["docs/only.md"], diff_ok=False,
+        lsfiles=["README.md", "axiom/cmd/x/main.go"])
+    ok = (go_sql, topology) == ("true", "true") and "ls-files" in called
     failed += not ok
-    print(f"{'ok  ' if ok else 'FAIL'} fail-open fallback -> {got} (want ('true', 'true'))")
+    print(f"{'ok  ' if ok else 'FAIL'} fail-open fallback -> "
+          f"{(go_sql, topology)} subcommand={'ls-files' if 'ls-files' in called else 'MISSING'} "
+          f"(want ('true', 'true') subcommand=ls-files)")
+
+    # The push arm must diff BEFORE...HEAD (github.event.before to the
+    # pushed tip) — the harness stubs BEFORE as the 40-zero SHA.
+    _, _, called = classify(["axiom/internal/db/store.go"])
+    want = "0" * 40 + "...HEAD"
+    ok = called[-1] == want
+    failed += not ok
+    print(f"{'ok  ' if ok else 'FAIL'} push range -> {called[-1]} (want {want})")
 
     # The pull_request arm must build the merge-base range against the
     # PR base ref (a typo here fails loudly at git-diff time, but only
     # after billing a fail-open full run).
-    got = classify(["docs/only.md"], event="pull_request", base_ref="main")
-    ok = got[2][-1] == "origin/main...HEAD"
+    _, _, called = classify(["docs/only.md"], event="pull_request", base_ref="main")
+    ok = called[-1] == "origin/main...HEAD"
     failed += not ok
-    print(f"{'ok  ' if ok else 'FAIL'} pull_request range -> {got[2][-1]} (want origin/main...HEAD)")
+    print(f"{'ok  ' if ok else 'FAIL'} pull_request range -> {called[-1]} (want origin/main...HEAD)")
 
     if failed:
         sys.exit(f"{failed} classifier case(s) red")
