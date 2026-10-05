@@ -128,12 +128,27 @@ func startRefWorker(t *testing.T, work string) (string, *bytes.Buffer) {
 }
 
 // splitFakeZotero answers the Server-ID probe (the zotero health check
-// both sync-bearing processes run) and empty item reads.
-func splitFakeZotero(t *testing.T) *httptest.Server {
+// both sync-bearing processes run) and serves ONE canonical book with
+// its EPUB attachment (the enclosure href points at the fixture file —
+// the sync's file-facts pass hashes exactly that).
+func splitFakeZotero(t *testing.T, epubPath string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Zotero-Server-ID", "f14-split-e2e")
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Last-Modified-Version", "1")
+		if strings.HasSuffix(r.URL.Path, "/items") {
+			fmt.Fprintf(w, `[
+			  {"key":"DOCF14S1","version":1,
+			   "data":{"key":"DOCF14S1","version":1,"itemType":"book","title":"Buchkapitel (F14 Split E2E)",
+			           "creators":[{"creatorType":"author","firstName":"Ada","lastName":"Lovelace"}]}},
+			  {"key":"ATTF14S1","version":1,
+			   "data":{"key":"ATTF14S1","version":1,"itemType":"attachment","parentItem":"DOCF14S1",
+			           "contentType":"application/epub+zip","filename":"book.epub","linkMode":"imported_file"},
+			   "links":{"enclosure":{"href":"file://%s","type":"application/epub+zip"}}}
+			]`, epubPath)
+			return
+		}
 		fmt.Fprint(w, `[]`)
 	}))
 	t.Cleanup(srv.Close)
@@ -172,6 +187,7 @@ func startSplitProc(t *testing.T, e *splitE2EEnv, role string, port, edge int) *
 	case "library":
 		env = append(env,
 			"AXIOM_LIBRARY_IMPORT_PROVIDERS=fake",
+			fmt.Sprintf("AXIOM_LIBRARY_DATABASE_URL=%s", e.libDSN),
 			fmt.Sprintf("AXIOM_INTERNAL_LIBRARY_ADDR=127.0.0.1:%d", edge),
 		)
 	case "store":
@@ -185,6 +201,9 @@ func startSplitProc(t *testing.T, e *splitE2EEnv, role string, port, edge int) *
 		)
 	case "api":
 		env = append(env,
+			// the api role carries the sync role too (its process hosts
+			// the Zotero sync): it needs the Library database as well.
+			fmt.Sprintf("AXIOM_LIBRARY_DATABASE_URL=%s", e.libDSN),
 			fmt.Sprintf("AXIOM_LIBRARY_URL=http://127.0.0.1:%d", e.libraryEdge),
 			fmt.Sprintf("AXIOM_STORE_URL=http://127.0.0.1:%d", e.storeEdge),
 		)
@@ -225,6 +244,8 @@ func startSplitProc(t *testing.T, e *splitE2EEnv, role string, port, edge int) *
 type splitE2EEnv struct {
 	dsn     string
 	dbName  string
+	libDSN  string
+	libName string
 	runner  string
 	osURL   string
 	osIndex string
@@ -256,16 +277,21 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 	}
 	ctx := contextBg()
 
-	// Scratch DB (own name, dropped at cleanup) — no host state.
+	// Scratch DBs (own names, dropped at cleanup) — no host state. TWO of
+	// them since #358: the Store database and the LIBRARY database (the
+	// Zotero mirror's home — the split the E2E proves for real).
 	dbName := fmt.Sprintf("axiom_f14_split_%d_test", os.Getpid())
+	libName := fmt.Sprintf("axiom_f14_lib_%d_test", os.Getpid())
 	e := &splitE2EEnv{
 		osURL:       osURL,
 		dbName:      dbName,
+		libName:     libName,
 		osIndex:     fmt.Sprintf("f14-split-chunks-%d", os.Getpid()),
 		libraryEdge: freePort(t),
 		storeEdge:   freePort(t),
 	}
 	e.dsn = swapPath(baseDSN, dbName)
+	e.libDSN = swapPath(baseDSN, libName)
 	admin, err := pgxpool.New(ctx, swapPath(baseDSN, "postgres"))
 	if err != nil {
 		t.Fatal(err)
@@ -274,8 +300,12 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	admin.Exec(ctx, `DROP DATABASE IF EXISTS `+dbName)
+	admin.Exec(ctx, `DROP DATABASE IF EXISTS `+libName)
 	if _, err := admin.Exec(ctx, `CREATE DATABASE `+dbName); err != nil {
 		t.Fatalf("create scratch db: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+libName); err != nil {
+		t.Fatalf("create scratch library db: %v", err)
 	}
 	admin.Close()
 	t.Cleanup(func() {
@@ -286,7 +316,9 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 		p, err := pgxpool.New(ctx2, swapPath(baseDSN, "postgres"))
 		if err == nil {
 			p.Exec(ctx2, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1`, dbName)
+			p.Exec(ctx2, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1`, libName)
 			p.Exec(ctx2, `DROP DATABASE IF EXISTS `+dbName)
+			p.Exec(ctx2, `DROP DATABASE IF EXISTS `+libName)
 			p.Close()
 		}
 		httpDelete(t, osURL+"/"+e.osIndex)
@@ -334,7 +366,7 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build axiom: %v\n%s", err, out)
 	}
-	zot := splitFakeZotero(t)
+	zot := splitFakeZotero(t, src)
 	e.zotero = zot.URL
 
 	// --- the three processes, started SEQUENTIALLY with health waits ---
@@ -414,31 +446,50 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 		return nil
 	})
 
-	// Seed the mirror rows the revision resolves to (shared scratch DB,
-	// no Library import traffic needed — the documented dual-read).
+	// 2. THE #358 RIDE: the sync through the library process's public
+	// edge — the mirror lands in the LIBRARY database, the projection +
+	// revision intake in the STORE database (two databases, one sync),
+	// and the dispatcher's claim/persist follows on the store side. No
+	// seeding, no manual intake: the Zotero observation IS the intake.
 	e.pool, err = pgxpool.New(ctx, e.dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.srcIDSeededMirror(t, src, hash)
-	// 2. intake through the PUBLIC edge (rides api → store edge → intake).
-	rev := map[string]any{
-		"source_id": e.docUUIDSource, "revision_id": "1", "rendition_id": "ATTF14S1",
-		"content_hash": hash, "media_type": "application/epub+zip",
-		"content_ticket": "zat:" + e.docUUIDSource + ":ATTF14S1",
-		"bibliography": map[string]any{
-			"record_id": "DOCF14S1", "title": "Buchkapitel (F14 Split E2E)",
-			"citation_class": "citable",
-		},
+	libPool, err := pgxpool.New(ctx, e.libDSN)
+	if err != nil {
+		t.Fatal(err)
 	}
-	resp := postJSON(t, e.api.url()+"/api/v1/store/ingest", map[string]any{
-		"idempotency_key": "f14-split-e2e-1", "revision": rev,
-	})
-	if resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("intake status %d: %s", resp.StatusCode, body)
+	t.Cleanup(libPool.Close)
+	syncResp := postJSON(t, e.library.url()+"/api/zotero/sync", map[string]any{})
+	if syncResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(syncResp.Body)
+		t.Fatalf("sync status %d: %s; library log tail:\n%s", syncResp.StatusCode, body, tailLogs(e.library.logs))
 	}
-	resp.Body.Close()
+	syncResp.Body.Close()
+	// The mirror lives in the LIBRARY database; the durable identities
+	// feed the search filter below.
+	if err := libPool.QueryRow(ctx,
+		`SELECT d.id::text, s.id::text FROM zotero_documents d, zotero_sources s
+		 WHERE d.zotero_key='DOCF14S1' AND d.source_id=s.id`).Scan(&e.docUUID, &e.docUUIDSource); err != nil {
+		t.Fatalf("library mirror rows after sync: %v", err)
+	}
+	// The store-side projection + intake exist (the sync's store phase).
+	var proj int
+	if err := e.pool.QueryRow(ctx,
+		`SELECT count(*) FROM store_documents WHERE rendition_key='ATTF14S1' AND content_hash=$1`, hash).Scan(&proj); err != nil {
+		t.Fatal(err)
+	}
+	if proj != 1 {
+		t.Fatalf("store projection after sync = %d, want 1 (the sync's store phase)", proj)
+	}
+	var pending int
+	if err := e.pool.QueryRow(ctx,
+		`SELECT count(*) FROM ingest_jobs WHERE intake_kind='revision' AND status='pending'`).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 1 {
+		t.Fatalf("revision intake after sync = %d, want 1", pending)
+	}
 
 	// 3. the remote-compute leg + contract-class search checks: the job
 	// runs on the only configured worker (e.runner), acks, and becomes
@@ -495,6 +546,7 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 				ChunkID string `json:"chunk_id"`
 				Source  struct {
 					DocID    string `json:"doc_id"`
+					Title    string `json:"title"`
 					RecordID string `json:"record_id"`
 				} `json:"source"`
 				Locator struct {
@@ -511,6 +563,11 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 		hit := res.Hits[0]
 		if hit.Source.DocID == "" || hit.Locator.Kind == "" {
 			return fmt.Errorf("hit misses the typed shape (source.doc_id / locator.kind): %s", body)
+		}
+		// #358 DoD: the title hydrates from the STORE's projection —
+		// written by the sync's store phase, never read from the mirror.
+		if hit.Source.Title != "Buchkapitel (F14 Split E2E)" {
+			return fmt.Errorf("hit title = %q, want the projection-carried bibliography title", hit.Source.Title)
 		}
 		if hit.Source.RecordID != "" {
 			t.Fatalf("search: component-internal field record_id leaked into the public answer: %s", body)
@@ -630,35 +687,3 @@ func tailLogsN(buf *bytes.Buffer, n int) string {
 
 func tailLogs(buf *bytes.Buffer) string { return tailLogsN(buf, 25) }
 
-// srcIDSeededMirror seeds the mirror rows the revision resolves to and
-// records the source uuid + document uuid on the env.
-func (e *splitE2EEnv) srcIDSeededMirror(t *testing.T, epubPath, hash string) {
-	t.Helper()
-	ctx := contextBg()
-	if err := e.pool.QueryRow(ctx, `
-		INSERT INTO zotero_sources (base_url, library_id, server_id)
-		VALUES ('https://f14-split.local','users/0','f14-split-e2e') RETURNING id::text`).Scan(&e.docUUIDSource); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.pool.QueryRow(ctx, `
-		INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
-		VALUES ($1,'DOCF14S1',1,'book','Buchkapitel (F14 Split E2E)') RETURNING id::text`, e.docUUIDSource).Scan(&e.docUUID); err != nil {
-		t.Fatal(err)
-	}
-	var itemID string
-	if err := e.pool.QueryRow(ctx, `
-		INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
-		VALUES ($1,'DOCF14S1',1,'journalArticle',NULL,'{}','{}') RETURNING id::text`, e.docUUIDSource).Scan(&itemID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.pool.Exec(ctx, `UPDATE zotero_documents SET canonical_item_id=$2 WHERE id=$1`, e.docUUID, itemID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.pool.Exec(ctx, `
-		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
-		   parent_zotero_key, link_mode, content_type, filename, local_path, content_hash, preferred, deleted)
-		VALUES ($1,$2,'ATTF14S1',1,'DOCF14S1','imported_file','application/epub+zip','f14.epub',$3,$4,true,false)`,
-		e.docUUIDSource, e.docUUID, epubPath, hash); err != nil {
-		t.Fatal(err)
-	}
-}

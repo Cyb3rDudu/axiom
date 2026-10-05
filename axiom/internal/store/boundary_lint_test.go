@@ -372,3 +372,106 @@ func containsStr(xs []string, s string) bool {
 	}
 	return false
 }
+
+// TestRepoFreeOfMirrorSQL — the #358 grep witness: the Store's repo
+// package contains ZERO references to the Library-owned mirror tables
+// (zotero_* family, repair_cases) in production files. The claim,
+// guards, retention anchors, search hydration and source serving all
+// resolve against the Store's own store_documents projection; a planted
+// reference goes red (the teeth probe below).
+func TestRepoFreeOfMirrorSQL(t *testing.T) {
+	v := repoMirrorSQLViolations("../repo")
+	if len(v) > 0 {
+		t.Fatalf("repo/ references Library-owned tables (#358 grep witness):\n\t%s",
+			strings.Join(v, "\n\t"))
+	}
+}
+
+// TestRepoFreeOfMirrorSQLCatchesPlantedReference — the teeth: a probe
+// copy of the repo package with a planted mirror-table query must go red.
+func TestRepoFreeOfMirrorSQLCatchesPlantedReference(t *testing.T) {
+	probe := func(root string) {
+		p := filepath.Join(root, "internal/repo/planted.go")
+		if err := os.WriteFile(p, []byte("package repo\n\nvar _ = `SELECT * FROM zotero_documents`\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v := repoMirrorSQLViolations(probeRepoCopy(t, probe)); len(v) == 0 {
+		t.Fatal("a planted zotero_documents reference in repo/ must go red")
+	}
+}
+
+// probeRepoCopy copies the repo package (production files only) plus the
+// planted mutation into a temp module tree and returns its path.
+func probeRepoCopy(t *testing.T, mutate func(root string)) string {
+	t.Helper()
+	root := t.TempDir()
+	dst := filepath.Join(root, "internal/repo")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src, err := filepath.Abs("../repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, rerr := filepath.Rel(src, path)
+		if rerr != nil {
+			return rerr
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		return os.WriteFile(filepath.Join(dst, rel), b, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutate(root)
+	return filepath.Join(root, "internal/repo")
+}
+
+// repoMirrorSQLViolations scans a directory's production files for
+// Library-owned table references. The frozen wire field names of the
+// processor contract (zotero_key, zotero_version, parent_zotero_key)
+// are NOT table references and stay legal.
+func repoMirrorSQLViolations(dir string) []string {
+	mirrorTables := []string{
+		"zotero_sources", "zotero_items", "zotero_collections",
+		"zotero_item_collections", "zotero_documents", "zotero_attachments",
+		"zotero_selections", "zotero_collection_selections",
+		"zotero_write_audit", "repair_cases",
+	}
+	var out []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		rel, _ := filepath.Rel(dir, path)
+		for _, tbl := range mirrorTables {
+			if strings.Contains(string(b), tbl) {
+				out = append(out, filepath.ToSlash(rel)+": "+tbl)
+			}
+		}
+		return nil
+	})
+	_ = err // walk errors fail closed via the empty result being treated as clean only when nil; keep loud:
+	if err != nil {
+		return []string{"scan error: " + err.Error()}
+	}
+	return out
+}

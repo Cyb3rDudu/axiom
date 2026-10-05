@@ -9,6 +9,7 @@ package mirror
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -106,3 +107,94 @@ func TestOutcomeProjectionIT(t *testing.T) {
 		t.Fatalf("outcome = %q (%q), want excluded (selection-excluded)", d.Outcome, d.OutcomeReason)
 	}
 }
+
+// TestOutcomeServingCohortIT — the #356 acceptance probe on the MERGED
+// listing: administrative closures (cancelled waves, cleanup failures,
+// skips) over documents with a SURVIVING active snapshot derive
+// `serving` with the closure named; the same closures WITHOUT a snapshot
+// stay `failed`. The 126-document production cohort is the first shape;
+// the second is the synthetic no-snapshot probe from the issue.
+func TestOutcomeServingCohortIT(t *testing.T) {
+	lr := openMirrorDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	// Two documents: one with an active snapshot (the cohort shape), one
+	// without (the honest failure).
+	year := 2026
+	_ = year
+	seedDoc := func(key, jobStatus, errCode, errMsg string, withSnapshot bool) (docID, attID, jobID string) {
+		attID, jobID = lr.seed(t, mirrorSeedSpec{
+			sourceBaseURL: "https://zotero.356/" + key, libraryID: "lib-" + key,
+			docKey: key, attKey: key + "ATT", preferred: true,
+			contentHash: strPtr("sha256:" + key),
+		}, jobStatus, 3)
+		if err := lr.pool.QueryRow(ctx,
+			`SELECT document_id::text FROM store_documents WHERE attachment_id=$1::uuid`, attID).Scan(&docID); err != nil {
+			t.Fatal(err)
+		}
+		if withSnapshot {
+			if _, err := lr.pool.Exec(ctx, `
+				INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,
+					processor_version, profile_hash, document_id, profile, active)
+				VALUES ($1::uuid, $2, 'p', 'v', 'ph', $3::uuid, '{}', true)`, attID, "sha256:"+key, docID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if errCode != "" {
+			if _, err := lr.pool.Exec(ctx,
+				`UPDATE ingest_jobs SET error_code=$2, error_message=$3 WHERE id=$1`, jobID, errCode, errMsg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return docID, attID, jobID
+	}
+
+	_, _, _ = seedDoc("CANCELWAVE", "cancelled", "", "", true)                                  // 91-cohort shape
+	_, _, _ = seedDoc("NIGHTCLEAN", "failed", "NIGHT_CLEANUP", "Redundant (Snapshot exists)", true) // 34-cohort shape
+	_, _, _ = seedDoc("REALFAIL", "failed", "RETRY_EXHAUSTED", "lease expired", false)            // honest failure
+
+	merged := func() map[string]ZoteroDocumentState {
+		rows, err := lr.rep.ListDocumentsMirror(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var attIDs, docIDs []string
+		for _, z := range rows {
+			if z.AttachmentID != "" {
+				attIDs = append(attIDs, z.AttachmentID)
+			}
+			docIDs = append(docIDs, z.DocumentID)
+		}
+		jobs, serving, err := lr.store.DocumentJobStates(ctx, attIDs, docIDs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]ZoteroDocumentState{}
+		for _, z := range DocumentListing(rows, jobs, serving, "") {
+			out[z.ZoteroKey] = z
+		}
+		return out
+	}()
+
+	if z := merged["CANCELWAVE"]; z.Outcome != "serving" {
+		t.Fatalf("cancelled-with-snapshot must derive serving, got %q (%q) — #356", z.Outcome, z.OutcomeReason)
+	}
+	if z := merged["NIGHTCLEAN"]; z.Outcome != "serving" {
+		t.Fatalf("cleanup-closure-with-snapshot must derive serving, got %q (%q) — #356", z.Outcome, z.OutcomeReason)
+	}
+	if z := merged["NIGHTCLEAN"]; z.OutcomeReason == "" || !contains(z.OutcomeReason, "NIGHT_CLEANUP") {
+		t.Fatalf("the serving reason must name the closure truth, got %q", z.OutcomeReason)
+	}
+	if z := merged["REALFAIL"]; z.Outcome != "failed" {
+		t.Fatalf("no-snapshot failure must STAY failed, got %q (%q) — the honest failure probe", z.Outcome, z.OutcomeReason)
+	}
+	// The cohort's coarse state: served documents are synced, not held.
+	if z := merged["CANCELWAVE"]; z.SyncState != "synced" {
+		t.Fatalf("served cancelled doc must list synced, got %q", z.SyncState)
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
+func contains(s, sub string) bool { return strings.Contains(s, sub) }
