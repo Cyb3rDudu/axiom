@@ -4,7 +4,8 @@
 Extracts the `classify changed files` step verbatim from the workflow and
 runs it with a stubbed `git` binary (no checkout needed), so the case
 patterns that gate go-db-it / the topology jobs are asserted, not
-trusted. A regression here silently skips verification legs.
+trusted. A regression here silently skips verification legs — including
+the fail-open fallback (diff base unresolvable => everything changed).
 """
 
 import os
@@ -18,29 +19,52 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKFLOW = os.path.join(HERE, "..", ".github", "workflows", "ci.yml")
 
+STUB = """#!/bin/sh
+printf '%s\\n' "$@" >> "$AXIOM_STUB_ARGS"
+case "$1" in
+  diff)
+    [ "$AXIOM_STUB_DIFF_OK" = 1 ] || exit 1
+    printf '%s\\n' $AXIOM_STUB_FILES
+    ;;
+  *)
+    if [ -n "$AXIOM_STUB_LSFILES" ]; then
+      printf '%s\\n' $AXIOM_STUB_LSFILES
+    else
+      printf '%s\n' $AXIOM_STUB_FILES
+    fi
+    ;;
+esac
+"""
 
-def classify(files):
+
+def classify(files, diff_ok=True, lsfiles=None, event="push", base_ref=""):
     """Run the real classifier step with `git` stubbed to emit `files`."""
     doc = yaml.safe_load(open(WORKFLOW))
     step = next(s for s in doc["jobs"]["changes"]["steps"] if s.get("id") == "diff")
     with tempfile.TemporaryDirectory() as tmp:
         stub = os.path.join(tmp, "git")
         with open(stub, "w") as fh:
-            fh.write("#!/bin/sh\nprintf '%s\\n' $AXIOM_STUB_FILES\n")
+            fh.write(STUB)
         os.chmod(stub, os.stat(stub).st_mode | stat.S_IXUSR)
         out = os.path.join(tmp, "out")
+        args = os.path.join(tmp, "args")
+        open(out, "w").close()
         env = dict(
             os.environ,
             PATH=tmp + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
             AXIOM_STUB_FILES="\n".join(files),
-            GITHUB_EVENT_NAME="push",
+            AXIOM_STUB_LSFILES="\n".join(lsfiles) if lsfiles else "",
+            AXIOM_STUB_DIFF_OK="1" if diff_ok else "0",
+            AXIOM_STUB_ARGS=args,
+            GITHUB_EVENT_NAME=event,
             BEFORE="0" * 40,
+            BASE_REF=base_ref,
             GITHUB_OUTPUT=out,
         )
-        open(out, "w").close()
         subprocess.run(["bash", "-c", step["run"]], env=env, check=True)
         result = dict(line.split("=", 1) for line in open(out).read().splitlines())
-    return result["go_sql"], result["topology"]
+        called = open(args).read().splitlines()
+    return result["go_sql"], result["topology"], called
 
 
 CASES = [
@@ -61,10 +85,27 @@ CASES = [
 def main():
     failed = 0
     for label, files, expected in CASES:
-        got = classify(files)
+        got = classify(files)[:2]
         ok = got == expected
         failed += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {label:16} files={files} -> {got} (want {expected})")
+
+    # Fail-open: an unresolvable diff base must classify from ls-files
+    # (everything tracked => heavy legs run), never skip verification.
+    got = classify(["docs/only.md"], diff_ok=False,
+                   lsfiles=["README.md", "axiom/cmd/x/main.go"])[:2]
+    ok = got == ("true", "true")
+    failed += not ok
+    print(f"{'ok  ' if ok else 'FAIL'} fail-open fallback -> {got} (want ('true', 'true'))")
+
+    # The pull_request arm must build the merge-base range against the
+    # PR base ref (a typo here fails loudly at git-diff time, but only
+    # after billing a fail-open full run).
+    got = classify(["docs/only.md"], event="pull_request", base_ref="main")
+    ok = got[2][-1] == "origin/main...HEAD"
+    failed += not ok
+    print(f"{'ok  ' if ok else 'FAIL'} pull_request range -> {got[2][-1]} (want origin/main...HEAD)")
+
     if failed:
         sys.exit(f"{failed} classifier case(s) red")
     print("all classifier cases green")
