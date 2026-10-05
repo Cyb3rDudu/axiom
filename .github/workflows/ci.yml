@@ -64,7 +64,12 @@ jobs:
           topology=false
           while IFS= read -r f; do
             case "$f" in
-              axiom/*.go|axiom/go.mod|axiom/go.sum|axiom/*.sql) go_sql=true; topology=true ;;
+              # the whole axiom tree is go-suite surface: Go sources,
+              # go.mod/sum, SQL schemas — AND testdata fixtures the DB ITs
+              # consume (binary fixtures are not .go/.sql; under-gating
+              # them silently skips verification — lane finding on #354).
+              # axiom/docs prose over-triggers by design: fail-open side.
+              axiom/*) go_sql=true; topology=true ;;
               deploy/postgres/roles.sql) go_sql=true; topology=true ;;
               axiom-compute-worker/*|deploy/*) topology=true ;;
               .github/workflows/ci.yml) go_sql=true; topology=true ;;
@@ -366,7 +371,9 @@ jobs:
           /tmp/kubeconform -strict -summary deploy/k8s/topology.yaml
 
   go-db-it:
-    # #354: path-gated — only Go/SQL/workflow surfaces pay for this leg.
+    # #354: path-gated — the axiom tree (incl. testdata fixtures), the
+    # role drill, and the workflow file gate this leg; docs/script-only
+    # changes do not pay for it.
     needs: changes
     if: needs.changes.outputs.go_sql == 'true'
     runs-on: ubuntu-latest
