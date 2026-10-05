@@ -749,12 +749,8 @@ func TestPersistForceRebuildDifferentProfileLeavesSingleActive(t *testing.T) {
 	).Scan(&srcID, &docID); err != nil {
 		t.Fatalf("load job refs: %v", err)
 	}
-	if _, err := h.pool.Exec(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-		VALUES ($1,$2,$3,$4,'pending',true)`,
-		srcID, docID, h.attachmentID, h.contentHash); err != nil {
-		t.Fatalf("seed force job: %v", err)
-	}
+	forceJob := h.leaseRepo.seedExtraForceJob(t, h.jobID)
+	_ = forceJob
 	cj2, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-force"))
 	if err != nil {
 		t.Fatalf("claim force job: %v", err)
@@ -832,12 +828,8 @@ func TestReplayReactivationDeactivatesOtherProfileSibling(t *testing.T) {
 	).Scan(&srcID, &docID); err != nil {
 		t.Fatalf("load job refs: %v", err)
 	}
-	if _, err := h.pool.Exec(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-		VALUES ($1,$2,$3,$4,'pending',true)`,
-		srcID, docID, h.attachmentID, h.contentHash); err != nil {
-		t.Fatalf("seed force job: %v", err)
-	}
+	forceJob := h.leaseRepo.seedExtraForceJob(t, h.jobID)
+	_ = forceJob
 	cj2, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-force"))
 	if err != nil || cj2 == nil {
 		t.Fatalf("claim force job: %v", err)
@@ -981,12 +973,8 @@ func TestPersistLateFailureRollsBackTombstones(t *testing.T) {
 	).Scan(&srcID, &docID); err != nil {
 		t.Fatalf("load job refs: %v", err)
 	}
-	if _, err := h.pool.Exec(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-		VALUES ($1,$2,$3,$4,'pending',true)`,
-		srcID, docID, h.attachmentID, h.contentHash); err != nil {
-		t.Fatalf("seed force job: %v", err)
-	}
+	forceJob := h.leaseRepo.seedExtraForceJob(t, h.jobID)
+	_ = forceJob
 	cj2, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-atomictomb"))
 	if err != nil || cj2 == nil {
 		t.Fatalf("claim force job: %v %v", cj2, err)
@@ -1053,19 +1041,9 @@ func TestReplayPersistCompletesJobRow(t *testing.T) {
 
 	forceJob := func(n int) (jobID string) {
 		t.Helper()
-		var srcID, docID string
-		if err := h.pool.QueryRow(ctx,
-			`SELECT source_id::text, document_id::text FROM ingest_jobs WHERE id=$1`, h.jobID,
-		).Scan(&srcID, &docID); err != nil {
-			t.Fatalf("job refs: %v", err)
-		}
-		if err := h.pool.QueryRow(ctx, `
-			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-			VALUES ($1,$2,$3,$4,'pending',true) RETURNING id::text`,
-			srcID, docID, h.attachmentID, h.contentHash).Scan(&jobID); err != nil {
-			t.Fatalf("seed force job %d: %v", n, err)
-		}
-		return jobID
+		// Revision-lane force copy of the harness job (the legacy lane is
+		// retired — #358).
+		return h.leaseRepo.seedExtraForceJob(t, h.jobID)
 	}
 	drive := func(jobID string) (snapID string, err error) {
 		cj, cerr := h.rep.ClaimNextJob(ctx, defaultClaim("worker-replay-"+jobID[:8]))

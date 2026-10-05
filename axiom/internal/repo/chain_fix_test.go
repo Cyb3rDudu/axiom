@@ -134,8 +134,8 @@ func TestCrossSourceJobSkipped(t *testing.T) {
 	if cjt := lr.claim(t, defaultClaim("worker-a")); cjt != nil {
 		t.Fatalf("cross-source job must be skipped, got claimed %v", cjt)
 	}
-	if r := lr.rowOf(t, brokeID); r.status != "skipped" || r.errorMessage == nil || *r.errorMessage != "PARENT_REMOVED" {
-		t.Fatalf("cross-source job = %s/%v, want skipped/PARENT_REMOVED", r.status, r.errorMessage)
+	if r := lr.rowOf(t, brokeID); r.status != "skipped" || r.errorMessage == nil || *r.errorMessage != "LEGACY_LANE_RETIRED" {
+		t.Fatalf("cross-source job = %s/%v, want skipped/LEGACY_LANE_RETIRED", r.status, r.errorMessage)
 	}
 }
 
@@ -170,7 +170,7 @@ func TestCompletionRejectsCrossDocumentChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := lr.pool.Exec(ctx, `
-		UPDATE zotero_attachments SET document_id=$1::uuid, source_id=$2::uuid, parent_zotero_key='OTHER' WHERE zotero_key='B1'`, newDocID, newSrcID); err != nil {
+		UPDATE store_documents SET document_id=$1::uuid WHERE rendition_key='B1'`, newDocID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,7 +282,7 @@ func TestNullCurrentHashSkippedEvenForced(t *testing.T) {
 		sourceBaseURL: "http://localhost:58", libraryID: "users/1",
 		docKey: "E2", attKey: "E2", contentHash: nil, preferred: true,
 	}, "pending", 3)
-	if _, err := lr.pool.Exec(ctx, `UPDATE zotero_attachments SET content_hash='' WHERE zotero_key='E2'`); err != nil {
+	if _, err := lr.pool.Exec(ctx, `UPDATE store_documents SET content_hash='' WHERE rendition_key='E2'`); err != nil {
 		t.Fatal(err)
 	}
 	if cj := lr.claim(t, defaultClaim("worker-b")); cj != nil {
@@ -379,8 +379,8 @@ func TestCanonicalItemInactiveSkipped(t *testing.T) {
 		t.Fatalf("job with inactive canonical metadata must be skipped, got claimed %v", cj)
 	}
 	r := lr.rowOf(t, jobID)
-	if r.status != "skipped" || r.errorMessage == nil || *r.errorMessage != "CANONICAL_METADATA_MISSING" {
-		t.Fatalf("inactive-canonical job = %s/%v, want skipped/CANONICAL_METADATA_MISSING", r.status, r.errorMessage)
+	if r.status != "skipped" || r.errorMessage == nil || *r.errorMessage != "LEGACY_LANE_RETIRED" {
+		t.Fatalf("inactive-canonical job = %s/%v, want skipped/LEGACY_LANE_RETIRED", r.status, r.errorMessage)
 	}
 }
 
@@ -421,7 +421,7 @@ func TestCompletionRevalidatesAfterSyncMutation(t *testing.T) {
 	}
 	// Change the attachment hash while holding the session advisory lock (as a
 	// sync would), then release the lock and commit.
-	if _, err := syncTx.Exec(ctx, `UPDATE zotero_attachments SET content_hash='sha256:changed' WHERE zotero_key='H1'`); err != nil {
+	if _, err := syncTx.Exec(ctx, `UPDATE store_documents SET content_hash='sha256:changed' WHERE rendition_key='H1'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := syncTx.Exec(ctx, `SELECT pg_advisory_unlock($1)`, LockKey(srcID)); err != nil {

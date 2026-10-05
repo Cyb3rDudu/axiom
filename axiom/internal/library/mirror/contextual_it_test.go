@@ -84,7 +84,7 @@ func ctxApply(t *testing.T, lr *mirrorRepo, srcID string, rules ContextualRules)
 		"CTXDOC2ATT": {LocalPath: "/tmp/x.pdf", Exists: true, Hash: "sha256:ctx2"},
 		"CTXDOC3ATT": {LocalPath: "/tmp/x.pdf", Exists: true, Hash: "sha256:ctx3"},
 	}
-	if _, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zoteroprovider.CanonicalBatch{NewVersion: 2}, colls, files, nil, rules); err != nil {
+	if _, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zoteroprovider.CanonicalBatch{NewVersion: 2}, colls, files, rules); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

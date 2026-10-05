@@ -17,7 +17,6 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Service coordinates a Zotero source with the ingest queue. #358: the
@@ -28,7 +27,7 @@ import (
 type Service struct {
 	src        zoteroprovider.Source
 	store      *repo.Repo
-	mirrorPool *pgxpool.Pool
+	mirror     *mirror.Repo
 	baseURL    string
 	libID      string
 	log        *log.Logger
@@ -107,6 +106,9 @@ func (s *Service) SetContextualResolver(a contextualAPI) {
 // state present, an unknown path/tag is a loud error and the caller fatals —
 // the genuine misconfiguration case keeps today's sharpness.
 func (s *Service) InitContextual(ctx context.Context, paths, tags []string) error {
+	if s.mir() == nil {
+		return errors.New("sync: no mirror (degraded boot) — contextual rules cannot resolve")
+	}
 	s.ctxMu.Lock()
 	s.ctxPaths, s.ctxTags = paths, tags
 	s.ctxMu.Unlock()
@@ -242,16 +244,16 @@ func (s *Service) StopConsolidation() {
 	}
 }
 
-// mir derives the mirror repo from the Library pool. Derived per call —
-// not cached at construction — because ITs legitimately swap pools after
-// New, and the degraded boot path constructs with none.
-func (s *Service) mir() *mirror.Repo { return mirror.New(s.mirrorPool) }
+// mir is the Library-side mirror repo (nil on the degraded boot path —
+// callers fail loudly before reaching it).
+func (s *Service) mir() *mirror.Repo { return s.mirror }
 
-// New builds a sync service: the Zotero source, the LIBRARY pool (the
-// mirror's home since #358) and the Store repo (the store-effect phase's
-// handle). Both may be nil on the degraded boot path.
-func New(src zoteroprovider.Source, mirrorPool *pgxpool.Pool, store *repo.Repo, baseURL, libID string, log *log.Logger) *Service {
-	return &Service{src: src, store: store, mirrorPool: mirrorPool, baseURL: baseURL, libID: libID, log: log}
+// New builds a sync service: the Zotero source, the Library-side mirror
+// repo (the mirror's home since #358) and the Store repo (the
+// store-effect phase's handle). mirror or store may be nil on the
+// degraded boot path.
+func New(src zoteroprovider.Source, mir *mirror.Repo, store *repo.Repo, baseURL, libID string, log *log.Logger) *Service {
+	return &Service{src: src, store: store, mirror: mir, baseURL: baseURL, libID: libID, log: log}
 }
 
 // Result is a summary of one canonical sync run exposed by POST /api/zotero/sync.
@@ -290,6 +292,9 @@ type SyncOverride struct {
 }
 
 func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, error) {
+	if s.mir() == nil || s.store == nil {
+		return Result{}, errors.New("sync: degraded boot (no mirror/store handle)")
+	}
 	serverID := s.src.ServerID()
 	if serverID == "" {
 		return Result{}, errors.New("zotero source unreachable")

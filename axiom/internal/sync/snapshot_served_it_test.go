@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/library/mirror"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
 )
 
@@ -34,6 +36,9 @@ func TestSnapshotServedNoRequeueIT(t *testing.T) {
 	defer d.Close()
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
 	}
 
 	pdfPath := t.TempDir() + "/s.pdf"
@@ -56,7 +61,7 @@ func TestSnapshotServedNoRequeueIT(t *testing.T) {
 	src.items[1].Envelope = env
 
 	repoObj := repo.New(d.Pool())
-	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
 
 	// Run 1: projects the document, enqueues exactly one job.
 	res, err := svc.Run(ctx, nil)
@@ -153,6 +158,9 @@ func TestSuppressedEnqueueDoesNotResolveFailuresIT(t *testing.T) {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 
 	pdfPath := t.TempDir() + "/r.pdf"
 	os.WriteFile(pdfPath, []byte("anchor-book"), 0o600)
@@ -174,7 +182,7 @@ func TestSuppressedEnqueueDoesNotResolveFailuresIT(t *testing.T) {
 	src.items[1].Envelope = env
 
 	repoObj := repo.New(d.Pool())
-	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
 
 	res, err := svc.Run(ctx, nil)
 	if err != nil || res.Enqueued != 1 {
@@ -297,6 +305,9 @@ func TestActualEnqueueResolvesFailuresWithoutBumpIT(t *testing.T) {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 
 	pdfPath := t.TempDir() + "/r.pdf"
 	os.WriteFile(pdfPath, []byte("anchor-book"), 0o600)
@@ -318,7 +329,7 @@ func TestActualEnqueueResolvesFailuresWithoutBumpIT(t *testing.T) {
 	src.items[1].Envelope = env
 
 	repoObj := repo.New(d.Pool())
-	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
 
 	res, err := svc.Run(ctx, nil)
 	if err != nil || res.Enqueued != 1 {

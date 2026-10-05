@@ -107,7 +107,7 @@ func openMirrorDB(t *testing.T) *mirrorRepo {
 	}
 	t.Cleanup(d.Close)
 	store := repo.New(d.Pool())
-	return &mirrorRepo{pool: d.Pool(), rep: New(store), store: store}
+	return &mirrorRepo{pool: d.Pool(), rep: New(d.Pool()), store: store}
 }
 
 // truncateFixtures clears the mirror tables under test (plus the store

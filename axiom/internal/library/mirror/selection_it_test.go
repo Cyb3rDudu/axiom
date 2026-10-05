@@ -11,8 +11,6 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
-
-	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
 )
 
 func TestSelectiveSyncAcceptanceIT(t *testing.T) {
@@ -29,69 +27,27 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	apply := func(selection map[string]string) int {
+	listing := func(filter string) []ZoteroDocumentState {
 		t.Helper()
-		tx, err := lr.pool.Begin(ctx)
+		rows, err := lr.rep.ListDocumentsMirror(ctx, filter)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("mirror listing %q: %v", filter, err)
 		}
-		defer tx.Rollback(ctx)
-		res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zoteroprovider.CanonicalBatch{NewVersion: 2},
-			nil, map[string]AttachmentFileInfo{"SELATT1": {Exists: true, Hash: ch}}, selection, ContextualRules{})
+		var attIDs, docIDs []string
+		for _, z := range rows {
+			if z.AttachmentID != "" {
+				attIDs = append(attIDs, z.AttachmentID)
+			}
+			docIDs = append(docIDs, z.DocumentID)
+		}
+		jobs, serving, err := lr.store.DocumentJobStates(ctx, attIDs, docIDs)
 		if err != nil {
-			t.Fatalf("apply: %v", err)
+			t.Fatalf("store job states: %v", err)
 		}
-		if err := tx.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-		return res.Enqueued
+		return DocumentListing(rows, jobs, serving)
 	}
 
-	// The harness seed creates no canonical zotero_items row for the
-	// ATTACHMENT — the derivation would see no processable child and
-	// deactivate the document (seed like a real Zotero sync would).
-	if _, err := lr.pool.Exec(ctx, `
-		INSERT INTO zotero_items (source_id, zotero_key, zotero_version, item_type, parent_key, raw_envelope, raw_data)
-		VALUES ($1, 'SELATT1', 1, 'attachment', 'SELD1',
-			'{"key":"SELATT1","data":{"path":"storage:x.pdf"}}',
-			'{"key":"SELATT1","version":1,"itemType":"attachment","contentType":"application/pdf","filename":"x.pdf","linkMode":"imported_file"}')`,
-		srcID); err != nil {
-		t.Fatal(err)
-	}
-
-	// The harness seed creates a fixture job row; remove it so the baseline
-	// is the pre-selection state (document known, never processed).
-	if _, err := lr.pool.Exec(ctx, `DELETE FROM ingest_jobs WHERE attachment_id=$1`, attID); err != nil {
-		t.Fatal(err)
-	}
-
-	// (a) hold: sync with the document excluded -> NO job, nothing enqueued.
-	if n := apply(map[string]string{docID: "excluded"}); n != 0 {
-		t.Fatalf("held doc must not enqueue: %d", n)
-	}
-	var jobs int
-	if err := lr.pool.QueryRow(ctx, `SELECT count(*) FROM ingest_jobs WHERE attachment_id=$1`, attID).Scan(&jobs); err != nil {
-		t.Fatal(err)
-	}
-	if jobs != 0 {
-		t.Fatalf("held doc must have zero job rows, got %d", jobs)
-	}
-
-	// (b) THE acceptance case: re-select WITHOUT any zotero_items change —
-	// same version, same hash — and the job appears.
-	if n := apply(map[string]string{docID: "included"}); n != 1 {
-		t.Fatalf("re-selected doc must enqueue exactly one job, got %d", n)
-	}
-
-	// (c) hash dedup: repeated syncs never duplicate.
-	if n := apply(nil); n != 0 {
-		t.Fatalf("repeat sync must enqueue nothing (ON CONFLICT), got %d", n)
-	}
-	if n := apply(map[string]string{docID: "included"}); n != 0 {
-		t.Fatalf("repeat selected sync must enqueue nothing, got %d", n)
-	}
-
-	// (d) job completed -> listing shows synced; excluded -> held.
+	// The harness seed created a fixture job row (completed baseline).
 	if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET status='completed', updated_at=now() WHERE attachment_id=$1`, attID); err != nil {
 		t.Fatal(err)
 	}
@@ -106,11 +62,7 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 
 	stateOf := func(filter, docID string) (string, *AttachmentState) {
 		t.Helper()
-		docs, err := lr.rep.ListZoteroDocuments(ctx, filter)
-		if err != nil {
-			t.Fatalf("list %q: %v", filter, err)
-		}
-		for _, d := range docs {
+		for _, d := range listing(filter) {
 			if d.DocumentID == docID {
 				return d.SyncState, d.Attachment
 			}
@@ -123,10 +75,7 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 		t.Fatalf("completed job must list synced with attachment, got %q %+v", state, att)
 	}
 	// locate the no-attachment doc by its key via the full listing
-	docs, err := lr.rep.ListZoteroDocuments(ctx, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	docs := listing("")
 	var noAttID string
 	for _, d := range docs {
 		if d.ZoteroKey == "SELD2" {
@@ -160,10 +109,7 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 	if err := lr.rep.SetSelections(ctx, []SelectionInput{{DocumentID: docID, Mode: "excluded"}}); err != nil {
 		t.Fatal(err)
 	}
-	docs, err = lr.rep.ListZoteroDocuments(ctx, "held")
-	if err != nil {
-		t.Fatal(err)
-	}
+	docs = listing("held")
 	found := false
 	for _, d := range docs {
 		if d.DocumentID == docID {

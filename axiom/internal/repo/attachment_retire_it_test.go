@@ -36,7 +36,7 @@ func TestAttachmentRetireAndRestoreIT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE zotero_attachments SET deleted=true WHERE id=$1`, attID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE store_documents SET deleted=true WHERE attachment_id=$1`, attID); err != nil {
 		t.Fatal(err)
 	}
 	if err := lr.rep.ReconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
@@ -72,7 +72,7 @@ func TestAttachmentRetireAndRestoreIT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE zotero_attachments SET deleted=false WHERE id=$1`, attID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE store_documents SET deleted=false WHERE attachment_id=$1`, attID); err != nil {
 		t.Fatal(err)
 	}
 	if err := lr.rep.ReconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
@@ -126,6 +126,15 @@ func TestRestoreTwinAttachmentsReviveOneIT(t *testing.T) {
 		FROM zotero_attachments WHERE id=$1
 		RETURNING id::text`, att1).Scan(&att2); err != nil {
 		t.Fatalf("twin attachment: %v", err)
+	}
+	// the twin's Store projection row (#358: the reconcile joins it)
+	if _, err := lr.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, content_hash, content_type, preferred, deleted)
+		SELECT document_id, id, source_id, parent_zotero_key, 'TWINEPUB',
+		       'sha256:restore-epub', 'application/epub+zip', true, false
+		FROM zotero_attachments WHERE id=$1`, att2); err != nil {
+		t.Fatalf("twin projection: %v", err)
 	}
 
 	// both snapshots retired; the epub one is LATER (created_at) so it must win

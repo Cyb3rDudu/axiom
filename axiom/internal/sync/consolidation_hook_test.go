@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom/internal/library/mirror"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 )
 
@@ -55,7 +56,8 @@ func newHookService(t *testing.T, cons Consolidator, debounce time.Duration) *Se
 	ctx := context.Background()
 	d := openTestDB(t, ctx)
 	src := &canonicalFake{serverID: "cons197unit", baseURL: newScriptedBase(), version: 1}
-	svc := New(src, repo.New(d.Pool()), src.baseURL, "users/0", log.Default())
+	consRep := repo.New(d.Pool())
+	svc := New(src, mirror.New(consRep.Pool()), consRep, src.baseURL, "users/0", log.Default())
 	svc.SetConsolidator(cons)
 	svc.consolidateDebounce = debounce
 	return svc
@@ -119,7 +121,8 @@ func TestConsolidationHookNoFireOnFailedSync(t *testing.T) {
 	d := openTestDB(t, ctx)
 	// Empty server id: Run fails BEFORE any apply (source unreachable).
 	src := &canonicalFake{baseURL: newScriptedBase(), version: 1}
-	svc := New(src, repo.New(d.Pool()), src.baseURL, "users/0", log.Default())
+	fcRep := repo.New(d.Pool())
+	svc := New(src, mirror.New(fcRep.Pool()), fcRep, src.baseURL, "users/0", log.Default())
 	svc.SetConsolidator(fc)
 	svc.consolidateDebounce = 10 * time.Millisecond
 	if _, err := svc.Run(ctx, nil); err == nil {
@@ -164,7 +167,7 @@ func TestConsolidationHookStopCancelsPendingRun(t *testing.T) {
 func hookSeedSnapshot(t *testing.T, svc *Service, form string) {
 	t.Helper()
 	ctx := context.Background()
-	pool := svc.repo.Pool()
+	pool := svc.store.Pool()
 	// The sync test DB is persistent — clear EVERY previous run's chain.
 	// The snapshot delete is explicit since the cross-component FKs fell
 	// (DM06 #315): deleting the document no longer cascades into the
@@ -226,7 +229,7 @@ func hookSeedSnapshot(t *testing.T, svc *Service, form string) {
 func hookSourceID(t *testing.T, svc *Service) string {
 	t.Helper()
 	var id string
-	if err := svc.repo.Pool().QueryRow(context.Background(),
+	if err := svc.store.Pool().QueryRow(context.Background(),
 		`SELECT id::text FROM zotero_sources WHERE base_url=$1`, svc.baseURL).Scan(&id); err != nil {
 		t.Fatalf("source row for %s (run a sync first): %v", svc.baseURL, err)
 	}
@@ -240,7 +243,7 @@ func TestConsolidationHookMergesRealDuplicatesIT(t *testing.T) {
 	d := openTestDB(t, ctx)
 	src := &canonicalFake{serverID: "cons197it", baseURL: newScriptedBase(), version: 1}
 	rep := repo.New(d.Pool())
-	svc := New(src, rep, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default())
 	svc.SetConsolidator(rep) // the REAL consolidation, exactly as main.go wires it
 	svc.consolidateDebounce = 20 * time.Millisecond
 

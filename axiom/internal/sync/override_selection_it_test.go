@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
 )
@@ -31,6 +32,9 @@ func TestOverrideOnceAndPersistedSelectionIT(t *testing.T) {
 	defer d.Close()
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
 	}
 
 	pdfPath := t.TempDir() + "/o.pdf"
@@ -53,8 +57,8 @@ func TestOverrideOnceAndPersistedSelectionIT(t *testing.T) {
 	src.items[1].Envelope = env
 
 	repoObj := repo.New(d.Pool())
-	mir := mirror.New(repoObj)
-	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+	mir := mirror.New(repoObj.Pool())
+	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
 
 	jobCount := func(sourceID string) int {
 		var n int
@@ -142,6 +146,9 @@ func TestCollectionSelectionGatesSyncIT(t *testing.T) {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 
 	pdfIn := t.TempDir() + "/in.pdf"
 	pdfOut := t.TempDir() + "/out.pdf"
@@ -181,8 +188,8 @@ func TestCollectionSelectionGatesSyncIT(t *testing.T) {
 	}
 
 	repoObj := repo.New(d.Pool())
-	mir := mirror.New(repoObj)
-	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+	mir := mirror.New(repoObj.Pool())
+	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
 
 	delJobs := func(sourceID string) {
 		if _, err := d.Pool().Exec(ctx, `
@@ -270,6 +277,9 @@ func TestSyncIncludeOverrideEnqueuesJob(t *testing.T) {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 
 	pdfPath := t.TempDir() + "/healed.pdf"
 	os.WriteFile(pdfPath, []byte("healed-bytes"), 0o600)
@@ -291,7 +301,7 @@ func TestSyncIncludeOverrideEnqueuesJob(t *testing.T) {
 	src.items[1].Envelope = env
 
 	repoObj := repo.New(d.Pool())
-	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
 
 	// first sync projects + enqueues (the document enters the world)
 	res, err := svc.Run(ctx, nil)
@@ -360,6 +370,9 @@ func TestSyncIncludeUnderCollectionSelectionInBase(t *testing.T) {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 
 	pdf := t.TempDir() + "/healed-in-base.pdf"
 	os.WriteFile(pdf, []byte("v1"), 0o600)
@@ -388,7 +401,7 @@ func TestSyncIncludeUnderCollectionSelectionInBase(t *testing.T) {
 	}
 
 	repoObj := repo.New(d.Pool())
-	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
 
 	// collection-include selection on the healed doc's collection —
 	// CLEANUP: the sync ITs share the DSN database; a leftover selection

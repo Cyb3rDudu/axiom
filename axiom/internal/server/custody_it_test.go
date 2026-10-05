@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/library/mirror"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 	axiomsync "github.com/Cyb3rDudu/axiom/axiom/internal/sync"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
@@ -180,7 +181,7 @@ func custITEnv(t *testing.T) (*Server, *repo.Repo, *custWriteZotero, *custSource
 	}, 5)
 
 	rep := repo.New(d.Pool())
-	if _, err := axiomsync.New(src, rep, src.baseURL, "users/0", log.Default()).Run(ctx, nil); err != nil {
+	if _, err := axiomsync.New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default()).Run(ctx, nil); err != nil {
 		t.Fatalf("seed sync: %v", err)
 	}
 	t.Cleanup(func() {
@@ -197,7 +198,7 @@ func custITEnv(t *testing.T) (*Server, *repo.Repo, *custWriteZotero, *custSource
 
 	fw := &custWriteZotero{newKey: "HEALED1", versions: map[string]int64{"ATT1": 2}}
 	s := New(":0", nil)
-	s.SetRepairAPI(rep, zoteroprovider.NewWriteClient(fw.server(t).URL, "srv", "key"), qroot)
+	s.SetRepairAPI(rep.Pool(), zoteroprovider.NewWriteClient(fw.server(t).URL, "srv", "key"), qroot, rep)
 	return s, rep, fw, src, broken, healed, qroot
 }
 
@@ -280,7 +281,7 @@ func TestIT_CustodyFullProtocolHealedPreferredAfterSync(t *testing.T) {
 			"contentType": "application/pdf", "filename": "Geursen - 2022 - Nachhaltiges Personalmanagement.pdf",
 		}, healed),
 	}, 6)
-	if _, err := axiomsync.New(src, rep, src.baseURL, "users/0", log.Default()).Run(ctx, nil); err != nil {
+	if _, err := axiomsync.New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default()).Run(ctx, nil); err != nil {
 		t.Fatalf("post-custody sync: %v", err)
 	}
 	var pref struct {
@@ -386,7 +387,7 @@ func TestIT_CustodyGuards(t *testing.T) {
 	}
 	// unwired write client: 503 before anything else
 	s2 := New(":0", nil)
-	s2.SetRepairAPI(rep, nil, qroot)
+	s2.SetRepairAPI(rep.Pool(), nil, qroot, rep)
 	rec = postCustody(s2, "ATT1", "grund", healed)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unwired write client must 503, got %d: %s", rec.Code, rec.Body.String())

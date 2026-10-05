@@ -1,7 +1,9 @@
-// #252 outcome-truth IT: the SQL wiring behind ZoteroDocumentState.Outcome —
-// quality_state.pagination_state from the newest job, the newest repair case,
-// and the selection gate all flow through ListZoteroDocuments into the derived
-// per-document outcome. (The DeriveOutcome switch itself is unit-pinned in
+// #252/#356/#358 outcome-truth IT: the merged listing behind
+// ZoteroDocumentState.Outcome — quality_state.pagination_state from the
+// newest job (Store), the newest repair case (Library), the selection
+// gate (Library) and the active-snapshot truth (Store) all flow through
+// ListDocumentsMirror + DocumentListing into the derived per-document
+// outcome. (The DeriveOutcome switch itself is unit-pinned in
 // selection_outcome_test.go.)
 package mirror
 
@@ -33,19 +35,32 @@ func TestOutcomeProjectionIT(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	find := func() ZoteroDocumentState {
+	listing := func() ZoteroDocumentState {
 		t.Helper()
-		docs, err := lr.rep.ListZoteroDocuments(ctx, "")
+		rows, err := lr.rep.ListDocumentsMirror(ctx, "")
 		if err != nil {
-			t.Fatalf("list: %v", err)
+			t.Fatalf("mirror listing: %v", err)
 		}
+		if len(rows) != 1 {
+			t.Fatalf("want 1 document, got %d", len(rows))
+		}
+		var attIDs, docIDs []string
+		for _, z := range rows {
+			attIDs = append(attIDs, z.AttachmentID)
+			docIDs = append(docIDs, z.DocumentID)
+		}
+		jobs, serving, err := lr.store.DocumentJobStates(ctx, attIDs, docIDs)
+		if err != nil {
+			t.Fatalf("store job states: %v", err)
+		}
+		docs := DocumentListing(rows, jobs, serving)
 		if len(docs) != 1 {
-			t.Fatalf("want 1 document, got %d", len(docs))
+			t.Fatalf("want 1 merged document, got %d", len(docs))
 		}
 		return docs[0]
 	}
 
-	d := find()
+	d := listing()
 	if d.Outcome != "needs_ocr" {
 		t.Fatalf("outcome = %q, want needs_ocr (pagination_state must beat the rejected repair case)", d.Outcome)
 	}
@@ -62,7 +77,7 @@ func TestOutcomeProjectionIT(t *testing.T) {
 	if _, err := lr.pool.Exec(ctx, `UPDATE repair_cases SET status='in_repair' WHERE attachment_id=$1`, attID); err != nil {
 		t.Fatal(err)
 	}
-	d = find()
+	d = listing()
 	if d.Outcome != "in_repair" || d.OutcomeReason != "repair case: in_repair" {
 		t.Fatalf("outcome = %q (%q), want in_repair (repair case: in_repair)", d.Outcome, d.OutcomeReason)
 	}
@@ -74,7 +89,7 @@ func TestOutcomeProjectionIT(t *testing.T) {
 	if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET status='completed' WHERE id=$1`, jobID); err != nil {
 		t.Fatal(err)
 	}
-	d = find()
+	d = listing()
 	if d.Outcome != "completed" {
 		t.Fatalf("outcome = %q, want completed", d.Outcome)
 	}
@@ -86,7 +101,7 @@ func TestOutcomeProjectionIT(t *testing.T) {
 		VALUES ((SELECT document_id FROM zotero_attachments WHERE id=$1), 'excluded')`, attID); err != nil {
 		t.Fatal(err)
 	}
-	d = find()
+	d = listing()
 	if d.Outcome != "excluded" || d.OutcomeReason != "selection-excluded" {
 		t.Fatalf("outcome = %q (%q), want excluded (selection-excluded)", d.Outcome, d.OutcomeReason)
 	}

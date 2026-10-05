@@ -70,7 +70,7 @@ func TestResolveIntakeKeyClassifiesReplayAndMismatch(t *testing.T) {
 	rep := New(d.Pool())
 
 	req := IntakeRequest{IdempotencyKey: "replay-key", RevisionJSON: revJSON}
-	got, err := rep.resolveIntakeKey(ctx, req)
+	got, err := resolveIntakeKey(ctx, rep.Pool(), req)
 	if err != nil || got == nil || got.ID != jobID {
 		t.Fatalf("identical revision must resolve to the same job: %+v %v", got, err)
 	}
@@ -79,13 +79,13 @@ func TestResolveIntakeKeyClassifiesReplayAndMismatch(t *testing.T) {
 	diverged.RevisionID = "2"
 	divJSON, _ := json.Marshal(diverged)
 	req.RevisionJSON = divJSON
-	if _, err := rep.resolveIntakeKey(ctx, req); err != ErrIntakeKeyMismatch {
+	if _, err := resolveIntakeKey(ctx, rep.Pool(), req); err != ErrIntakeKeyMismatch {
 		t.Fatalf("diverged revision must be a key mismatch, got %v", err)
 	}
 
 	req.IdempotencyKey = "unknown-key"
 	req.RevisionJSON = revJSON
-	if _, err := rep.resolveIntakeKey(ctx, req); !strings.Contains(err.Error(), "no rows") {
+	if _, err := resolveIntakeKey(ctx, rep.Pool(), req); !strings.Contains(err.Error(), "no rows") {
 		t.Fatalf("unknown key must surface pgx.ErrNoRows, got %v", err)
 	}
 }

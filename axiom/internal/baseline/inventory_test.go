@@ -81,8 +81,8 @@ var responseClass = map[string]string{
 // write client are non-nil placeholders for route registration only).
 func buildFullServer() *server.Server {
 	srv := server.New("127.0.0.1:0", log.New(os.Stderr, "", 0))
-	srv.SetRepairAPI(repo.New(nil),
-		zoteroprovider.NewWriteClient("http://127.0.0.1:1", "", "baseline-inventory"), "")
+	srv.SetRepairAPI(nil,
+		zoteroprovider.NewWriteClient("http://127.0.0.1:1", "", "baseline-inventory"), "", nil)
 	srv.SetConsolidateService(noopConsolidator{})
 	// F05 #299: the readiness field is part of the frozen identity — the
 	// scaffolding wires the composition-root provider with the full-stack

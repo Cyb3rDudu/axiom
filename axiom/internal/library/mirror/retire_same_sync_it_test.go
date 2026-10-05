@@ -8,13 +8,16 @@ import (
 )
 
 // TestSyncRetiresDeletedAttachmentSameTxIT is the #184 Durchpfad witness for
-// the Mullins zombie class: ONE ApplyCanonicalBatch that projects a Zotero
-// deletion (full snapshot without the attachment's parent item) must retire
-// the attachment's active snapshot IN THE SAME CALL — the original bug was
+// the Mullins zombie class, in the #358 two-transaction shape: ONE sync
+// that projects a Zotero deletion (full snapshot without the attachment's
+// parent item) must hand the deletion to the Store phase
+// (DeletedAttachmentIDs) and the store phase (projection mark +
+// ReconcileAttachmentSnapshotsTx) must retire the attachment's active
+// snapshot — same sync, two component transactions. The original bug was
 // ordering (retire ran before the projections wrote deleted=true, so the
 // projecting sync retired nothing; heal runs only ever got retired by
-// FOLLOW-UP syncs, and the Mullins run had exactly one). Move or remove the
-// reconcile step and this goes red.
+// FOLLOW-UP syncs, and the Mullins run had exactly one). Move or remove
+// either half and this goes red.
 func TestSyncRetiresDeletedAttachmentSameTxIT(t *testing.T) {
 	lr := openMirrorDB(t)
 	lr.truncateFixtures(t)
@@ -23,6 +26,16 @@ func TestSyncRetiresDeletedAttachmentSameTxIT(t *testing.T) {
 	ch := "zombiewitness-hash"
 	attID, _ := lr.seed(t, mirrorSeedSpec{sourceBaseURL: "https://zoteroprovider.live", libraryID: "lib-zombie",
 		docKey: "ZOMBIEDOC", attKey: "ZOMBIEATT", contentHash: &ch}, "completed", 1)
+
+	// The Store-side projection row for the rendition (the sync's store
+	// phase would have written it while the attachment was live).
+	if _, err := lr.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id, record_key, rendition_key)
+		SELECT a.document_id, a.id, a.source_id, d.zotero_key, a.zotero_key
+		FROM zotero_attachments a JOIN zotero_documents d ON d.id=a.document_id
+		WHERE a.id=$1`, attID); err != nil {
+		t.Fatalf("seed projection: %v", err)
+	}
 
 	var snapID string
 	if err := lr.pool.QueryRow(ctx, `
@@ -33,19 +46,43 @@ func TestSyncRetiresDeletedAttachmentSameTxIT(t *testing.T) {
 		t.Fatalf("seed snapshot: %v", err)
 	}
 
-	// ONE apply: full snapshot WITHOUT the parent item — the canonical
-	// absence IS the Zotero deletion (exactly how the fix-service delete
-	// reaches the projections).
+	// The mirror half: ONE apply, full snapshot WITHOUT the parent item —
+	// the canonical absence IS the Zotero deletion (exactly how the
+	// fix-service delete reaches the projections).
 	tx, err := lr.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lr.rep.ApplyCanonicalBatch(ctx, tx, sourceIDFor(t, lr), zoteroprovider.CanonicalBatch{
+	res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, sourceIDFor(t, lr), zoteroprovider.CanonicalBatch{
 		FullSnapshot: true, NewVersion: 2,
-	}, nil, map[string]AttachmentFileInfo{}, nil, ContextualRules{}); err != nil {
+	}, nil, map[string]AttachmentFileInfo{}, ContextualRules{})
+	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deleted := map[string]bool{}
+	for _, id := range res.DeletedAttachmentIDs {
+		deleted[id] = true
+	}
+	if !deleted[attID] {
+		t.Fatalf("apply must report the deleted attachment for the store phase, got %v", res.DeletedAttachmentIDs)
+	}
+
+	// The Store half (the sync's store-effect phase, verbatim order).
+	stx, err := lr.store.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stx.Rollback(ctx)
+	if err := lr.store.MarkProjectionsDeletedTx(ctx, stx, res.DeletedAttachmentIDs); err != nil {
+		t.Fatalf("mark projections deleted: %v", err)
+	}
+	if err := lr.store.ReconcileAttachmentSnapshotsTx(ctx, stx); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if err := stx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 

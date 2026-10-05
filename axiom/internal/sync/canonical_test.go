@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
 )
@@ -84,6 +85,9 @@ func TestRunCanonicalLosslessAndNoAnnotateEnqueue(t *testing.T) {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 
 	pdfPath := t.TempDir() + "/a.pdf"
 	os.WriteFile(pdfPath, []byte("a"), 0o600)
@@ -116,7 +120,7 @@ func TestRunCanonicalLosslessAndNoAnnotateEnqueue(t *testing.T) {
 	}
 
 	repoObj := repo.New(d.Pool())
-	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
 	res, err := svc.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -180,6 +184,9 @@ func TestCanonicalVersionGuard(t *testing.T) {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 
 	pdfPath := t.TempDir() + "/a.pdf"
 	os.WriteFile(pdfPath, []byte("a"), 0o600)
@@ -196,7 +203,8 @@ func TestCanonicalVersionGuard(t *testing.T) {
 	att.Envelope = attEnv
 	src.items = []zoteroprovider.CanonicalItem{itemV2, att}
 
-	svc := New(src, repo.New(d.Pool()), src.baseURL, "users/0", log.Default())
+	rep := repo.New(d.Pool())
+	svc := New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default())
 	res1, err := svc.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("first canonical: %v", err)
@@ -246,6 +254,9 @@ func TestCanonicalBootstrapOldCursor(t *testing.T) {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 
 	pdfPath := t.TempDir() + "/a.pdf"
 	os.WriteFile(pdfPath, []byte("a"), 0o600)
@@ -256,13 +267,13 @@ func TestCanonicalBootstrapOldCursor(t *testing.T) {
 	src.items = []zoteroprovider.CanonicalItem{mkItemJSON("B1", "book", "", "A Book", nil), att}
 
 	repoObj := repo.New(d.Pool())
-	mir := mirror.New(repoObj)
+	mir := mirror.New(repoObj.Pool())
 	// The legacy document cursor is irrelevant: the canonical cursor is separate
 	// and starts at 0, so the first canonical sync is a full snapshot.
 	if _, err := mir.EnsureSource(ctx, src.baseURL, "users/0", src.serverID); err != nil {
 		t.Fatal(err)
 	}
-	svc := New(src, repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
 	res, err := svc.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)

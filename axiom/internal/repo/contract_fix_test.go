@@ -14,12 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/processor"
 )
 
-// seedWithCanonical is like seed but additionally creates a canonical
-// zotero_items row for the document (with rich raw_data) and links it, so the
-// metadata_snapshot is populated from the lossless mirror plus normalized fields.
+// seedWithCanonical is like seed but the projection row and the revision
+// carry a RICH bibliography (creators, year, publisher, language, tags) —
+// the metadata_snapshot freezes the contract bibliography, the #358 truth.
 func (lr *leaseRepo) seedWithCanonical(t *testing.T, spec seedSpec, maxAttempts int) (attachmentID, jobID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -64,10 +65,40 @@ func (lr *leaseRepo) seedWithCanonical(t *testing.T, spec seedSpec, maxAttempts 
 		srcID, docID, spec.attKey, spec.docKey, spec.contentHash).Scan(&attachmentID); err != nil {
 		t.Fatal(err)
 	}
+	// The Store-side projection row with the rich bibliography (#358).
+	year := 1843
+	if _, err := lr.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id, server_id,
+			record_key, rendition_key, source_version, content_hash, title, creators,
+			publication_year, publisher, language, tags, citation_class,
+			content_type, filename, local_path, file_size, mtime_ms)
+		VALUES ($1, $2, $3, 'srv-1', $4, $5, 9, $6, 'Full Title',
+			'["Ada Lovelace"]', $7, 'Taylor', 'en', '["math"]', 'citable',
+			'application/pdf', 'full.pdf', '/zotero/storage/9/p.pdf', 1024, 1786336894000)`,
+		docID, attachmentID, srcID, spec.docKey, spec.attKey, spec.contentHash, year); err != nil {
+		t.Fatalf("insert projection: %v", err)
+	}
+	// The revision artifact carries the same rich bibliography (what the
+	// claim freezes as metadata_snapshot).
+	rev := revision.SourceRevision{
+		SourceID: srcID, RevisionID: "9", RenditionID: spec.attKey,
+		ContentHash: deref(spec.contentHash), MediaType: revision.MediaTypePDF,
+		Bibliography: revision.Bibliography{
+			RecordID: spec.docKey, Title: "Full Title",
+			Authors: []string{"Ada Lovelace"}, Year: &year,
+			Publisher: "Taylor", Language: "en", Tags: []string{"math"},
+			CitationClass: revision.CitationClassCitable,
+		},
+		LocatorCapabilities: revision.LocatorCapabilities{Page: &revision.PageCapability{Trust: revision.TrustPhysicalOnly}},
+		ContentTicket:       "zat:" + srcID + ":" + spec.attKey,
+	}
+	revJSON, _ := json.Marshal(rev)
 	if err := lr.pool.QueryRow(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts)
-		VALUES ($1, $2, $3, $4, 'pending', $5) RETURNING id::text`,
-		srcID, docID, attachmentID, spec.contentHash, maxAttempts).Scan(&jobID); err != nil {
+		INSERT INTO ingest_jobs (intake_kind, content_hash, status, max_attempts,
+		                         revision_source_id, revision_record_id, revision_rendition_id,
+		                         revision_no, revision_json)
+		VALUES ('revision', $1, 'pending', $2, $3, $4, $5, '9', $6::jsonb) RETURNING id::text`,
+		spec.contentHash, maxAttempts, srcID, spec.docKey, spec.attKey, revJSON).Scan(&jobID); err != nil {
 		t.Fatal(err)
 	}
 	return attachmentID, jobID
@@ -114,8 +145,8 @@ func TestFrozenInputIsContractComplete(t *testing.T) {
 	}
 	// Distinct document vs attachment keys: a cross-wired doc/att identity would
 	// be caught here.
-	if fi.Document.ZoteroKey != "UDOC" || fi.Document.ZoteroVersion != 7 {
-		t.Errorf("document zotero identity = %s@%d, want UDOC@7", fi.Document.ZoteroKey, fi.Document.ZoteroVersion)
+	if fi.Document.ZoteroKey != "UDOC" || fi.Document.ZoteroVersion != 9 {
+		t.Errorf("document zotero identity = %s@%d, want UDOC@9 (the projection's source_version)", fi.Document.ZoteroKey, fi.Document.ZoteroVersion)
 	}
 	if fi.Attachment.AttachmentID != attID {
 		t.Errorf("attachment id = %s", fi.Attachment.AttachmentID)
@@ -148,42 +179,30 @@ func TestFrozenInputIsContractComplete(t *testing.T) {
 		t.Error("processing feature flags should default to off for the default profile")
 	}
 
-	// metadata_snapshot is the LOSSESS canonical raw_data: compare semantically
-	// against the full expected raw map (creators/tags/ISSN/edition/pages/date all
-	// preserved) and assert no normalized-only key leaked in that would indicate a
-	// merge implementation.
-	var ms map[string]any
-	if err := json.Unmarshal(fi.Document.MetadataSnapshot, &ms); err != nil {
+	// metadata_snapshot is the revision CONTRACT's bibliography (#358: the
+	// lossless Zotero raw_data stayed Library-side; the bibliography is the
+	// boundary truth the claim freezes verbatim).
+	var bib revision.Bibliography
+	if err := json.Unmarshal(fi.Document.MetadataSnapshot, &bib); err != nil {
 		t.Fatalf("decode metadata_snapshot: %v", err)
 	}
-	want := map[string]any{
-		"title":     "Full Title",
-		"itemType":  "book",
-		"language":  "en",
-		"publisher": "Taylor",
-		"isbn":      "978-0-12345",
-		"DOI":       "10.1000/xyz",
-		"date":      "1843",
-		"edition":   "1",
-		"pages":     "1-10",
-		"ISSN":      "0000-0000",
+	if bib.RecordID != "UDOC" || bib.Title != "Full Title" {
+		t.Errorf("bibliography identity = %s/%q, want UDOC/Full Title", bib.RecordID, bib.Title)
 	}
-	for k, v := range want {
-		if ms[k] != v {
-			t.Errorf("metadata_snapshot[%s] = %q, want %q (lossless raw_data)", k, ms[k], v)
-		}
+	if len(bib.Authors) != 1 || bib.Authors[0] != "Ada Lovelace" {
+		t.Errorf("bibliography authors = %v, want [Ada Lovelace]", bib.Authors)
 	}
-	if ms["creators"] == nil {
-		t.Error("metadata_snapshot missing creators")
+	if bib.Year == nil || *bib.Year != 1843 {
+		t.Errorf("bibliography year = %v, want 1843", bib.Year)
 	}
-	if ms["tags"] == nil || ms["collections"] == nil {
-		t.Error("metadata_snapshot missing tags/collections")
+	if bib.Publisher != "Taylor" || bib.Language != "en" {
+		t.Errorf("bibliography publisher/language = %q/%q, want Taylor/en", bib.Publisher, bib.Language)
 	}
-	// The normalized projection columns use different key names (publication_year)
-	// and would only appear if the snapshot were merge-built. Their absence proves
-	// lossless raw_data was returned as-is.
-	if _, present := ms["publication_year"]; present {
-		t.Error("metadata_snapshot leaked a normalized-only key; not the lossless raw_data")
+	if len(bib.Tags) != 1 || bib.Tags[0] != "math" {
+		t.Errorf("bibliography tags = %v, want [math]", bib.Tags)
+	}
+	if bib.CitationClass != revision.CitationClassCitable {
+		t.Errorf("bibliography citation_class = %q, want citable", bib.CitationClass)
 	}
 }
 

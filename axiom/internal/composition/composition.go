@@ -924,7 +924,7 @@ func (r *Root) componentsFor() []Component {
 			if r.mirrorRepo == nil {
 				return fmt.Errorf("sync: no Zotero mirror (the library PostgreSQL profile did not boot — the mirror is Library-database-resident since #358)")
 			}
-			r.syncSvc = axsync.New(r.src, r.mirrorRepo.Pool(), r.rep, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, r.logger)
+			r.syncSvc = axsync.New(r.src, r.mirrorRepo, r.rep, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, r.logger)
 			// #255/#262 contextual source class: resolve + validate the
 			// configured rule inputs against the SYNCED canonical state. Boot
 			// ALWAYS succeeds (#262 owner ruling): a never-synced DB degrades

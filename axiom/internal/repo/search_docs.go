@@ -52,8 +52,11 @@ func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]
 	       d.language, d.tags, COALESCE(act.content_type, ''), COALESCE(d.citation_class, 'citable')
 			FROM store_documents d
 			LEFT JOIN LATERAL (
-				SELECT a.content_type
+				-- the ACTIVE snapshot's format: the projection row of the
+				-- attachment the snapshot was processed from
+				SELECT p2.content_type
 				FROM processing_snapshots s
+				JOIN store_documents p2 ON p2.attachment_id = s.attachment_id
 				WHERE s.document_id = d.document_id AND s.active
 				LIMIT 1
 			) act ON true

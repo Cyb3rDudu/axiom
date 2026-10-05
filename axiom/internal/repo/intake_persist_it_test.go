@@ -84,6 +84,16 @@ func TestRevisionIntakePersistsSnapshotChunksOutboxIT(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The Store projection row the claim resolves (#358).
+	if _, err := lr.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id, server_id,
+			record_key, rendition_key, source_version, content_hash, title, content_type, filename, local_path, preferred)
+		VALUES ($1, (SELECT id FROM zotero_attachments WHERE zotero_key='ATTREV1'), $2, 'srv-1',
+			'DOCREV1', 'ATTREV1', 1, $3, 'Revision Persist', 'application/pdf', 'r.pdf', '/tmp/r.pdf', true)`,
+		docID, srcID, hash); err != nil {
+		t.Fatal(err)
+	}
+
 	// 1. Mint via the revision intake.
 	rev := revision.SourceRevision{
 		SourceID: srcID, RevisionID: "1", RenditionID: "ATTREV1",
@@ -171,7 +181,7 @@ func TestRevisionIntakePersistsSnapshotChunksOutboxIT(t *testing.T) {
 	// commit.
 	hash2 := revision.HashContent([]byte("revision persist bytes v2"))
 	if _, err := lr.pool.Exec(ctx,
-		`UPDATE zotero_attachments SET content_hash=$1 WHERE zotero_key='ATTREV1'`, hash2); err != nil {
+		`UPDATE store_documents SET content_hash=$1 WHERE rendition_key='ATTREV1'`, hash2); err != nil {
 		t.Fatal(err)
 	}
 	rev2 := revision.SourceRevision{

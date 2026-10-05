@@ -58,14 +58,14 @@ func applySel(t *testing.T, lr *mirrorRepo, srcID string, files map[string]Attac
 		{Key: "VWLPRAXY", Name: "VWLPRAXY", Envelope: json.RawMessage(`{"key":"VWLPRAXY"}`)},
 		{Key: "SECOND88", Name: "SECOND88", Envelope: json.RawMessage(`{"key":"SECOND88"}`)},
 	}
-	res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zoteroprovider.CanonicalBatch{NewVersion: 2}, colls, files, selection, ContextualRules{})
+	res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zoteroprovider.CanonicalBatch{NewVersion: 2}, colls, files, ContextualRules{})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return res.Enqueued
+	return len(res.Renditions)
 }
 
 func docJobCount(t *testing.T, lr *mirrorRepo, docID string) int {

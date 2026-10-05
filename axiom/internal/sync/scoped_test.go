@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 )
 
 var _scopedN int
@@ -38,6 +39,10 @@ func openTestDB(t *testing.T, ctx context.Context) *db.DB {
 	t.Cleanup(d.Close)
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	// #358: the sync's store-effect phase writes store_documents.
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
 	}
 	return d
 }

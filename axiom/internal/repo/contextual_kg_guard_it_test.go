@@ -19,7 +19,7 @@ func TestPersistContextualKGGuardIT(t *testing.T) {
 	// (wrongly) carries entities must persist ZERO of them — the graph stays
 	// book-truth — while chunks + embeddings persist untouched (equal rank).
 	if _, err := h.pool.Exec(ctx,
-		`UPDATE zotero_documents SET citation_class='contextual' WHERE zotero_key='DOCctxguard'`); err != nil {
+		`UPDATE store_documents SET citation_class='contextual' WHERE record_key='DOCctxguard'`); err != nil {
 		t.Fatal(err)
 	}
 	raw := h.validResultRaw(dims)

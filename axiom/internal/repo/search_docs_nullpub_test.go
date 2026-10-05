@@ -20,19 +20,20 @@ func TestDocumentMetaByIDsNULLPublisherDoesNotPoisonBatch(t *testing.T) {
 		VALUES ('https://zotero.nullpub', 'lib-1', 'srv-1') RETURNING id::text`).Scan(&srcID); err != nil {
 		t.Fatal(err)
 	}
-	seedDoc := func(key, title string, publisher, language any, tags string) string {
+	seedDoc := func(key, title string, publisher, language string, tags string) string {
 		var id string
 		if err := lr.pool.QueryRow(ctx, `
-			INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title,
-				creators, publication_year, publication_date, publisher, language, tags, deleted)
-			VALUES ($1, $2, 7, 'book', $3, '[]', 2024, '2024', $4, $5, $6::jsonb, false)
-			RETURNING id::text`, srcID, key, title, publisher, language, tags).Scan(&id); err != nil {
+			INSERT INTO store_documents (document_id, attachment_id, source_id,
+				record_key, rendition_key, title, publication_year, publisher, language, tags)
+			VALUES (gen_random_uuid(), gen_random_uuid(), $1,
+				$2, $2, $3, 2024, $4, $5, $6::jsonb)
+			RETURNING document_id::text`, srcID, key, title, publisher, language, tags).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		return id
 	}
-	nullPub := seedDoc("NULLPUB1", "Book Without Publisher", nil, nil, "[]") // the poison seed
-	okPub := seedDoc("OKPUB1", "Book With Publisher", "Springer", "en", `[{"tag":"VWL_HA"},{"tag":"neutral"}]`)
+	nullPub := seedDoc("NULLPUB1", "Book Without Publisher", "", "", "[]") // the poison seed
+	okPub := seedDoc("OKPUB1", "Book With Publisher", "Springer", "en", `["VWL_HA","neutral"]`)
 
 	meta, err := lr.rep.DocumentMetaByIDs(ctx, []string{nullPub, okPub})
 	if err != nil {
@@ -61,7 +62,7 @@ func TestDocumentMetaByIDsNULLPublisherDoesNotPoisonBatch(t *testing.T) {
 	if meta[okPub].Language != "en" {
 		t.Errorf("healthy doc: language = %q", meta[okPub].Language)
 	}
-	// tags parse path pinned end-to-end: [{tag}] JSONB → []string
+	// tags parse path pinned end-to-end: [string] JSONB → []string
 	if len(meta[okPub].Tags) != 2 || meta[okPub].Tags[0] != "VWL_HA" || meta[okPub].Tags[1] != "neutral" {
 		t.Errorf("rich tags must parse to [VWL_HA neutral], got %#v", meta[okPub].Tags)
 	}

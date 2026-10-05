@@ -7,6 +7,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
 	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -268,7 +270,7 @@ func (lr *leaseRepo) truncateFixtures(t *testing.T) {
 		         ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
 		         zotero_item_collections, zotero_collections, zotero_sources,
 		         zotero_selections, zotero_collection_selections,
-		         processing_snapshots
+		         store_documents, processing_snapshots
 		CASCADE`); err != nil {
 		t.Fatalf("truncate fixtures: %v", err)
 	}
@@ -328,27 +330,69 @@ func (lr *leaseRepo) seed(t *testing.T, spec seedSpec, jobStatus string, maxAtte
 	if err != nil {
 		t.Fatalf("insert attachment: %v", err)
 	}
+	// #358: the Store-side projection row (the claim's resolution source).
+	if err := lr.seedProjection(ctx, srcID, docID, attachmentID, spec.docKey, spec.attKey, spec.contentHash, spec.preferred, spec.deleted); err != nil {
+		t.Fatalf("insert projection: %v", err)
+	}
+	// The job is revision-lane (the legacy lane is retired): the claim
+	// resolves the projection by (source, rendition key).
+	revJSON, _ := json.Marshal(revision.SourceRevision{
+		SourceID: srcID, RevisionID: "1", RenditionID: spec.attKey,
+		ContentHash: deref(spec.contentHash), MediaType: revision.MediaTypePDF,
+		Bibliography: revision.Bibliography{RecordID: spec.docKey, CitationClass: revision.CitationClassCitable},
+		LocatorCapabilities: revision.LocatorCapabilities{Page: &revision.PageCapability{Trust: revision.TrustPhysicalOnly}},
+		ContentTicket:       "zat:" + srcID + ":" + spec.attKey,
+	})
 	err = lr.pool.QueryRow(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`,
-		srcID, docID, attachmentID, spec.contentHash, jobStatus, maxAttempts).Scan(&jobID)
+		INSERT INTO ingest_jobs (intake_kind, content_hash, status, max_attempts,
+		                         revision_source_id, revision_record_id, revision_rendition_id,
+		                         revision_no, revision_json)
+		VALUES ('revision', $1, $2, $3, $4, $5, $6, '1', $7::jsonb) RETURNING id::text`,
+		spec.contentHash, jobStatus, maxAttempts, srcID, spec.docKey, spec.attKey, revJSON).Scan(&jobID)
 	if err != nil {
 		t.Fatalf("insert job: %v", err)
 	}
 	return attachmentID, jobID
 }
 
-// seedExtraForceJob copies an existing job's source/document/attachment/hash and
-// inserts an ADDITIONAL force-rebuild job for the same attachment. Used to create
-// multiple force jobs for one attachment (allowed: the partial unique idempotency
-// index only applies to force_rebuild=false rows).
+// seedProjection writes the store_documents row for a seeded fixture.
+func (lr *leaseRepo) seedProjection(ctx context.Context, srcID, docID, attID, docKey, attKey string, hash *string, preferred, deleted bool) error {
+	tag, _ := lr.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id, server_id,
+			record_key, rendition_key, source_version, content_hash, title,
+			content_type, filename, local_path, preferred, deleted)
+		VALUES ($1, $2, $3, 'test-server', $4, $5, 1, $6, 'Test Doc',
+			'application/pdf', 'x.pdf', '/tmp/x.pdf', $7, $8)
+		ON CONFLICT (source_id, rendition_key) DO UPDATE SET
+			document_id=EXCLUDED.document_id, content_hash=EXCLUDED.content_hash,
+			preferred=EXCLUDED.preferred, deleted=EXCLUDED.deleted, updated_at=now()`,
+		docID, attID, srcID, docKey, attKey, hash, preferred, deleted)
+	_ = tag
+	return nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// seedExtraForceJob copies an existing revision job's identity and inserts
+// an ADDITIONAL force-rebuild job for the same rendition. Used to create
+// multiple force jobs for one rendition (allowed: every identity arbiter
+// excludes force_rebuild=true rows).
 func (lr *leaseRepo) seedExtraForceJob(t *testing.T, refJobID string) string {
 	t.Helper()
 	ctx := context.Background()
 	var jobID string
 	if err := lr.pool.QueryRow(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts, force_rebuild)
-		SELECT source_id, document_id, attachment_id, content_hash, 'pending', 3, true
+		INSERT INTO ingest_jobs (intake_kind, content_hash, status, max_attempts, force_rebuild,
+		                         revision_source_id, revision_record_id, revision_rendition_id,
+		                         revision_no, revision_json)
+		SELECT intake_kind, content_hash, 'pending', 3, true,
+		       revision_source_id, revision_record_id, revision_rendition_id,
+		       revision_no, revision_json
 		FROM ingest_jobs WHERE id=$1
 		RETURNING id::text`, refJobID).Scan(&jobID); err != nil {
 		t.Fatalf("insert extra force job: %v", err)
@@ -610,7 +654,7 @@ func TestNullHashAndForcedRebuildMismatch(t *testing.T) {
 		docKey: "D2", attKey: "D2", contentHash: h("sha256:jobhash"), preferred: true,
 	}, "pending", 3)
 	if _, err := lr.pool.Exec(context.Background(),
-		`UPDATE zotero_attachments SET content_hash='sha256:different' WHERE zotero_key='D2'`); err != nil {
+		`UPDATE store_documents SET content_hash='sha256:different' WHERE rendition_key='D2'`); err != nil {
 		t.Fatal(err)
 	}
 	if cj := lr.claim(t, defaultClaim("worker-b")); cj != nil {
@@ -630,7 +674,7 @@ func TestNullHashAndForcedRebuildMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := lr.pool.Exec(context.Background(),
-		`UPDATE zotero_attachments SET content_hash='sha256:new' WHERE zotero_key='D3'`); err != nil {
+		`UPDATE store_documents SET content_hash='sha256:new' WHERE rendition_key='D3'`); err != nil {
 		t.Fatal(err)
 	}
 	cj := lr.claim(t, defaultClaim("worker-c"))
@@ -641,20 +685,23 @@ func TestNullHashAndForcedRebuildMismatch(t *testing.T) {
 		t.Fatal("claimed forced-rebuild job did not carry ForceRebuild")
 	}
 
-	// (d) NULL job hash with real attachment hash -> mismatch -> skipped.
-	_, jNullJobHash := lr.seed(t, seedSpec{
+	// (d) a revision whose hash no longer matches the projection (a newer
+	// revision was published in between) -> stale -> skipped. The mint
+	// writes content_hash, so a legitimately minted job always knows its
+	// hash; the mismatch check is the revision-lane truth.
+	_, jStale := lr.seed(t, seedSpec{
 		sourceBaseURL: "http://localhost:8", libraryID: "users/3",
-		docKey: "D4", attKey: "D4", contentHash: nil, preferred: true,
+		docKey: "D4", attKey: "D4", contentHash: h("sha256:stale"), preferred: true,
 	}, "pending", 3)
 	if _, err := lr.pool.Exec(context.Background(),
-		`UPDATE zotero_attachments SET content_hash='sha256:attach' WHERE zotero_key='D4'`); err != nil {
+		`UPDATE store_documents SET content_hash='sha256:attach' WHERE rendition_key='D4'`); err != nil {
 		t.Fatal(err)
 	}
 	if cj := lr.claim(t, defaultClaim("worker-d")); cj != nil {
-		t.Fatalf("NULL-job-hash with real attachment hash should skip, got %v", cj)
+		t.Fatalf("stale-revision job should skip, got %v", cj)
 	}
-	if lr.rowOf(t, jNullJobHash).status != "skipped" {
-		t.Fatalf("NULL-job-hash job should be skipped, got %s", lr.rowOf(t, jNullJobHash).status)
+	if lr.rowOf(t, jStale).status != "skipped" {
+		t.Fatalf("stale-revision job should be skipped, got %s", lr.rowOf(t, jStale).status)
 	}
 }
 
@@ -1090,7 +1137,7 @@ func TestCompletionRejectsChangedAttachment(t *testing.T) {
 	}
 	// Attachment hash changes while processing -> completion must be rejected.
 	if _, err := lr.pool.Exec(context.Background(),
-		`UPDATE zotero_attachments SET content_hash='sha256:changed' WHERE zotero_key='O1'`); err != nil {
+		`UPDATE store_documents SET content_hash='sha256:changed' WHERE rendition_key='O1'`); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -1443,8 +1490,8 @@ func TestNullableParentsTerminalizeToSkipped(t *testing.T) {
 		if r.errorCode == nil || *r.errorCode != "SKIPPED" {
 			t.Fatalf("job %s skip code = %v", id, r.errorCode)
 		}
-		if r.errorMessage == nil || *r.errorMessage != "PARENT_REMOVED" {
-			t.Fatalf("job %s skip reason = %v, want PARENT_REMOVED", id, r.errorMessage)
+		if r.errorMessage == nil || *r.errorMessage != "LEGACY_LANE_RETIRED" {
+			t.Fatalf("job %s skip reason = %v, want LEGACY_LANE_RETIRED", id, r.errorMessage)
 		}
 	}
 }
@@ -1493,7 +1540,7 @@ func TestForcedRebuildCompletionHashConsistency(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := lr.pool.Exec(ctx,
-		`UPDATE zotero_attachments SET content_hash='sha256:current-2' WHERE zotero_key='R2'`); err != nil {
+		`UPDATE store_documents SET content_hash='sha256:current-2' WHERE rendition_key='R2'`); err != nil {
 		t.Fatal(err)
 	}
 	cj2 := lr.claim(t, defaultClaim("worker-b"))
@@ -1527,7 +1574,7 @@ func TestForcedRebuildCompletionHashConsistency(t *testing.T) {
 	}
 	// Change the attachment AFTER the claim froze its hash.
 	if _, err := lr.pool.Exec(ctx,
-		`UPDATE zotero_attachments SET content_hash='sha256:changed-after-claim' WHERE zotero_key='R3'`); err != nil {
+		`UPDATE store_documents SET content_hash='sha256:changed-after-claim' WHERE rendition_key='R3'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := complete(t, jForceChange, cj3.LeaseRef); !errors.Is(err, ErrLostLease) {
@@ -1541,7 +1588,7 @@ func TestForcedRebuildCompletionHashConsistency(t *testing.T) {
 		docKey: "R4", attKey: "R4", contentHash: nil, preferred: true,
 	}, "pending", 3)
 	if _, err := lr.pool.Exec(ctx,
-		`UPDATE zotero_attachments SET content_hash=NULL WHERE zotero_key='R4'`); err != nil {
+		`UPDATE store_documents SET content_hash=NULL WHERE rendition_key='R4'`); err != nil {
 		t.Fatal(err)
 	}
 	if cj4 := lr.claim(t, defaultClaim("worker-d")); cj4 != nil {

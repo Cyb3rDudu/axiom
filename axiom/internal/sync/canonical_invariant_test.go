@@ -17,8 +17,8 @@ func runCanon(t *testing.T, src zoteroprovider.Source, d *db.DB) (Result, error)
 	t.Helper()
 	ctx := context.Background()
 	repoObj := repo.New(d.Pool())
-	mir := mirror.New(repoObj)
-	svc := New(src, repoObj, baseOf(src), "users/0", log.Default())
+	mir := mirror.New(repoObj.Pool())
+	svc := New(src, mirror.New(repoObj.Pool()), repoObj, baseOf(src), "users/0", log.Default())
 	// Ensure the source up front and register cleanup BEFORE the sync runs, so a
 	// failed run (e.g. a malformed-envelope abort) still removes its source and
 	// does not leak persistent rows into the shared test DB.
@@ -659,7 +659,7 @@ func TestCanonicalDeletedItemOnFallbackFullSnapshot(t *testing.T) {
 	if jobsAfter != jobsBefore {
 		t.Fatalf("deleting an item must not enqueue new jobs: before=%d after=%d", jobsBefore, jobsAfter)
 	}
-	cur, err := mirror.New(repo.New(d.Pool())).CanonicalCursor(ctx, srcID)
+	cur, err := mirror.New(d.Pool()).CanonicalCursor(ctx, srcID)
 	if err != nil {
 		t.Fatal(err)
 	}
