@@ -60,10 +60,14 @@ bills a full matrix run, and a merged SHA runs at most once — superseded
 runs on the same ref (rapid merges, rapid review-round pushes) are
 cancelled mid-flight, not billed in full. The heavy legs (`go-db-it`,
 `split-topology`, `container-topology` — together ~16 of the ~24 billed
-minutes per run) are path-gated by the `changes` job: they run only when
-Go sources, `go.mod`/`go.sum`, SQL schemas, `deploy/**`, the
-compute-worker surface, or the workflow definition itself changed;
-docs-only and script-only changes run the remaining jobs only. The gate
+minutes per run) are path-gated by the `changes` job: `go-db-it` runs
+when anything under `axiom/` changed — Go sources, `go.mod`/`go.sum`,
+SQL schemas, and the binary `testdata` fixtures the DB ITs consume
+(`axiom/docs` prose over-triggers deliberately, on the fail-open side)
+— or the role drill (`deploy/postgres/roles.sql`) or the workflow
+definition changed; the topology legs additionally run for
+`axiom-compute-worker/**` and `deploy/**` changes. Changes outside
+those surfaces (root `docs/`, `scripts/`) run the remaining jobs only. The gate
 is fail-open: an unresolvable diff base classifies everything as changed,
 so verification is never skipped by an accident of history. Heavy legs
 run per cumulative PR diff — the merged result is what must verify,
