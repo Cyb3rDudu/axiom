@@ -321,11 +321,20 @@ func seedE2EMirror(t *testing.T, pool *pgxpool.Pool, hash, pdfPath string) (srcI
 	if _, err := pool.Exec(ctx, `UPDATE zotero_documents SET canonical_item_id=$2 WHERE id=$1`, docUUID, itemID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `
+	var attID string
+	if err := pool.QueryRow(ctx, `
 		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
 		   parent_zotero_key, link_mode, content_type, filename, local_path, content_hash, preferred, deleted)
-		VALUES ($1,$2,'ATTE2E1',1,'DOCE2E1','imported_file','application/epub+zip','e2e.epub',$3,$4,true,false)`,
-		srcID, docUUID, pdfPath, hash); err != nil {
+		VALUES ($1,$2,'ATTE2E1',1,'DOCE2E1','imported_file','application/epub+zip','e2e.epub',$3,$4,true,false)
+		RETURNING id::text`, srcID, docUUID, pdfPath, hash).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+	// The Store projection row (#358: the claim resolves here).
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id, server_id,
+			record_key, rendition_key, content_hash, title, citation_class, content_type, filename, local_path, preferred)
+		VALUES ($1, $2, $3, 'srv-1', 'DOCE2E1', 'ATTE2E1', $4, 'Buchkapitel (F09 E2E)', 'citable', 'application/epub+zip', 'e2e.epub', $5, true)`,
+		docUUID, attID, srcID, hash, pdfPath); err != nil {
 		t.Fatal(err)
 	}
 	return srcID, docUUID

@@ -526,7 +526,7 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 					}
 				}
 			}
-			return fmt.Errorf("revision job terminal: %s %s %s; worker log tail:\n%s", status, code, msg, tailLogsN(e.workerLogs, 400))
+			return fmt.Errorf("revision job terminal: %s %s %s; store log tail:\n%s; worker log tail:\n%s", status, code, msg, tailLogsN(e.store.logs, 200), tailLogsN(e.workerLogs, 400))
 		}
 		if status == "completed" && runnerName == "" {
 			return fmt.Errorf("completed job carries no runner identity")

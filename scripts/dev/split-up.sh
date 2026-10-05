@@ -93,6 +93,10 @@ start_proc() {
         . "$RAG_API_ENV"
         set +a
         AXIOM_DATABASE_URL="$(printf '%s' "$AXIOM_DATABASE_URL" | sed -E 's#/axiom_db([?]|$)#/'"$DEV_DB"'\1#')"
+        # #358: the sourced operator env may carry the PRODUCTION library
+        # DSN — never let the dev split reach it. Unset = single-database
+        # topology (both planes on the dev store DB, the supported shape).
+        unset AXIOM_LIBRARY_DATABASE_URL
         AXIOM_API_PORT="$port"
         AXIOM_BIND_ADDR=127.0.0.1
         AXIOM_OS_INDEX="$DEV_INDEX"

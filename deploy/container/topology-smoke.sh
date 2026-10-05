@@ -76,6 +76,18 @@ SELECT s.id, d.id, 'ATTF14C1', 1, 'DOCF14C1', 'imported_file', 'application/epub
        'f14.epub', '$SEED_PATH_IN_CONTAINER', '$hash', true, false
 FROM zotero_sources s, zotero_documents d
 WHERE s.base_url='https://topology.local' AND d.zotero_key='DOCF14C1' AND d.source_id=s.id;
+-- #358: the Store-side projection row the claim resolves (identities
+-- instead of joins — the mirror read died with the legacy lane).
+INSERT INTO store_documents (document_id, attachment_id, source_id, server_id,
+    record_key, rendition_key, content_hash, title, citation_class, content_type, filename, local_path, preferred)
+SELECT a.document_id, a.id, a.source_id, 'topology-standin',
+       'DOCF14C1', 'ATTF14C1', '$hash', 'Buchkapitel (F14 Container)', 'citable',
+       'application/epub+zip', 'f14.epub', '$SEED_PATH_IN_CONTAINER', true
+FROM zotero_attachments a JOIN zotero_sources s ON s.id = a.source_id
+WHERE s.base_url='https://topology.local' AND a.zotero_key='ATTF14C1'
+ON CONFLICT (source_id, rendition_key) DO UPDATE SET
+    document_id=EXCLUDED.document_id, content_hash=EXCLUDED.content_hash,
+    local_path=EXCLUDED.local_path, preferred=true, deleted=false;
 COMMIT;
 SQL
 }

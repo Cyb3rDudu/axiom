@@ -185,7 +185,9 @@ func (m *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 		rend := SyncRendition{
 			DocumentID: docID, AttachmentID: attID,
 			DocumentKey: parentKey, AttachmentKey: pref.Key,
-			Version:     pref.Version, LocalPath: pref.LocalPath,
+			// the NATIVE path (no file:// scheme) — the store's source
+			// serving opens it directly
+			Version:     pref.Version, LocalPath: zoteroprovider.LocalFilePath(pref.LocalPath),
 			ContentType: meta.contentType, Filename: meta.fileName, LinkMode: meta.linkMode,
 		}
 		if fin.Exists && fin.Hash != "" {
