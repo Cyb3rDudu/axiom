@@ -456,6 +456,19 @@ Commands:
                                 shadow-read: legacy mirror vs imported
                                 copy, full data set, explicit allowlist;
                                 unexpected deviations red (DM08)
+  data cutover --plan PLAN [--run-dir DIR] --require-confirmation
+                                gated cutover window: maintenance gate,
+                                freeze delta, target schema (asserted
+                                before data), delta import + anchor,
+                                DM06 FK drops, atomic config switch,
+                                restart, shadow re-run, staged re-enable
+                                (DM09); without the confirmation flag:
+                                validation only, zero mutations
+  data rollback --run RUNDIR --require-confirmation
+                                the way back: pre-write (config revert
+                                only) or post-write (reverse delta into
+                                cutover_shadow_* tables, idempotent);
+                                evidenced, resumable (DM09)
   --set KEY=VALUE               one-shot override for serve/doctor/config
                                 (the CLI-flag stage of the chain)
   (KG mode flags)               the legacy one-shot modes (#244) keep

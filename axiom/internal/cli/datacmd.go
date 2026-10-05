@@ -28,7 +28,7 @@ import (
 
 func cmdData(name string, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "usage: %s data <export|import|verify|shadow> --component library [flags]\n", name)
+		fmt.Fprintf(os.Stderr, "usage: %s data <export|import|verify|shadow|cutover|rollback> [flags]\n", name)
 		return exitUsage
 	}
 	switch args[0] {
@@ -40,8 +40,12 @@ func cmdData(name string, args []string) int {
 		return cmdDataVerify(name, args[1:])
 	case "shadow":
 		return cmdDataShadow(name, args[1:])
+	case "cutover":
+		return cmdDataCutover(name, args[1:])
+	case "rollback":
+		return cmdDataRollback(name, args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "%s data: unknown subcommand %q (export | import | verify | shadow)\n", name, args[0])
+		fmt.Fprintf(os.Stderr, "%s data: unknown subcommand %q (export | import | verify | shadow | cutover | rollback)\n", name, args[0])
 		return exitUsage
 	}
 }

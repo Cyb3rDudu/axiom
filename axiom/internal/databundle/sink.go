@@ -40,6 +40,11 @@ type sink interface {
 	streamOrdered(ctx context.Context, table string, cols []ColumnRef, keyCols []string, fn func(vals []any) error) error
 	// insertRow writes one row, explicit every column (no DB defaults).
 	insertRow(ctx context.Context, table string, cols []ColumnRef, vals []any) error
+	// updateRow rewrites one existing row's non-key columns in place
+	// (the replace-diverged window path: an UPDATE never breaks FK
+	// children the way a delete+insert would). Zero rows affected is
+	// an error — the caller holds the row's existence as a precondition.
+	updateRow(ctx context.Context, table string, cols []ColumnRef, key []string, vals []any) error
 	// rowByPK loads one existing row's canonical values (PK order);
 	// errSinkAbsent when not present. The idempotency compare.
 	// ponytail: per-row compare, not a batched upsert — row counts are
@@ -129,6 +134,42 @@ func (s *pgSink) insertRow(ctx context.Context, table string, cols []ColumnRef, 
 		pgIdent(table), strings.Join(names, ", "), strings.Join(ph, ", "))
 	_, err := s.db.pool.Exec(ctx, q, pgWire(cols, vals)...)
 	return err
+}
+
+func (s *pgSink) updateRow(ctx context.Context, table string, cols []ColumnRef, key []string, vals []any) error {
+	keyIdx, err := keyIndices(cols, key)
+	if err != nil {
+		return err
+	}
+	keyPos := map[string]int{}
+	for i, k := range key {
+		keyPos[k] = keyIdx[i]
+	}
+	sets := make([]string, 0, len(cols))
+	where := make([]string, len(key))
+	args := make([]any, 0, len(cols)+len(key))
+	for i, c := range cols {
+		if _, isKey := keyPos[c.Name]; isKey {
+			continue
+		}
+		wire := pgWire(cols[i:i+1], vals[i:i+1])
+		args = append(args, wire[0])
+		sets = append(sets, fmt.Sprintf(`%s = $%d`, pgIdent(c.Name), len(args)))
+	}
+	for i, k := range key {
+		wire := pgWire(cols[keyIdx[i]:keyIdx[i]+1], vals[keyIdx[i]:keyIdx[i]+1])
+		args = append(args, wire[0])
+		where[i] = fmt.Sprintf(`%s = $%d`, pgIdent(k), len(args))
+	}
+	q := fmt.Sprintf(`UPDATE %s SET %s WHERE %s`, pgIdent(table), strings.Join(sets, ", "), strings.Join(where, " AND "))
+	tag, err := s.db.pool.Exec(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("update %s: the row vanished between read and write", table)
+	}
+	return nil
 }
 
 func (s *pgSink) rowByPK(ctx context.Context, table string, cols []ColumnRef, key []string, keyVals []any) ([]any, error) {
@@ -383,6 +424,48 @@ func (s *sqliteSink) insertRow(ctx context.Context, table string, cols []ColumnR
 	}
 	_, err = s.db.ExecContext(ctx, q, wire...)
 	return err
+}
+
+func (s *sqliteSink) updateRow(ctx context.Context, table string, cols []ColumnRef, key []string, vals []any) error {
+	keyIdx, err := keyIndices(cols, key)
+	if err != nil {
+		return err
+	}
+	keyPos := map[string]int{}
+	for i, k := range key {
+		keyPos[k] = keyIdx[i]
+	}
+	sets := make([]string, 0, len(cols))
+	where := make([]string, len(key))
+	var args []any
+	for i, c := range cols {
+		if _, isKey := keyPos[c.Name]; isKey {
+			continue
+		}
+		wire, err := sqliteWire(cols[i:i+1], vals[i:i+1])
+		if err != nil {
+			return err
+		}
+		args = append(args, wire[0])
+		sets = append(sets, fmt.Sprintf(`%s = ?`, sqlIdent(c.Name)))
+	}
+	for i, k := range key {
+		wire, err := sqliteWire(cols[keyIdx[i]:keyIdx[i]+1], vals[keyIdx[i]:keyIdx[i]+1])
+		if err != nil {
+			return err
+		}
+		args = append(args, wire[0])
+		where[i] = fmt.Sprintf(`%s = ?`, sqlIdent(k))
+	}
+	q := fmt.Sprintf(`UPDATE %s SET %s WHERE %s`, sqlIdent(table), strings.Join(sets, ", "), strings.Join(where, " AND "))
+	res, err := s.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("update %s: the row vanished between read and write", table)
+	}
+	return nil
 }
 
 func (s *sqliteSink) rowByPK(ctx context.Context, table string, cols []ColumnRef, key []string, keyVals []any) ([]any, error) {

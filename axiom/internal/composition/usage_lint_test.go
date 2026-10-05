@@ -48,6 +48,12 @@ var packageEnvAllowance = map[string]int{
 	"internal/config/":      math.MaxInt,
 	"internal/composition/": math.MaxInt,
 	"internal/baseline/":    math.MaxInt,
+	// internal/cutover (DM09 #318) is the operator window tool, not a
+	// domain package: its env reads INSPECT the environment as data (the
+	// config-switch compatibility check — "would the env stage mask the
+	// planned rows?"), they do not resolve runtime configuration from
+	// it. Same class as the cli operator surface.
+	"internal/cutover/": math.MaxInt,
 }
 
 var packageExecAllowance = map[string]int{
@@ -57,6 +63,11 @@ var packageExecAllowance = map[string]int{
 	// abatement rides the F10/F13 env-surface work.
 	"internal/library/repair/": math.MaxInt,
 	"internal/backfill/":       math.MaxInt,
+	// internal/cutover (DM09 #318) executes PLAN-DECLARED commands (the
+	// window's stop/restart/stage steps) — operator orchestration over
+	// the operator's own plan file, the same trust class as the cli
+	// surface; never application-internal process spawning.
+	"internal/cutover/": math.MaxInt,
 }
 
 var fileEnvAllowance = map[string]int{

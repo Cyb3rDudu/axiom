@@ -26,6 +26,13 @@ type ImportOptions struct {
 	DSN        string // PostgreSQL target (DML-only role suffices)
 	SQLitePath string // library.sqlite target (library_* namespace only)
 	Merge      bool   // allow import into a non-empty target
+	// ReplaceDiverged is the WINDOW mode (cutover delta import): the
+	// bundle is the source of truth, so a row whose stable key exists
+	// with a DIFFERENT payload is rewritten in place (UPDATE, counted
+	// as Replaced) instead of aborting as a merge conflict. Outside
+	// the window the default stands: diverged rows abort loudly, data
+	// state is never auto-merged.
+	ReplaceDiverged bool
 }
 
 // TableImport is one table's outcome.
@@ -33,6 +40,7 @@ type TableImport struct {
 	Table      string
 	Inserted   int64
 	Idempotent int64 // existing identical rows — skipped, not duplicated
+	Replaced   int64 // diverged rows rewritten in place (ReplaceDiverged only)
 	Skipped    bool  // engine-namespace skip (legacy table on SQLite)
 	SkipNote   string
 }
@@ -197,13 +205,16 @@ func importTable(ctx context.Context, snk sink, opts ImportOptions, tm *TableMan
 			if err != nil {
 				return ti, fmt.Errorf("table %s: %w", tm.Name, err)
 			}
-			inserted, err := upsertRow(ctx, snk, tm, cols, keyIdx, vals)
+			inserted, replaced, err := upsertRow(ctx, snk, opts, tm, cols, keyIdx, vals)
 			if err != nil {
 				return ti, fmt.Errorf("table %s: %w", tm.Name, err)
 			}
-			if inserted {
+			switch {
+			case inserted:
 				ti.Inserted++
-			} else {
+			case replaced:
+				ti.Replaced++
+			default:
 				ti.Idempotent++
 			}
 		}
@@ -263,9 +274,11 @@ func readBatch(root string, b *BatchManifest, tm *TableManifest) (*batchFile, er
 
 // upsertRow implements the idempotency contract: same PK + identical
 // canonical payload → skip; same PK + different payload → loud conflict
-// (data state, never auto-merged); absent PK → insert with explicit
-// values only (no DB defaults).
-func upsertRow(ctx context.Context, snk sink, tm *TableManifest, cols []ColumnRef, keyIdx []int, vals []any) (bool, error) {
+// (data state, never auto-merged) — unless opts.ReplaceDiverged (the
+// window mode: the bundle is authoritative, the row is rewritten in
+// place and counted); absent PK → insert with explicit values only
+// (no DB defaults).
+func upsertRow(ctx context.Context, snk sink, opts ImportOptions, tm *TableManifest, cols []ColumnRef, keyIdx []int, vals []any) (inserted, replaced bool, err error) {
 	keyVals := make([]any, len(keyIdx))
 	for i, ki := range keyIdx {
 		keyVals[i] = vals[ki]
@@ -274,24 +287,30 @@ func upsertRow(ctx context.Context, snk sink, tm *TableManifest, cols []ColumnRe
 	if err != nil {
 		if errors.Is(err, errSinkAbsent) {
 			if err := snk.insertRow(ctx, tm.Name, cols, vals); err != nil {
-				return false, fmt.Errorf("insert (pk %s): %w", pkLabel(tm.Key, keyVals), err)
+				return false, false, fmt.Errorf("insert (pk %s): %w", pkLabel(tm.Key, keyVals), err)
 			}
-			return true, nil
+			return true, false, nil
 		}
-		return false, fmt.Errorf("load existing (pk %s): %w", pkLabel(tm.Key, keyVals), err)
+		return false, false, fmt.Errorf("load existing (pk %s): %w", pkLabel(tm.Key, keyVals), err)
 	}
 	var a, bb bytes.Buffer
 	if err := EncodeRow(&a, cols, existing); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if err := EncodeRow(&bb, cols, vals); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if !bytes.Equal(a.Bytes(), bb.Bytes()) {
-		return false, fmt.Errorf("merge conflict at pk %s: the target row differs from the bundle row — data state, never auto-merged (resolve manually or re-import into an empty target)",
-			pkLabel(tm.Key, keyVals))
+		if !opts.ReplaceDiverged {
+			return false, false, fmt.Errorf("merge conflict at pk %s: the target row differs from the bundle row — data state, never auto-merged (resolve manually or re-import into an empty target)",
+				pkLabel(tm.Key, keyVals))
+		}
+		if err := snk.updateRow(ctx, tm.Name, cols, tm.Key, vals); err != nil {
+			return false, false, fmt.Errorf("replace diverged (pk %s): %w", pkLabel(tm.Key, keyVals), err)
+		}
+		return false, true, nil
 	}
-	return false, nil // identical — idempotent skip
+	return false, false, nil // identical — idempotent skip
 }
 
 // pkLabel renders PK values for errors: identifiers only, never row
