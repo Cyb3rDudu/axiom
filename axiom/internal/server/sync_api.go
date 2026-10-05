@@ -19,6 +19,11 @@ import (
 type SyncOverrideBody struct {
 	Include []string `json:"include"`
 	Exclude []string `json:"exclude"`
+	// Full requests a since=0 FULL reconciliation (#358): every Zotero
+	// item is re-listed, absent items are reconciled into tombstones (the
+	// held-row pass). The post-switch catch-up and operator-initiated
+	// reconciles ride it; steady-state syncs stay delta.
+	Full bool `json:"full"`
 }
 
 type SyncService interface {
@@ -72,8 +77,8 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var override *sync.SyncOverride
-	if len(body.Include) > 0 || len(body.Exclude) > 0 {
-		override = &sync.SyncOverride{Include: body.Include, Exclude: body.Exclude}
+	if len(body.Include) > 0 || len(body.Exclude) > 0 || body.Full {
+		override = &sync.SyncOverride{Include: body.Include, Exclude: body.Exclude, Full: body.Full}
 	}
 	res, err := s.jobsSvc.Run(r.Context(), override)
 	if err != nil {

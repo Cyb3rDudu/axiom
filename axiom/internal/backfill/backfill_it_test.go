@@ -271,7 +271,7 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 	}
 
 	// --- 1. enrichment run (EPUB-active happy path) ---
-	rep, err := Run(ctx, pool, opts)
+	rep, err := Run(ctx, nil, pool, opts)
 	if err != nil {
 		t.Fatalf("run 1: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 	}
 
 	// --- 2. idempotency: second run is a no-op ---
-	rep2, err := Run(ctx, pool, opts)
+	rep2, err := Run(ctx, nil, pool, opts)
 	if err != nil {
 		t.Fatalf("run 2: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 
 	// --- 3. refusal: non-monotone candidate refuses the whole backfill ---
 	fixture(t, pool, "LB2", "epub", epub)
-	repR, err := Run(ctx, pool, Options{
+	repR, err := Run(ctx, nil, pool, Options{
 		DocKey: "LB2", EpubPath: testdataPath(t, "poisoned.epub"), Budget: 2 * time.Minute,
 		Python: python, RunnerDir: runnerDir, OSBaseURL: os_.srv.URL,
 		Logf: func(string, ...any) {},
@@ -373,7 +373,7 @@ func TestBackfillEnrichRefuseIdempotent(t *testing.T) {
 
 	// --- 4. dry-run writes nothing ---
 	fixture(t, pool, "LB3", "epub", epub)
-	repD, err := Run(ctx, pool, Options{
+	repD, err := Run(ctx, nil, pool, Options{
 		DocKey: "LB3", EpubPath: epub, DryRun: true, Budget: 2 * time.Minute,
 		Python: python, RunnerDir: runnerDir, Logf: func(string, ...any) {},
 	})
@@ -421,7 +421,7 @@ func TestBackfillDirectionPDFRefused(t *testing.T) {
 	fixture(t, pool, "LB4", "pdf", pdf)
 
 	os_ := newOSStub(t)
-	rep, err := Run(ctx, pool, Options{
+	rep, err := Run(ctx, nil, pool, Options{
 		DocKey: "LB4", EpubPath: testdataPath(t, "book.epub"), Budget: 2 * time.Minute,
 		Python: python, RunnerDir: runnerDir, OSBaseURL: os_.srv.URL,
 		Logf: func(string, ...any) {},

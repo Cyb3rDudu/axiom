@@ -35,10 +35,13 @@ func yearArg(y *int) any {
 
 func main() {
 	dry := flag.Bool("dry", false, "print would-be changes without writing")
-	dsn := flag.String("dsn", os.Getenv("AXIOM_DATABASE_URL"), "database DSN (default AXIOM_DATABASE_URL)")
+	// The mirror lives on the Library database since #358 — default there,
+	// falling back to the store DSN for pre-split databases.
+	dsn := flag.String("dsn", firstNonEmpty(os.Getenv("AXIOM_LIBRARY_DATABASE_URL"), os.Getenv("AXIOM_DATABASE_URL")),
+		"Library database DSN (default AXIOM_LIBRARY_DATABASE_URL, then AXIOM_DATABASE_URL)")
 	flag.Parse()
 	if *dsn == "" {
-		fmt.Fprintln(os.Stderr, "no DSN (set AXIOM_DATABASE_URL or -dsn)")
+		fmt.Fprintln(os.Stderr, "no DSN (set AXIOM_LIBRARY_DATABASE_URL or -dsn)")
 		os.Exit(1)
 	}
 
@@ -121,4 +124,13 @@ func main() {
 func fatal(f string, a ...any) {
 	fmt.Fprintf(os.Stderr, "meta-backfill: "+f+"\n", a...)
 	os.Exit(1)
+}
+
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

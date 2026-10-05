@@ -24,6 +24,7 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/backfill"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -34,7 +35,9 @@ func main() {
 	reindexOnly := flag.Bool("reindex-only", false,
 		"re-index the document's derived_from_sibling chunks without running the engine (recovery after a committed backfill whose index step failed)")
 	budget := flag.Duration("budget", 15*time.Minute, "wall-clock budget for the alignment engine")
-	dsn := flag.String("dsn", os.Getenv("AXIOM_DATABASE_URL"), "database DSN (default AXIOM_DATABASE_URL)")
+	dsn := flag.String("dsn", os.Getenv("AXIOM_DATABASE_URL"), "Store database DSN (default AXIOM_DATABASE_URL)")
+	libDSN := flag.String("library-dsn", os.Getenv("AXIOM_LIBRARY_DATABASE_URL"),
+		"Library database DSN for mirror reads (default AXIOM_LIBRARY_DATABASE_URL; unset = single-database)")
 	flag.Parse()
 	if *doc == "" || *dsn == "" {
 		fmt.Fprintln(os.Stderr, "locator-backfill: -doc and AXIOM_DATABASE_URL/-dsn are required")
@@ -48,7 +51,19 @@ func main() {
 	}
 	defer database.Close()
 
-	rep, err := backfill.Run(ctx, database.Pool(), backfill.Options{
+	// #358: the mirror lives on the Library database — a separate pool when
+	// configured, the same one in the single-database topology.
+	var mirrorPool *pgxpool.Pool
+	if *libDSN != "" {
+		libDB, lerr := db.Open(ctx, *libDSN)
+		if lerr != nil {
+			fatal("connect library: %v", lerr)
+		}
+		defer libDB.Close()
+		mirrorPool = libDB.Pool()
+	}
+
+	rep, err := backfill.Run(ctx, mirrorPool, database.Pool(), backfill.Options{
 		DocKey:      *doc,
 		EpubPath:    *epub,
 		DryRun:      *dry,

@@ -112,26 +112,43 @@ func (o *Options) logf(format string, a ...any) {
 }
 
 // Run executes one document's locator backfill end to end.
-func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
+// Run executes one document's backfill. mirrorPool reads the Zotero
+// mirror (Library database since #358); storePool the processing tables —
+// in the single-database topology both are the same pool. A nil
+// mirrorPool falls back to storePool (pre-split databases).
+func Run(ctx context.Context, mirrorPool, storePool *pgxpool.Pool, o Options) (*Report, error) {
 	if o.Budget == 0 {
 		o.Budget = 15 * time.Minute
+	}
+	if mirrorPool == nil {
+		mirrorPool = storePool
 	}
 	rep := &Report{}
 
 	if o.ReindexOnly {
-		return reindexDerived(ctx, pool, o)
+		return reindexDerived(ctx, mirrorPool, storePool, o)
 	}
 
 	// 1. Active snapshot + attachment (kind + file) — the frozen identity.
-	var snapID, attPath, attCT, contentHash string
-	err := pool.QueryRow(ctx, `
-		SELECT sn.id::text, a.local_path, a.content_type, sn.content_hash
+	// Two engine-local queries (#358: identities instead of joins): the
+	// mirror resolves the document's preferred rendition; the store
+	// resolves its active snapshot.
+	var docUUID, attPath, attCT string
+	err := mirrorPool.QueryRow(ctx, `
+		SELECT d.id::text, a.local_path, COALESCE(a.content_type,'')
 		FROM zotero_documents d
-		JOIN zotero_attachments a ON a.document_id = d.id AND NOT a.deleted
-		JOIN processing_snapshots sn ON sn.attachment_id = a.id
-		 AND sn.document_id = d.id AND sn.active
+		JOIN zotero_attachments a ON a.document_id = d.id AND a.preferred AND NOT a.deleted
 		WHERE d.zotero_key = $1`, o.DocKey).
-		Scan(&snapID, &attPath, &attCT, &contentHash)
+		Scan(&docUUID, &attPath, &attCT)
+	if err != nil {
+		return nil, fmt.Errorf("document rendition for %s: %w", o.DocKey, err)
+	}
+	var snapID, contentHash string
+	err = storePool.QueryRow(ctx, `
+		SELECT sn.id::text, sn.content_hash
+		FROM processing_snapshots sn
+		WHERE sn.document_id = $1::uuid AND sn.active`, docUUID).
+		Scan(&snapID, &contentHash)
 	if err != nil {
 		return nil, fmt.Errorf("active snapshot for %s: %w", o.DocKey, err)
 	}
@@ -163,7 +180,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
 	//    EPUB attachments (injected copies preferred — derived page map).
 	epub := o.EpubPath
 	if epub == "" {
-		epub, err = DiscoverCandidate(ctx, pool, o.DocKey)
+		epub, err = DiscoverCandidate(ctx, mirrorPool, o.DocKey)
 		if err != nil {
 			return nil, fmt.Errorf("candidate EPUB (pass EpubPath): %w", err)
 		}
@@ -171,7 +188,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
 	o.logf("candidate EPUB: %s", epub)
 
 	// 3. Chunks of the frozen snapshot.
-	rows, err := pool.Query(ctx, `
+	rows, err := storePool.Query(ctx, `
 		SELECT json_build_object('id', c.id::text, 'text', c.text, 'locator', c.locator)
 		FROM processing_chunks c
 		WHERE c.snapshot_id = $1
@@ -215,7 +232,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
 		o.logf("nothing to enrich (idempotent no-op)")
 		return rep, nil
 	}
-	tx, err := pool.Begin(ctx)
+	tx, err := storePool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin: %w", err)
 	}
@@ -270,7 +287,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
 		o.logf("re-index skipped (no OpenSearch endpoint)")
 		return rep, nil
 	}
-	n, err := Reindex(ctx, pool, o.OSBaseURL, o.OSUser, o.OSPass, enriched)
+	n, err := Reindex(ctx, storePool, o.OSBaseURL, o.OSUser, o.OSPass, enriched)
 	if err != nil {
 		return rep, fmt.Errorf(
 			"re-index: %w (DB write committed; re-run — the update is idempotent)", err)
@@ -534,16 +551,20 @@ func lastLines(s string, n int) string {
 // _update, stable ids) without running the engine. Covers a committed
 // backfill whose OpenSearch step failed — a plain re-run has zero targets
 // and would skip the index.
-func reindexDerived(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report, error) {
+func reindexDerived(ctx context.Context, mirrorPool, storePool *pgxpool.Pool, o Options) (*Report, error) {
 	if o.OSBaseURL == "" {
 		return nil, fmt.Errorf("ReindexOnly requires an OpenSearch endpoint")
 	}
-	rows, err := pool.Query(ctx, `
+	var docUUID string
+	if err := mirrorPool.QueryRow(ctx,
+		`SELECT id::text FROM zotero_documents WHERE zotero_key=$1 AND deleted=false`, o.DocKey).Scan(&docUUID); err != nil {
+		return nil, err
+	}
+	rows, err := storePool.Query(ctx, `
 		SELECT c.id::text FROM processing_chunks c
 		JOIN processing_snapshots sn ON sn.id = c.snapshot_id AND sn.active
-		JOIN zotero_documents d ON d.id = sn.document_id
-		WHERE d.zotero_key = $1
-		  AND c.locator->>'page_source' = $2`, o.DocKey, DerivedFromSibling)
+		WHERE sn.document_id = $1::uuid
+		  AND c.locator->>'page_source' = $2`, docUUID, DerivedFromSibling)
 	if err != nil {
 		return nil, err
 	}
@@ -564,7 +585,7 @@ func reindexDerived(ctx context.Context, pool *pgxpool.Pool, o Options) (*Report
 	if len(enriched) == 0 {
 		return &Report{Updated: 0, Reindexed: 0}, nil
 	}
-	n, err := Reindex(ctx, pool, o.OSBaseURL, o.OSUser, o.OSPass, enriched)
+	n, err := Reindex(ctx, storePool, o.OSBaseURL, o.OSUser, o.OSPass, enriched)
 	if err != nil {
 		return nil, err
 	}

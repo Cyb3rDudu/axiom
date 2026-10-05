@@ -81,15 +81,17 @@ func main() {
 
 	// 1. Collect every chunk of an ACTIVE snapshot that references an image
 	// (only those can carry a document figure caption).
+	// #358: the title hydrates from the Store's own projection (never the
+	// Library-side mirror); the doc filter matches the record key.
 	rows, err := database.Pool().Query(ctx, `
 		SELECT c.id::text, c.text, c.section_titles::text, c.image_refs::text,
 		       c.image_captions::text, c.figure_captions::text,
-		       sn.document_id::text, COALESCE(d.zotero_key, ''), COALESCE(d.title, '')
+		       sn.document_id::text, COALESCE(d.record_key, ''), COALESCE(d.title, '')
 		FROM processing_chunks c
 		JOIN processing_snapshots sn ON sn.id = c.snapshot_id AND sn.active
-		LEFT JOIN zotero_documents d ON d.id = sn.document_id
+		LEFT JOIN store_documents d ON d.document_id = sn.document_id AND d.preferred
 		WHERE c.image_refs <> '[]'::jsonb
-		  AND ($1 = '' OR d.zotero_key = $1)
+		  AND ($1 = '' OR d.record_key = $1)
 		ORDER BY sn.document_id, c.chunk_index`, *docKey)
 	if err != nil {
 		fatal("select: %v", err)
