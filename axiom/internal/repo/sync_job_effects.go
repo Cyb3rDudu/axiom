@@ -1,10 +1,9 @@
-// sync_job_effects.go — the legacy sync lane's writes into STORE-owned
-// tables, exported for internal/library/mirror (F09 #303: the Zotero
-// mirror persistence moved to the Library side; these job/snapshot effects
-// stay Store-owned and are called by the mirror's canonical apply inside
-// the sync transaction — the documented dual-write of the transition,
-// abated when revision intake replaces the legacy lane / F12 splits
-// persistence).
+// sync_job_effects.go — the sync's STORE-side effects (#358): the mirror
+// apply commits on the Library database; these methods run in the sync's
+// separate store-effect transaction on the Store database (projection
+// writes, revision intake, failed-file records, snapshot reconciliation).
+// The projection (store_documents) is the Store's only rendition truth —
+// the reconcile reads it, never the Library's mirror.
 package repo
 
 import (
@@ -37,8 +36,8 @@ import (
 func (r *Repo) ReconcileAttachmentSnapshotsTx(ctx context.Context, tx pgx.Tx) error {
 	rows, err := tx.Query(ctx, `
 		UPDATE processing_snapshots s SET active=false, updated_at=now()
-		FROM zotero_attachments a
-		WHERE a.id = s.attachment_id AND a.deleted = true AND s.active = true
+		FROM store_documents p
+		WHERE p.attachment_id = s.attachment_id AND p.deleted = true AND s.active = true
 		RETURNING s.id::text, s.document_id::text, s.attachment_id::text`)
 	if err != nil {
 		return err
@@ -81,8 +80,8 @@ func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 		SELECT DISTINCT ON (s.document_id)
 			s.id::text, s.document_id::text, s.attachment_id::text
 		FROM processing_snapshots s
-		JOIN zotero_attachments a ON a.id = s.attachment_id
-		WHERE a.deleted = false
+		JOIN store_documents p ON p.attachment_id = s.attachment_id
+		WHERE p.deleted = false
 		  AND s.active = false
 		  AND NOT EXISTS (
 			-- #228: document scope — the 0019 invariant is one active per
@@ -134,55 +133,14 @@ func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 
-// writeJobsTx writes pending and failed ingest jobs within the given
-// transaction (ON CONFLICT DO NOTHING dedup for pending; failed jobs are
-// inserted). Returns (enqueued new jobs, failed jobs written).
-// #294 defense in depth: a pending insert is suppressed when the
-// attachment already has an ACTIVE snapshot for the SAME content hash —
-// the snapshot is the proof of processing (served chunks/index), so a
-// document whose job rows were pruned (retention) or lost any other way
-// is NOT re-enqueued as "never processed" while its content is unchanged.
-// A changed hash matches no active snapshot → the job enqueues normally;
-// explicit force rebuilds take a different path (force_rebuild=true) and
-// are never suppressed here.
-func (r *Repo) WriteSyncJobsTx(ctx context.Context, tx pgx.Tx, sourceID string, pending []PendingJob, failed []FailedJob) (int, int, error) {
-	inserted := 0
-	for _, p := range pending {
-		tag, err := tx.Exec(ctx, `
-			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-			SELECT $1,$2,$3,$4,'pending',false
-			WHERE NOT EXISTS (
-				-- #294: active snapshot for the SAME content = processed & served
-				SELECT 1 FROM processing_snapshots s
-				WHERE s.attachment_id = $3 AND s.content_hash = $4 AND s.active)
-			ON CONFLICT (attachment_id, content_hash) WHERE force_rebuild=false DO NOTHING
-		`, p.SourceID, p.DocumentID, p.AttachmentID, p.ContentHash)
-		if err != nil {
-			return 0, 0, err
-		}
-		inserted += int(tag.RowsAffected())
-		// A pending job means the file is processable again: any prior failed job
-		// for this attachment is now resolved, so a later real failure can create
-		// a fresh failed job instead of being masked by a stale one.
-		// #294 review (MAJOR 2): ONLY on an ACTUAL enqueue — a suppressed insert
-		// (snapshot served) processes nothing, so it resolves nothing. And the
-		// resolution sets resolved_at WITHOUT touching updated_at: the outcome
-		// read model orders by (updated_at, id), and bookkeeping must never
-		// re-rank the outcome row (the old bump let a stale failed row outrank
-		// the completed anchor → retention pruned the anchor while the sync
-		// defense kept the doc served at outcome=failed forever).
-		// Accepted residual (#294 review): the ON CONFLICT path (a pending
-		// row already exists for this attachment_id+content_hash) also skips
-		// resolution — that only leaves a stale error message on the failed
-		// row and never re-ranks the outcome key.
-		if tag.RowsAffected() > 0 {
-			if _, err := tx.Exec(ctx, `UPDATE ingest_jobs
-				SET resolved_at=now()
-				WHERE attachment_id=$1 AND status='failed' AND resolved_at IS NULL`, p.AttachmentID); err != nil {
-				return 0, 0, err
-			}
-		}
-	}
+// WriteFailedJobsTx records file-resolution failures as terminal failed
+// ingest rows (the sync's store-effect phase). The pending-lane mint died
+// with the legacy lane (#358): new work flows through revision intake
+// (EnqueueRevisionIntakeTx); these rows are listing signals only —
+// status='failed' at birth, never claimed. Idempotent only against an
+// UNRESOLVED identical failure; a historical (resolved) failure must not
+// suppress a new error event.
+func (r *Repo) WriteFailedJobsTx(ctx context.Context, tx pgx.Tx, failed []FailedJob) (int, error) {
 	failedWritten := 0
 	for _, f := range failed {
 		code := f.ErrorCode
@@ -193,13 +151,11 @@ func (r *Repo) WriteSyncJobsTx(ctx context.Context, tx pgx.Tx, sourceID string, 
 		if f.Retryable {
 			maxAt = 3
 		}
-		// Idempotent only against an UNRESOLVED identical failure; a historical
-		// (resolved) failure must not suppress a new error event.
 		var existing bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (
 			SELECT 1 FROM ingest_jobs WHERE attachment_id=$1 AND status='failed' AND error_code=$2 AND resolved_at IS NULL
 		)`, f.AttachmentID, code).Scan(&existing); err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 		if existing {
 			continue
@@ -209,9 +165,9 @@ func (r *Repo) WriteSyncJobsTx(ctx context.Context, tx pgx.Tx, sourceID string, 
 			VALUES ($1,$2,$3,'failed',$4,$5,$6)
 		`, f.SourceID, f.DocumentID, f.AttachmentID, code, f.ErrorMessage, maxAt)
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 		failedWritten += int(tag.RowsAffected())
 	}
-	return inserted, failedWritten, nil
+	return failedWritten, nil
 }

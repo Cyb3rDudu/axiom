@@ -109,6 +109,12 @@ type execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+// queryer is the QueryRow twin of execer: pool or caller-owned transaction
+// (the intake mint runs in both — the sync's store-effect phase owns the tx).
+type queryer interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // ClaimNextJob atomically claims the oldest eligible ingest job for the worker.
 //
 // Each candidate attempt runs in its own short transaction:
@@ -144,8 +150,9 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 	for {
 		// A fresh transaction per candidate attempt. Each obsolete skip COMMITS its
 		// own transaction, which releases the source advisory + row locks held by
-		// loadAndLockState, so a claim never holds one source's advisory lock while
-		// trying the next source (which would let two claimers deadlock across A/B).
+		// loadAndLockRevisionState, so a claim never holds one source's advisory
+		// lock while trying the next source (which would let two claimers
+		// deadlock across A/B).
 		tx, err := r.pool.Begin(ctx)
 		if err != nil {
 			return nil, err
@@ -204,19 +211,29 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 			return nil, nil
 		}
 
-		// Lock and read the job's source/document/attachment/canonical rows, then
-		// validate obsolescence against the LOCKED state so a snapshot is never
+		// Lock and read the job's rendition projection row, then validate
+		// obsolescence against the LOCKED state so a snapshot is never
 		// built from a row that changed under us or a mixed transaction snapshot.
-		// Revision-lane jobs (F09 #303) resolve their FKs from the mirror here —
-		// the documented dual-read; Zotero identities stay opaque references.
-		var state *frozenState
-		var reason string
-		var err2 error
-		if cand.intakeKind == "revision" {
-			state, reason, err2 = r.loadAndLockRevisionState(ctx, tx, cand)
-		} else {
-			state, reason, err2 = r.loadAndLockState(ctx, tx, cand)
+		// The revision lane (F09 #303) resolves its identities from the
+		// Store's own projection (#358); the legacy mirror-read lane died
+		// with the mirror's move to the Library database — a legacy-lane
+		// candidate is obsoleted with a readable reason (the revision
+		// intake re-offers its work on the next sync).
+		if cand.intakeKind != "revision" {
+			if err := r.markObsolete(ctx, tx, cand.id, "LEGACY_LANE_RETIRED"); err != nil {
+				tx.Rollback(ctx)
+				return nil, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, err
+			}
+			skipped++
+			if skipped >= maxObsoleteSkips {
+				return nil, nil
+			}
+			continue
 		}
+		state, reason, err2 := r.loadAndLockRevisionState(ctx, tx, cand)
 		if err2 != nil {
 			tx.Rollback(ctx)
 			return nil, err2
@@ -266,16 +283,7 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 		}
 		idemKey := idempotencyKey(cand.id, state.attachment.id, state.attachment.contentHash, profileHash, cand.forceRebuild)
 		var snapshot []byte
-		if cand.intakeKind == "revision" {
-			var fr revision.SourceRevision
-			if err := json.Unmarshal(cand.revJSON, &fr); err != nil {
-				tx.Rollback(ctx)
-				return nil, fmt.Errorf("revision json: %w", err)
-			}
-			snapshot = buildRevisionFrozenInput(cand, state, proc, profileHash, idemKey, fr)
-		} else {
-			snapshot = buildFrozenInput(cand, state, proc, profileHash, idemKey)
-		}
+		snapshot = buildRevisionFrozenInput(cand, state, proc, profileHash, idemKey)
 
 		var newAttempt int
 		var tsToken string
@@ -298,15 +306,12 @@ func (r *Repo) ClaimNextJob(ctx context.Context, opts ClaimOptions) (*ClaimedJob
 				processing_profile= COALESCE(processing_profile, $6::jsonb),
 				profile_hash      = COALESCE(profile_hash, $7),
 				idempotency_key   = COALESCE(idempotency_key, $8),
-				updated_at        = now()`
-		claimArgs := []any{cand.id, opts.WorkerID, opts.RunnerName, leaseSec, snapshot, procCanonical, profileHash, idemKey}
-		if cand.intakeKind == "revision" {
-			claimSQL += `,
+				updated_at        = now(),
 				source_id     = $9::uuid,
 				document_id   = $10::uuid,
 				attachment_id = $11::uuid`
-			claimArgs = append(claimArgs, state.source.id, state.document.id, state.attachment.id)
-		}
+		claimArgs := []any{cand.id, opts.WorkerID, opts.RunnerName, leaseSec, snapshot, procCanonical, profileHash, idemKey,
+			state.source.id, state.document.id, state.attachment.id}
 		claimSQL += `
 				WHERE id = $1
 				RETURNING attempt, lease_token::text, lease_until`
@@ -395,9 +400,8 @@ func (r *Repo) terminalizeStale(ctx context.Context, tx pgx.Tx) error {
 
 // claimCandidate locks and returns the oldest still-claimable JOB (FOR UPDATE
 // OF j SKIP LOCKED). It locks only the ingest_jobs row; the dependent
-// source/document/attachment/canonical rows are locked and read separately by
-// loadAndLockState in a fixed order. Returns (nil, nil) when nothing is
-// claimable.
+// projection row is locked and read separately by
+// loadAndLockRevisionState. Returns (nil, nil) when nothing is claimable.
 func claimCandidate(ctx context.Context, tx pgx.Tx) (*candidate, error) {
 	sql := `
 		SELECT j.id::text, j.attempt, j.max_attempts, j.content_hash, j.force_rebuild,
@@ -459,28 +463,29 @@ type candidate struct {
 	revJSON      []byte
 }
 
-// frozenState is the locked-and-read source/document/attachment/canonical state
-// for a claim. Every field is read WITH the row locked in the claim transaction,
-// so the snapshot built from it is a consistent point-in-time view (never a mix
-// of rows changed concurrently by a sync).
+// frozenState is the locked-and-read projection state for a claim: the
+// rendition's store_documents row (source/document/attachment identities
+// and file facts) plus the parsed revision. Every field is read WITH the
+// row locked in the claim transaction, so the snapshot built from it is a
+// consistent point-in-time view (never a mix of rows changed concurrently
+// by a sync).
 type frozenState struct {
-	source     zoteroSourceRow
-	document   zoteroDocRow
-	attachment zoteroAttachRow
+	source     claimSourceRow
+	document   claimDocRow
+	attachment claimAttachRow
+	revision   *revision.SourceRevision
 }
 
-type zoteroSourceRow struct {
+type claimSourceRow struct {
 	id       string
 	serverID *string
 }
 
-type zoteroDocRow struct {
-	id              string
-	sourceID        string
-	zoteroKey       string
-	zoteroVersion   int64
-	canonicalItemID *string
-	deleted         bool
+type claimDocRow struct {
+	id        string
+	sourceID  string
+	zoteroKey string
+	zoteroVersion int64
 	// contextual (#255): citation_class='contextual' — the claim-time KG
 	// gate clears the extraction flags for contextual documents.
 	contextual bool
@@ -489,199 +494,20 @@ type zoteroDocRow struct {
 	rawData    json.RawMessage
 }
 
-type zoteroAttachRow struct {
-	id            string
-	sourceID      string
-	documentID    string
-	zoteroKey     string
+type claimAttachRow struct {
+	id          string
+	sourceID    string
+	documentID  string
+	zoteroKey   string
 	zoteroVersion int64
-	contentType   *string
-	filename      *string
-	localPath     *string
-	contentHash   *string
-	fileSize      *int64
-	mtimeMS       *int64
-	preferred     bool
-	deleted       bool
-}
-
-// loadAndLockState locks and reads the job's source, document, attachment and
-// the document's canonical item rows so a snapshot is never built from a row
-// that changed under us or from a mixed transaction view.
-//
-// Deadlock avoidance: BEFORE locking any dependency row the claim takes the same
-// per-source advisory lock the canonical sync holds for its whole run
-// (pg_advisory_xact_lock on LockKey(sourceID); session and transaction advisory
-// locks on the same key share one namespace and exclude each other). Only one of
-// a claim or a sync for that source is then active at a time, so the claim can
-// never deadlock against the sync's item->document write order; it simply waits.
-// Dependency rows are
-// then locked in a fixed order (source -> document -> attachment -> canonical
-// item).
-//
-// Returns a non-empty obsolete reason when any dependent row is missing,
-// deleted/unpreferred or hash-stale, so no FrozenInput is ever built from a
-// broken or mid-flight state.
-func (r *Repo) loadAndLockState(ctx context.Context, tx pgx.Tx, c *candidate) (*frozenState, string, error) {
-	s := &frozenState{}
-
-	if c.sourceID == "" || c.documentID == "" {
-		return nil, "PARENT_REMOVED", nil
-	}
-	// Serialize against the canonical sync for this source before locking any
-	// dependency rows.
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, LockKey(c.sourceID)); err != nil {
-		return nil, "", fmt.Errorf("acquire source lock: %w", err)
-	}
-
-	err := tx.QueryRow(ctx, `
-		SELECT id::text, server_id FROM zotero_sources WHERE id=$1 FOR UPDATE`, c.sourceID).Scan(
-		&s.source.id, &s.source.serverID)
-	if err == pgx.ErrNoRows {
-		return nil, "PARENT_REMOVED", nil
-	}
-	if err != nil {
-		return nil, "", fmt.Errorf("lock source: %w", err)
-	}
-
-	var docParentKey, docLinkMode *string
-	err = tx.QueryRow(ctx, `
-		SELECT id::text, source_id::text, zotero_key, zotero_version, canonical_item_id::text, deleted,
-		       COALESCE(citation_class,'citable') = 'contextual'
-		FROM zotero_documents WHERE id=$1 FOR UPDATE`, c.documentID).Scan(
-		&s.document.id, &s.document.sourceID, &s.document.zoteroKey, &s.document.zoteroVersion,
-		&s.document.canonicalItemID, &s.document.deleted, &s.document.contextual)
-	if err == pgx.ErrNoRows {
-		return nil, "PARENT_REMOVED", nil
-	}
-	if err != nil {
-		return nil, "", fmt.Errorf("lock document: %w", err)
-	}
-	if s.document.deleted {
-		return nil, "ATTACHMENT_REMOVED", nil
-	}
-
-	// 3. Attachment (parent_zotero_key + link_mode come from the attachment row).
-	if c.attachmentID == "" {
-		return nil, "PARENT_REMOVED", nil
-	}
-	err = tx.QueryRow(ctx, `
-		SELECT id::text, source_id::text, document_id::text, zotero_key, zotero_version, content_type, filename, local_path,
-		       content_hash, file_size, mtime_ms, preferred, deleted, parent_zotero_key, link_mode
-		FROM zotero_attachments WHERE id=$1 FOR UPDATE`, c.attachmentID).Scan(
-		&s.attachment.id, &s.attachment.sourceID, &s.attachment.documentID, &s.attachment.zoteroKey, &s.attachment.zoteroVersion,
-		&s.attachment.contentType, &s.attachment.filename, &s.attachment.localPath,
-		&s.attachment.contentHash, &s.attachment.fileSize, &s.attachment.mtimeMS,
-		&s.attachment.preferred, &s.attachment.deleted,
-		&docParentKey, &docLinkMode)
-	if err == pgx.ErrNoRows {
-		return nil, "ATTACHMENT_REMOVED", nil
-	}
-	if err != nil {
-		return nil, "", fmt.Errorf("lock attachment: %w", err)
-	}
-	if s.attachment.deleted {
-		return nil, "ATTACHMENT_REMOVED", nil
-	}
-	if !s.attachment.preferred {
-		return nil, "ATTACHMENT_NOT_PREFERRED", nil
-	}
-	// FK membership chain: the job's source/document/attachment must all belong to
-	// one consistent Zotero hierarchy, or the job is broken (cross-source or
-	// cross-document) and must be skipped, not have B/C rows frozen together.
-	if s.document.sourceID != c.sourceID || s.attachment.sourceID != c.sourceID ||
-		s.attachment.documentID != c.documentID {
-		return nil, "PARENT_REMOVED", nil
-	}
-	// The attachment must be a child of this document: its parent_zotero_key must
-	// equal the document's zotero_key.
-	if docParentKey == nil || *docParentKey != s.document.zoteroKey {
-		return nil, "PARENT_REMOVED", nil
-	}
-
-	// Current-hash requirement (F4): the processor contract requires a hash
-	// comparison, so a job whose attachment has NO current hash cannot be claimed
-	// at all, including force-rebuild. Such jobs skip as CONTENT_HASH_MISSING.
-	hash := s.attachment.contentHash
-	if hash == nil || *hash == "" {
-		return nil, "CONTENT_HASH_MISSING", nil
-	}
-	// Job-vs-current hash consistency: with a real current hash, a non-forced job
-	// must not be claimed unless it knows the same hash. If the job's stored hash
-	// is NULL or differs, the job predates the current file -> CHANGED. A force
-	// rebuild intentionally ignores the stale job-level hash (but still requires a
-	// real current hash, per F4).
-	if !c.forceRebuild && (c.contentHash == nil || *c.contentHash != *hash) {
-		return nil, "CONTENT_HASH_CHANGED", nil
-	}
-	s.document.parentKey, s.document.linkMode = docParentKey, docLinkMode
-
-	// 4. Lossless canonical metadata (Zotero is the source of truth). The
-	// document's canonical item must exist, belong to this source AND carry the
-	// document's zotero_key AND be active (not deleted). Missing / drifted /
-	// deleted canonical metadata is a HARD skip (CANONICAL_METADATA_MISSING): it
-	// must never be silently replaced by a lossy normalized projection, because a
-	// document could otherwise be processed with incomplete citation metadata.
-	if s.document.canonicalItemID == nil {
-		return nil, "CANONICAL_METADATA_MISSING", nil
-	}
-	var raw []byte
-	err = tx.QueryRow(ctx, `
-		SELECT raw_data FROM zotero_items
-		WHERE id=$1 AND source_id=$2 AND zotero_key=$3 AND deleted=false
-		FOR UPDATE`, *s.document.canonicalItemID, c.sourceID, s.document.zoteroKey).Scan(&raw)
-	if err == pgx.ErrNoRows {
-		return nil, "CANONICAL_METADATA_MISSING", nil
-	}
-	if err != nil {
-		return nil, "", fmt.Errorf("lock canonical item: %w", err)
-	}
-	if len(raw) == 0 {
-		return nil, "CANONICAL_METADATA_MISSING", nil
-	}
-	s.document.rawData = raw
-	return s, "", nil
-}
-
-// buildFrozenInput assembles the durable immutable snapshot for a claim from the
-// locked state and the canonicalized processing profile. The metadata_snapshot is
-// the lossless canonical raw_data; if that is unavailable the caller must have
-// skipped the job, so buildFrozenInput is never reached with empty canonical
-// metadata.
-func buildFrozenInput(c *candidate, s *frozenState, proc FrozenProcessing, profileHash, idemKey string) []byte {
-	fi := FrozenInput{
-		ContractVersion: "1.0",
-		JobID:           c.id,
-		IdempotencyKey:  idemKey,
-		ProfileHash:     profileHash,
-		Source: FrozenSource{
-			Type:     "zotero",
-			SourceID: s.source.id,
-			ServerID: s.source.serverID,
-		},
-		Document: FrozenDocument{
-			DocumentID:       s.document.id,
-			ZoteroKey:        s.document.zoteroKey,
-			ZoteroVersion:    s.document.zoteroVersion,
-			MetadataSnapshot: metadataSnapshot(s.document.rawData),
-		},
-		Attachment: FrozenAttachment{
-			AttachmentID:  s.attachment.id,
-			ZoteroKey:     s.attachment.zoteroKey,
-			ZoteroVersion: s.attachment.zoteroVersion,
-			ParentKey:     derefStr(s.document.parentKey),
-			LinkMode:      derefStr(s.document.linkMode),
-			ContentType:   s.attachment.contentType,
-			Filename:      s.attachment.filename,
-			LocalPath:     s.attachment.localPath,
-			ContentHash:   s.attachment.contentHash,
-			SizeBytes:     s.attachment.fileSize,
-			MtimeMS:       s.attachment.mtimeMS,
-		},
-		Processing: proc,
-	}
-	b, _ := json.Marshal(fi)
-	return b
+	contentType *string
+	filename    *string
+	localPath   *string
+	contentHash *string
+	fileSize    *int64
+	mtimeMS     *int64
+	preferred   bool
+	deleted     bool
 }
 
 func derefStr(p *string) string {
@@ -900,18 +726,18 @@ func (r *Repo) MarkCompletedTx(ctx context.Context, tx pgx.Tx, ref LeaseRef, pro
 		  AND j.lease_until IS NOT NULL AND j.lease_until > clock_timestamp()
 		  AND j.cancel_requested_at IS NULL
 		  AND EXISTS (
-		        SELECT 1 FROM zotero_attachments a
-		        JOIN zotero_documents d ON d.id = a.document_id
-		        WHERE a.id = j.attachment_id
-		          AND a.deleted = false AND a.preferred = true
-		          AND d.deleted = false
-		          AND a.source_id = j.source_id
-		          AND a.document_id = j.document_id
-		          AND d.source_id = j.source_id
-		          AND a.parent_zotero_key = d.zotero_key
+		        -- #358: the chain guard resolves against the Store's own
+		        -- projection row (one row per rendition carries document +
+		        -- attachment identity together — the parent-chain check is
+		        -- structural, no join needed).
+		        SELECT 1 FROM store_documents p
+		        WHERE p.attachment_id = j.attachment_id
+		          AND p.document_id = j.document_id
+		          AND p.source_id::text = j.source_id::text
+		          AND p.deleted = false AND p.preferred = true
 		          AND j.input_snapshot IS NOT NULL
 		          AND (j.input_snapshot->'attachment'->>'content_hash') IS NOT NULL
-		          AND (j.input_snapshot->'attachment'->>'content_hash') = a.content_hash
+		          AND (j.input_snapshot->'attachment'->>'content_hash') = p.content_hash
 		      )
 	`, ref, processorName, processorVersion, snapshotID)
 	if err != nil {

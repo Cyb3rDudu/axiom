@@ -610,9 +610,13 @@ func (r *Repo) loadJobForPersist(ctx context.Context, jobID string) (*FrozenInpu
 		       j.attachment_id::text, j.document_id::text,
 		       (j.input_snapshot->'attachment'->>'content_hash')::text,
 		       COALESCE(j.claimed_by,''), COALESCE(j.lease_token::text,''),
-		       COALESCE(d.citation_class,'citable') = 'contextual'
+		       COALESCE(p.citation_class,'citable') = 'contextual'
 		FROM ingest_jobs j
-		LEFT JOIN zotero_documents d ON d.id = j.document_id
+		LEFT JOIN LATERAL (
+			SELECT sd.citation_class FROM store_documents sd
+			WHERE sd.document_id = j.document_id
+			ORDER BY sd.preferred DESC, sd.updated_at DESC LIMIT 1
+		) p ON true
 		WHERE j.id=$1`, jobID).Scan(
 		&inputSnap, &profileHash, &attachmentID, &documentID, &contentHash, &claimedBy, &leaseToken, &contextual)
 	if err != nil {

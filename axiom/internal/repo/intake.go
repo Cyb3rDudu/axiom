@@ -1,8 +1,8 @@
 // intake.go — the revision-typed intake mint (F09 #303): IngestRevision's
 // durable half. One statement decides replay / mismatch / dedup / mint;
-// the #294 active-snapshot suppression is applied via the mirror-resolved
-// attachment (the documented dual-read — SQL against the shared mirror
-// tables, no adapter import; DM06/F12 abate it).
+// the #294 active-snapshot suppression resolves against the Store's own
+// store_documents projection (#358 — no mirror access: the rendition's
+// durable attachment identity was denormalized at intake/sync time).
 package repo
 
 import (
@@ -28,10 +28,10 @@ var ErrIntakeKeyMismatch = errors.New("intake idempotency key reused with a diff
 // of the subtle `(revision_json = $2::jsonb)` comparison would drift
 // silently on the effectively-untestable race path). Returns the replay
 // job, ErrIntakeKeyMismatch, or pgx.ErrNoRows (caller decides).
-func (r *Repo) resolveIntakeKey(ctx context.Context, req IntakeRequest) (*Job, error) {
+func resolveIntakeKey(ctx context.Context, q queryer, req IntakeRequest) (*Job, error) {
 	var existing Job
 	var identical bool
-	err := r.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT id::text, status::text, COALESCE(content_hash,''), attempt, max_attempts,
 		       enqueued_at::text, error_code, error_message, COALESCE(revision_no,''), updated_at,
 		       (revision_json = $2::jsonb)
@@ -78,11 +78,22 @@ type IntakeRequest struct {
 //   - (job, true, nil): a NEW pending job was minted
 //
 // The document/attachment FK columns stay NULL at mint; the claim resolves
-// them from the mirror (loadAndLockState's revision lane).
+// them from the store_documents projection (loadAndLockRevisionState).
 func (r *Repo) EnqueueRevisionIntake(ctx context.Context, req IntakeRequest) (*Job, bool, error) {
+	return r.enqueueRevisionIntake(ctx, r.pool, req)
+}
+
+// EnqueueRevisionIntakeTx is the caller-transaction variant: the sync's
+// store-effect phase mints (projection upserts, failed-file records and
+// snapshot reconciliation share one commit).
+func (r *Repo) EnqueueRevisionIntakeTx(ctx context.Context, tx pgx.Tx, req IntakeRequest) (*Job, bool, error) {
+	return r.enqueueRevisionIntake(ctx, tx, req)
+}
+
+func (r *Repo) enqueueRevisionIntake(ctx context.Context, ex queryer, req IntakeRequest) (*Job, bool, error) {
 	// Intake-key idempotency precedes everything (the contract's
 	// precedence rule; validation happened in the service layer already).
-	existing, err := r.resolveIntakeKey(ctx, req)
+	existing, err := resolveIntakeKey(ctx, ex, req)
 	if err == nil {
 		return existing, false, nil // replay: the SAME job, no side effects
 	}
@@ -96,14 +107,14 @@ func (r *Repo) EnqueueRevisionIntake(ctx context.Context, req IntakeRequest) (*J
 
 	// Mint (or join) by revision identity, with the #294 suppression in the
 	// same statement (the legacy writeJobsTx shape): an ACTIVE snapshot for
-	// the same content on the rendition's CURRENT attachment row means
+	// the same content on the rendition's CURRENT projection row means
 	// processed-and-served — no re-enqueue while unchanged. An unresolvable
-	// mirror row mints the job with NULL FKs; the claim obsoletes it with a
-	// readable reason (transition-honest: intake never refuses on a mirror
-	// miss — the boundary keeps the Library out of the intake decision).
+	// projection row mints the job with NULL FKs; the claim obsoletes it with a
+	// readable reason (transition-honest: intake never refuses on a missing
+	// projection — the boundary keeps the Library out of the intake decision).
 	var job Job
 	var joinedExisting bool
-	err = r.pool.QueryRow(ctx, `
+	err = ex.QueryRow(ctx, `
 		INSERT INTO ingest_jobs (intake_kind, intake_idempotency_key, content_hash, status,
 		                         revision_source_id, revision_record_id, revision_rendition_id,
 		                         revision_no, revision_json, max_attempts)
@@ -111,8 +122,8 @@ func (r *Repo) EnqueueRevisionIntake(ctx context.Context, req IntakeRequest) (*J
 		WHERE NOT EXISTS (
 			-- #294: active snapshot for the SAME content = processed & served
 			SELECT 1 FROM processing_snapshots s
-			JOIN zotero_attachments a ON a.id = s.attachment_id
-			WHERE a.source_id::text = $3 AND a.zotero_key = $5 AND a.deleted = false
+			JOIN store_documents p ON p.attachment_id = s.attachment_id
+			WHERE p.source_id::text = $3 AND p.rendition_key = $5 AND p.deleted = false
 			  AND s.content_hash = $2 AND s.active)
 		ON CONFLICT (revision_source_id, revision_rendition_id, content_hash)
 		WHERE intake_kind='revision' AND force_rebuild=false
@@ -136,7 +147,7 @@ func (r *Repo) EnqueueRevisionIntake(ctx context.Context, req IntakeRequest) (*J
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == intakeKeyConstraint {
 			// The concurrent winner committed (Postgres blocks on
 			// uncommitted index entries): re-ask and classify honestly.
-			replay, rerr := r.resolveIntakeKey(ctx, req)
+			replay, rerr := resolveIntakeKey(ctx, ex, req)
 			if rerr != nil {
 				return nil, false, rerr
 			}

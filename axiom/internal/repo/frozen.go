@@ -18,8 +18,8 @@ import (
 
 // FrozenInput is the durable, immutable snapshot stored in ingest_jobs.input_snapshot
 // at claim time. It captures the source/document/attachment identity, all date
-// facts and the full bibliographic metadata snapshot (losslessly from the
-// canonical Zotero mirror), plus the processing identity. Field order follows the
+// facts and the full bibliographic metadata snapshot (the revision contract's
+// bibliography), plus the processing identity. Field order follows the
 // PROCESSOR_CONTRACT.md request so a dispatcher can deserialize the source/
 // document/attachment/processing blocks directly; ProfileHash is snapshot
 // IDENTITY (also stored in ingest_jobs.profile_hash), not part of the emit block.
@@ -133,19 +133,6 @@ func canonicalBytes(p FrozenProcessing) ([]byte, string, error) {
 	}
 	sum := sha256.Sum256(b)
 	return b, hex.EncodeToString(sum[:]), nil
-}
-
-// metadataSnapshot returns the lossless canonical zotero_items.raw_data AS-IS.
-// The caller is responsible for ensuring the canonical item exists and is active;
-// when rawData is empty (no canonical item/raw metadata), metadataSnapshot returns
-// nil so the caller must skip the job (CANONICAL_METADATA_MISSING) rather than
-// silently build a lossy projection. Zotero is the source of truth; missing,
-// deleted or drifted canonical metadata is never replaced by a runtime fallback.
-func metadataSnapshot(rawData json.RawMessage) json.RawMessage {
-	if len(rawData) > 0 {
-		return rawData
-	}
-	return nil
 }
 
 // idempotencyKey derives the processor idempotency key from the frozen identity.

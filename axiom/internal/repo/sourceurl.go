@@ -36,10 +36,10 @@ type ProcessorSource struct {
 func (r *Repo) ProcessorSource(ctx context.Context, jobID string) (ProcessorSource, error) {
 	var s ProcessorSource
 	err := r.pool.QueryRow(ctx, `
-		SELECT a.local_path, a.content_type, j.status,
+		SELECT p.local_path, p.content_type, j.status,
 		       (j.lease_until IS NOT NULL AND j.lease_until > now()) AS lease_fresh
 		FROM ingest_jobs j
-		JOIN zotero_attachments a ON a.id = j.attachment_id
+		JOIN store_documents p ON p.attachment_id = j.attachment_id
 		WHERE j.id = $1::uuid
 	`, jobID).Scan(&s.LocalPath, &s.ContentType, &s.Status, &s.LeaseFresh)
 	if err != nil {

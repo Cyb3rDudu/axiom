@@ -3,12 +3,12 @@ package repo
 import (
 	"context"
 	"encoding/json"
-	"strings"
 )
 
 // documentMetaRow is the search source-hydration query shape (R3 #133):
-// OS hits carry only document_id; title/authors/year/publisher live in
-// zotero_documents.
+// OS hits carry only document_id; the bibliographic block lives in the
+// Store's own store_documents projection (#358 — the Zotero mirror is
+// Library-side; titles travel at intake time).
 type documentMetaRow struct {
 	ID            string          `json:"id"`
 	Title         string          `json:"title"`
@@ -19,14 +19,6 @@ type documentMetaRow struct {
 	Tags          json.RawMessage `json:"tags"`
 	ContentType   string          `json:"content_type"`
 	CitationClass string          `json:"citation_class"`
-}
-
-// zoteroCreator matches zotero.Creator's persisted JSONB shape.
-type zoteroCreator struct {
-	FirstName   string `json:"firstName"`
-	LastName    string `json:"lastName"`
-	Name        string `json:"name"`
-	CreatorType string `json:"creatorType"`
 }
 
 // DocumentMeta is the bibliographic block for one document.
@@ -46,27 +38,27 @@ type DocumentMeta struct {
 	CitationClass string
 }
 
-// DocumentMetaByIDs returns metadata for the given zotero_documents ids.
-// Missing ids are simply absent from the map (search degrades the source
-// block, not the hit).
+// DocumentMetaByIDs returns metadata for the given document ids from the
+// Store's projection. Missing ids are simply absent from the map (search
+// degrades the source block, not the hit). A document with several
+// rendition rows resolves to its preferred (then newest) row.
 func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]DocumentMeta, error) {
 	out := make(map[string]DocumentMeta, len(ids))
 	if len(ids) == 0 {
 		return out, nil
 	}
 	rows, err := r.pool.Query(ctx, `
-	SELECT d.id::text, d.title, d.creators, d.publication_year, COALESCE(d.publisher, ''),
-	       COALESCE(d.language, ''), COALESCE(d.tags, '[]'::jsonb), COALESCE(act.content_type, ''),
-	       COALESCE(d.citation_class, 'citable')
-			FROM zotero_documents d
+	SELECT DISTINCT ON (document_id) d.document_id::text, d.title, d.creators, d.publication_year, d.publisher,
+	       d.language, d.tags, COALESCE(act.content_type, ''), COALESCE(d.citation_class, 'citable')
+			FROM store_documents d
 			LEFT JOIN LATERAL (
 				SELECT a.content_type
 				FROM processing_snapshots s
-				JOIN zotero_attachments a ON a.id = s.attachment_id
-				WHERE s.document_id = d.id AND s.active
+				WHERE s.document_id = d.document_id AND s.active
 				LIMIT 1
 			) act ON true
-				WHERE d.id = ANY($1::uuid[]) AND NOT d.deleted`, ids)
+				WHERE d.document_id = ANY($1::uuid[]) AND NOT d.deleted
+				ORDER BY document_id, d.preferred DESC, d.updated_at DESC`, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -76,26 +68,14 @@ func (r *Repo) DocumentMetaByIDs(ctx context.Context, ids []string) (map[string]
 		if err := rows.Scan(&row.ID, &row.Title, &row.Creators, &row.Year, &row.Publisher, &row.Language, &row.Tags, &row.ContentType, &row.CitationClass); err != nil {
 			return nil, err
 		}
-		var cs []zoteroCreator
-		_ = json.Unmarshal(row.Creators, &cs)
-		authors := make([]string, 0, len(cs))
-		for _, c := range cs {
-			switch {
-			case c.Name != "":
-				authors = append(authors, c.Name)
-			case c.FirstName != "" || c.LastName != "":
-				authors = append(authors, strings.TrimSpace(c.FirstName+" "+c.LastName))
-			}
+		var authors, tags []string
+		_ = json.Unmarshal(row.Creators, &authors)
+		_ = json.Unmarshal(row.Tags, &tags)
+		if authors == nil {
+			authors = []string{}
 		}
-		var ts []struct {
-			Tag string `json:"tag"`
-		}
-		_ = json.Unmarshal(row.Tags, &ts)
-		tags := make([]string, 0, len(ts))
-		for _, t := range ts {
-			if t.Tag != "" {
-				tags = append(tags, t.Tag)
-			}
+		if tags == nil {
+			tags = []string{}
 		}
 		out[row.ID] = DocumentMeta{Title: row.Title, Authors: authors, Year: row.Year, Publisher: row.Publisher, Language: row.Language, Tags: tags, ContentType: row.ContentType, CitationClass: row.CitationClass}
 	}

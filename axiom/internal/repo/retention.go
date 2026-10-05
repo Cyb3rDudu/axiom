@@ -90,13 +90,13 @@ type RetentionReport struct {
 		// pointless reprocessing; the count does not gate anything here.
 		SnapshotDocsNoJobRow int `json:"snapshot_docs_without_job_row"`
 	} `json:"jobs"`
-	// Attachments carries the informational counter reconciliation: open
-	// cases per attachment counter state. Report-only (the attempts
-	// counter is loop-guard truth and is never rewritten here).
-	Attachments struct {
-		WithRepairAttempts int `json:"with_repair_attempts"`
-		OpenRepairCases    int `json:"open_repair_cases"`
-	} `json:"attachments"`
+	// Renditions carries the informational repair-linkage reconciliation
+	// (report-only). The repair queue itself is Library-side since #358;
+	// the Store sees the set-once repair_linked projection flag the
+	// repair track maintains through the exported repo seam.
+	Renditions struct {
+		RepairLinked int `json:"repair_linked"`
+	} `json:"renditions"`
 }
 
 // supersededSnapshotGuard is THE one definition of "superseded and safe to
@@ -117,9 +117,10 @@ const supersededSnapshotSQL = "\n\tFROM processing_snapshots s\n\tWHERE " + supe
 //
 //  1. the NEWEST job row (updated_at DESC, id DESC — exactly the
 //     selection read model's lateral join) of the PREFERRED, non-deleted
-//     attachment;
+//     rendition (store_documents — the Store's own projection since
+//     #358; the mirror is Library-side);
 //  2. (#294) the newest job row BY THAT SAME KEY of the DOCUMENT,
-//     across ALL its attachments, REGARDLESS of age, preferred/deleted
+//     across ALL its renditions, REGARDLESS of age, preferred/deleted
 //     state or snapshot linkage — "latest job" IS the outcome-truth
 //     record (#252 semantics); age only prunes OLDER attempts.
 //
@@ -135,30 +136,32 @@ const supersededSnapshotSQL = "\n\tFROM processing_snapshots s\n\tWHERE " + supe
 // Branch notes (kept OUT of the SQL: pg_stat_activity truncates query
 // text at 1024 bytes, and the tranche choreography witnesses match the
 // query tail — "FOR UPDATE" must stay inside the stored text):
-//   - the FK-anchored branch covers both lanes once claimed (the mirror
-//     rules unchanged from the pre-F09 inner join);
+//   - the projection-anchored branch covers both lanes once claimed;
 //   - the revision branch catches FK-less terminal rows (obsoleted at
-//     claim, REVISION_REF_UNRESOLVED &c) — the mirror anchor can never
-//     see them; the identity dedup is scoped to ACTIVE rows, so pruning
-//     the corpse cannot strand a re-intake; age is their guard.
+//     claim, REVISION_REF_UNRESOLVED &c) — the anchor can never see
+//     them; the identity dedup is scoped to ACTIVE rows, so pruning the
+//     corpse cannot strand a re-intake; age is their guard.
+//   - the repair guard reads the projection's repair_linked flag (set
+//     once by the Library-side repair track through the exported repo
+//     seam — the repair queue itself lives on the Library database).
 //
 // Byte budget: the composed tranche SELECT is ~950 bytes — pg_stat_activity
 // truncates stored query text at 1024, and the choreography witnesses match
 // the query tail (FOR UPDATE must stay inside it). Re-measure before
 // extending this fragment.
 const prunableJobSQL = `	FROM ingest_jobs j
-	LEFT JOIN zotero_attachments a ON a.id = j.attachment_id
+	LEFT JOIN store_documents p ON p.attachment_id = j.attachment_id
 	WHERE j.status IN ('completed','failed','cancelled','skipped')
 	  AND j.enqueued_at < now() - make_interval(secs => $1)
-	  AND ((a.id IS NOT NULL
-	      AND NOT (a.preferred AND NOT a.deleted
+	  AND ((p.attachment_id IS NOT NULL
+	      AND NOT (p.preferred AND NOT p.deleted
 	        AND NOT EXISTS (SELECT 1 FROM ingest_jobs j2
-	          WHERE j2.attachment_id = a.id AND (j2.updated_at, j2.id) > (j.updated_at, j.id)))
+	          WHERE j2.attachment_id = p.attachment_id AND (j2.updated_at, j2.id) > (j.updated_at, j.id)))
 	      AND EXISTS (SELECT 1 FROM ingest_jobs j2
-	        JOIN zotero_attachments a2 ON a2.id = j2.attachment_id
-	        WHERE a2.document_id = a.document_id AND (j2.updated_at, j2.id) > (j.updated_at, j.id)))
+	        JOIN store_documents p2 ON p2.attachment_id = j2.attachment_id
+	        WHERE p2.document_id = p.document_id AND (j2.updated_at, j2.id) > (j.updated_at, j.id)))
 	   OR (j.intake_kind = 'revision' AND j.attachment_id IS NULL))
-	  AND NOT EXISTS (SELECT 1 FROM repair_cases rc WHERE rc.attachment_id = j.attachment_id)
+	  AND NOT EXISTS (SELECT 1 FROM store_documents pr WHERE pr.attachment_id = j.attachment_id AND pr.repair_linked)
 	  AND NOT EXISTS (SELECT 1 FROM processing_snapshots s WHERE s.ingest_job_id = j.id AND s.active)`
 
 // Note: the repair-case guard is vacuous for the FK-less revision branch
@@ -231,35 +234,34 @@ func (r *Repo) RetentionPlan(ctx context.Context, jobMinAge time.Duration) (*Ret
 		{&rep.Jobs.KeepNonTerminal, false, " FROM ingest_jobs WHERE status IN ('pending','claimed','processing')"},
 		{&rep.Jobs.KeepLatest, true, `
 	FROM ingest_jobs j
-	JOIN zotero_attachments a ON a.id = j.attachment_id
+	JOIN store_documents p ON p.attachment_id = j.attachment_id
 	WHERE j.status IN ('completed','failed','cancelled','skipped')
 	  AND j.enqueued_at < now() - make_interval(secs => $1)
-	  AND a.preferred AND NOT a.deleted
+	  AND p.preferred AND NOT p.deleted
 	  AND NOT EXISTS (SELECT 1 FROM ingest_jobs j2
-	                  WHERE j2.attachment_id = a.id
+	                  WHERE j2.attachment_id = p.attachment_id
 	                    AND (j2.updated_at, j2.id) > (j.updated_at, j.id))
-	  AND NOT EXISTS (SELECT 1 FROM repair_cases rc WHERE rc.attachment_id = j.attachment_id)
+	  AND NOT EXISTS (SELECT 1 FROM store_documents pr WHERE pr.attachment_id = j.attachment_id AND pr.repair_linked)
 	  AND NOT EXISTS (SELECT 1 FROM processing_snapshots s
 	                  WHERE s.ingest_job_id = j.id AND s.active)`},
 		{&rep.Jobs.KeepRepairLinked, true, `
 	FROM ingest_jobs j
 	WHERE j.status IN ('completed','failed','cancelled','skipped')
 	  AND j.enqueued_at < now() - make_interval(secs => $1)
-	  AND EXISTS (SELECT 1 FROM repair_cases rc WHERE rc.attachment_id = j.attachment_id)`},
+	  AND EXISTS (SELECT 1 FROM store_documents pr WHERE pr.attachment_id = j.attachment_id AND pr.repair_linked)`},
 		{&rep.Jobs.KeepActiveSnap, true, `
 	FROM ingest_jobs j
 	WHERE j.status IN ('completed','failed','cancelled','skipped')
 	  AND j.enqueued_at < now() - make_interval(secs => $1)
 	  AND EXISTS (SELECT 1 FROM processing_snapshots s
 	              WHERE s.ingest_job_id = j.id AND s.active)`},
-		{&rep.Attachments.WithRepairAttempts, false, " FROM zotero_attachments WHERE repair_attempts > 0"},
-		{&rep.Attachments.OpenRepairCases, false, " FROM repair_cases WHERE status IN ('rejected','queued','in_repair')"},
+		{&rep.Renditions.RepairLinked, false, " FROM store_documents WHERE repair_linked"},
 		{&rep.Jobs.SnapshotDocsNoJobRow, false, `
 	FROM processing_snapshots s
 	WHERE s.active
 	  AND NOT EXISTS (SELECT 1 FROM ingest_jobs j
-	                  JOIN zotero_attachments a ON a.id = j.attachment_id
-	                  WHERE a.document_id = s.document_id)`},
+	                  JOIN store_documents p ON p.attachment_id = j.attachment_id
+	                  WHERE p.document_id = s.document_id)`},
 	}
 	for _, st := range steps {
 		if err := count(st.dst, st.withAge, st.sql); err != nil {
@@ -391,8 +393,8 @@ func (r *Repo) snapshotDocsWithJobs(ctx context.Context) ([]string, error) {
 		FROM processing_snapshots s
 		WHERE s.active
 		  AND EXISTS (SELECT 1 FROM ingest_jobs j
-			          JOIN zotero_attachments a ON a.id = j.attachment_id
-			          WHERE a.document_id = s.document_id)`)
+			          JOIN store_documents p ON p.attachment_id = j.attachment_id
+			          WHERE p.document_id = s.document_id)`)
 	if err != nil {
 		return nil, err
 	}
@@ -418,8 +420,8 @@ func (r *Repo) checkSnapshotDocInvariant(ctx context.Context, beforeDocs []strin
 	rows, err := r.pool.Query(ctx, `
 		SELECT d::text FROM unnest($1::uuid[]) AS d
 		WHERE NOT EXISTS (SELECT 1 FROM ingest_jobs j
-			          JOIN zotero_attachments a ON a.id = j.attachment_id
-			          WHERE a.document_id = d)`, beforeDocs)
+			          JOIN store_documents p ON p.attachment_id = j.attachment_id
+			          WHERE p.document_id = d)`, beforeDocs)
 	if err != nil {
 		return fmt.Errorf("retention invariant check: %w", err)
 	}

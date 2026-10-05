@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -80,33 +81,37 @@ var (
 )
 
 // EnqueueForceRebuild (#259, design a): first-class re-ingest after
-// ARTIFACTS_EXPIRED. Creates a NEW pending job with force_rebuild=true for
-// the document's preferred attachment instead of mutating the completed
-// job's frozen snapshot (frozen inputs stay immutable — contract §frozen).
-// The claim path then freezes a fresh snapshot and derives the force
-// idempotency key `…:force-<jobID>` — distinct from the old job's key, so
-// the runner's durable dedup never answers 409/ARTIFACTS_EXPIRED for it.
-// The partial unique index (attachment_id, content_hash) WHERE
-// force_rebuild=false permits the additional row by design.
+// ARTIFACTS_EXPIRED. Creates a NEW pending revision-lane job with
+// force_rebuild=true for the document's preferred rendition (resolved
+// from the Store's projection — the mirror is Library-side since #358)
+// instead of mutating the completed job's frozen snapshot (frozen inputs
+// stay immutable — contract §frozen). The claim path then freezes a
+// fresh snapshot and derives the force idempotency key `…:force-<jobID>`
+// — distinct from the old job's key, so the runner's durable dedup never
+// answers 409/ARTIFACTS_EXPIRED for it. force_rebuild=true rows sit
+// outside every identity arbiter by design.
 func (r *Repo) EnqueueForceRebuild(ctx context.Context, documentID string) (*Job, error) {
-	// Resolve the preferred, non-deleted attachment: operators name
-	// documents (that is what /api/zotero/documents lists); the rebuild
-	// targets the attachment ingest actually used.
-	var sourceID, attID string
+	// Resolve the preferred, non-deleted rendition from the projection.
+	var sourceID, attID, recKey, rendKey, class, title, publisher, language string
 	var attHash *string
+	var year *int
+	var creators, tags []byte
 	err := r.pool.QueryRow(ctx, `
-		SELECT a.source_id::text, a.id::text, a.content_hash
-		FROM zotero_attachments a
-		WHERE a.document_id = $1::uuid AND a.preferred AND NOT a.deleted
-		ORDER BY a.updated_at DESC
-		LIMIT 1`, documentID).Scan(&sourceID, &attID, &attHash)
+		SELECT p.source_id::text, p.attachment_id::text, p.record_key, p.rendition_key,
+		       p.content_hash, p.title, p.creators, p.publication_year, COALESCE(p.publisher,''),
+		       COALESCE(p.language,''), p.tags, COALESCE(p.citation_class,'citable')
+		FROM store_documents p
+		WHERE p.document_id = $1::uuid AND p.preferred AND NOT p.deleted
+		ORDER BY p.updated_at DESC
+		LIMIT 1`, documentID).Scan(&sourceID, &attID, &recKey, &rendKey, &attHash,
+		&title, &creators, &year, &publisher, &language, &tags, &class)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNoPreferredAttachment
 	} else if err != nil {
 		return nil, err
 	}
 
-	// The claim path requires a content hash; the attachment's current hash
+	// The claim path requires a content hash; the rendition's current hash
 	// wins, falling back to the latest job's hash (the generation being
 	// rebuilt).
 	hash := attHash
@@ -122,14 +127,35 @@ func (r *Repo) EnqueueForceRebuild(ctx context.Context, documentID string) (*Job
 		return nil, ErrNoContentHash
 	}
 
-	// One rebuild in flight per attachment — SERIALIZED, not snapshot-tricked:
+	// Rebuild the revision artifact from the projection (the freeze at
+	// claim re-validates it against the live row).
+	var authors, tagList []string
+	_ = json.Unmarshal(creators, &authors)
+	_ = json.Unmarshal(tags, &tagList)
+	rev := revision.SourceRevision{
+		SourceID:     sourceID,
+		RevisionID:   "force-rebuild",
+		RenditionID:  rendKey,
+		ContentHash:  *hash,
+		MediaType:    "application/pdf",
+		Bibliography: revision.Bibliography{
+			RecordID: recKey, Title: title, Authors: authors, Year: year,
+			Publisher: publisher, Language: language, Tags: tagList, CitationClass: class,
+		},
+		LocatorCapabilities: revision.LocatorCapabilities{Page: &revision.PageCapability{Trust: revision.TrustPhysicalOnly}},
+		ContentTicket: "zat:" + sourceID + ":" + rendKey,
+	}
+	revJSON, err := json.Marshal(rev)
+	if err != nil {
+		return nil, err
+	}
+
+	// One rebuild in flight per rendition — SERIALIZED, not snapshot-tricked:
 	// under READ COMMITTED a bare INSERT…SELECT…WHERE NOT EXISTS is NOT a
-	// mutual exclusion (two concurrent statements each evaluate the predicate
-	// against the pre-commit snapshot of the other; the partial unique index
-	// covers force_rebuild=false rows only, so no constraint backstops force
-	// rows either). A transaction-scoped advisory lock keyed on the attachment
-	// id serializes the enqueues; the NOT EXISTS then decides — under the lock,
-	// after the winner committed — whether this call wins or refuses.
+	// mutual exclusion. A transaction-scoped advisory lock keyed on the
+	// attachment id serializes the enqueues; the NOT EXISTS then decides —
+	// under the lock, after the winner committed — whether this call wins
+	// or refuses.
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -140,14 +166,17 @@ func (r *Repo) EnqueueForceRebuild(ctx context.Context, documentID string) (*Job
 	}
 	var job Job
 	err = tx.QueryRow(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-		SELECT $1, $2::uuid, $3::uuid, $4, 'pending', true
+		INSERT INTO ingest_jobs (intake_kind, content_hash, status, force_rebuild,
+		                         source_id, document_id, attachment_id,
+		                         revision_source_id, revision_record_id, revision_rendition_id,
+		                         revision_no, revision_json)
+		SELECT 'revision', $4, 'pending', true, $1, $2::uuid, $3::uuid, $5, $6, $7, 'force-rebuild', $8::jsonb
 		WHERE NOT EXISTS (
 			SELECT 1 FROM ingest_jobs
 			WHERE attachment_id = $3::uuid AND status IN ('pending','claimed','processing')
 		)
 		RETURNING id::text, status::text, content_hash, max_attempts, force_rebuild, enqueued_at::text`,
-		sourceID, documentID, attID, hash).Scan(
+		sourceID, documentID, attID, hash, sourceID, recKey, rendKey, revJSON).Scan(
 		&job.ID, &job.Status, &job.ContentHash, &job.MaxAttempts, &job.ForceRebuild, &job.EnqueuedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrRebuildInFlight // guard blocked the insert (lock-serialized)

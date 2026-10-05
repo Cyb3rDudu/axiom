@@ -1,10 +1,12 @@
-// intake_claim.go — the revision-lane claim (F09 #303): resolves a
-// revision-typed job's opaque identities against the Zotero mirror (the
-// documented dual-read; DM06/F12 abate it) and freezes a revision-typed
-// input snapshot. Zotero keys stay opaque external references throughout;
-// the revision's OWN truth (hash, bibliography, capabilities, ticket) is
-// the frozen contract artifact, the mirror contributes only the
-// transitional FK uuids + the file facts the processor wire still needs.
+// intake_claim.go — the revision-lane claim (F09 #303, #358): resolves a
+// revision-typed job against the Store's OWN document projection (the
+// denormalized rendition row written at intake). Zotero keys stay opaque
+// external references throughout; the revision's OWN truth (hash,
+// bibliography, capabilities, ticket) is the frozen contract artifact,
+// the projection contributes the durable identities + the file facts the
+// processor wire needs. The legacy mirror-read lane died with the mirror's
+// move to the Library database — legacy-lane jobs are obsoleted with
+// LEGACY_LANE_RETIRED by the claim.
 package repo
 
 import (
@@ -16,19 +18,19 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// loadAndLockRevisionState is the revision lane of loadAndLockState: same
-// locking discipline (per-source advisory lock FIRST, then rows in fixed
-// order source → document → attachment, FOR UPDATE), same obsolescence
-// contract (non-empty reason = skip). Differences from the legacy lane:
+// loadAndLockRevisionState is the revision lane of the claim: same
+// locking discipline (per-source advisory lock FIRST, then the rendition
+// row FOR UPDATE), same obsolescence contract (non-empty reason = skip).
+// Differences from the pre-#358 mirror-read lane:
 //
-//   - the document/attachment rows resolve by the revision's OPAQUE ids
-//     (source uuid + record/rendition keys), not by enqueue-time FKs;
-//   - the hash-stale check compares the mirror against the REVISION's
-//     hash (the revision is the intake truth; a mirror that moved on
-//     means a newer revision exists and this job is stale);
-//   - the citation class (contextual KG gate) comes from the revision's
-//     bibliography — no canonical-item read: the revision IS the metadata
-//     source for this lane (lossless by contract, not by mirror lookup).
+//   - the rendition row is the Store's store_documents projection (no
+//     Library database access at claim time — the identities and file
+//     facts were denormalized at intake);
+//   - the citation class (contextual KG gate) comes from the projection
+//     (the intake wrote the revision's contract truth there);
+//   - no legacy-lane collision guard: the legacy idempotency index is
+//     zotero-lane-scoped since store migration 0004, so a revision claim
+//     can never collide with it.
 func (r *Repo) loadAndLockRevisionState(ctx context.Context, tx pgx.Tx, c *candidate) (*frozenState, string, error) {
 	s := &frozenState{}
 	if c.revSourceID == "" || c.revRecordID == "" || c.revRendition == "" || len(c.revJSON) == 0 {
@@ -42,71 +44,63 @@ func (r *Repo) loadAndLockRevisionState(ctx context.Context, tx pgx.Tx, c *candi
 		return nil, "REVISION_IDENTITY_MISMATCH", nil
 	}
 
-	// Same serialization against the canonical sync as the legacy lane.
+	// Same serialization against the sync's store-effect phase as the
+	// legacy lane had against the canonical sync: the advisory xact lock
+	// on the source key excludes the sync's projection writes (same
+	// database, same key namespace).
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, LockKey(c.revSourceID)); err != nil {
 		return nil, "", fmt.Errorf("acquire source lock: %w", err)
 	}
 
-	var serverID *string
+	s.source = claimSourceRow{id: c.revSourceID}
+
+	var parentKey, linkMode string
 	err := tx.QueryRow(ctx, `
-		SELECT server_id FROM zotero_sources WHERE id=$1::uuid FOR UPDATE`, c.revSourceID).Scan(&serverID)
-	if err == pgx.ErrNoRows {
-		return nil, "REVISION_REF_UNRESOLVED", nil
-	}
-	if err != nil {
-		return nil, "", fmt.Errorf("lock source: %w", err)
-	}
-	s.source = zoteroSourceRow{id: c.revSourceID, serverID: serverID}
-
-	var docParentKey, docLinkMode *string
-	err = tx.QueryRow(ctx, `
-		SELECT id::text, source_id::text, zotero_key, zotero_version, canonical_item_id::text, deleted,
-		       COALESCE(citation_class,'citable') = 'contextual'
-		FROM zotero_documents
-		WHERE source_id = $1::uuid AND zotero_key = $2 AND deleted = false FOR UPDATE`,
-		c.revSourceID, c.revRecordID).Scan(
-		&s.document.id, &s.document.sourceID, &s.document.zoteroKey, &s.document.zoteroVersion,
-		&s.document.canonicalItemID, &s.document.deleted, &s.document.contextual)
-	if err == pgx.ErrNoRows {
-		return nil, "REVISION_REF_UNRESOLVED", nil
-	}
-	if err != nil {
-		return nil, "", fmt.Errorf("lock document: %w", err)
-	}
-
-	err = tx.QueryRow(ctx, `
-		SELECT id::text, source_id::text, document_id::text, zotero_key, zotero_version, content_type, filename, local_path,
-		       content_hash, file_size, mtime_ms, preferred, deleted, parent_zotero_key, link_mode
-		FROM zotero_attachments
-		WHERE source_id = $1::uuid AND zotero_key = $2 AND deleted = false FOR UPDATE`,
+		SELECT document_id::text, attachment_id::text, server_id,
+		       record_key, source_version, content_hash,
+		       COALESCE(content_type,''), COALESCE(filename,''), COALESCE(local_path,''),
+		       file_size, mtime_ms, COALESCE(link_mode,'imported_file'),
+		       preferred, deleted
+		FROM store_documents
+		WHERE source_id = $1::uuid AND rendition_key = $2 FOR UPDATE`,
 		c.revSourceID, c.revRendition).Scan(
-		&s.attachment.id, &s.attachment.sourceID, &s.attachment.documentID, &s.attachment.zoteroKey, &s.attachment.zoteroVersion,
+		&s.document.id, &s.attachment.id, &s.source.serverID,
+		&s.document.zoteroKey, &s.attachment.zoteroVersion, &s.attachment.contentHash,
 		&s.attachment.contentType, &s.attachment.filename, &s.attachment.localPath,
-		&s.attachment.contentHash, &s.attachment.fileSize, &s.attachment.mtimeMS,
-		&s.attachment.preferred, &s.attachment.deleted,
-		&docParentKey, &docLinkMode)
+		&s.attachment.fileSize, &s.attachment.mtimeMS, &linkMode,
+		&s.attachment.preferred, &s.attachment.deleted)
 	if err == pgx.ErrNoRows {
 		return nil, "REVISION_REF_UNRESOLVED", nil
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("lock attachment: %w", err)
+		return nil, "", fmt.Errorf("lock rendition projection: %w", err)
 	}
 	// The rendition must belong to the revision's record.
-	if s.attachment.documentID != s.document.id || docParentKey == nil || *docParentKey != s.document.zoteroKey {
+	if s.attachment.documentID == "" || s.document.zoteroKey != c.revRecordID {
 		return nil, "REVISION_REF_UNRESOLVED", nil
 	}
-	// Preferred parity with the legacy lane: completion (MarkCompletedTx)
-	// requires the preferred attachment, so a non-preferred rendition must
-	// be obsoleted HERE — otherwise it burns full processing runs and ends
-	// LEASE_EXHAUSTED (the review finding: claim allows what completion
-	// forbids — the worst mix).
+	s.attachment.documentID = s.document.id
+	s.attachment.sourceID = c.revSourceID
+	s.attachment.zoteroKey = c.revRendition
+	s.document.sourceID = c.revSourceID
+	parentKey = s.document.zoteroKey
+	s.document.parentKey, s.document.linkMode = &parentKey, &linkMode
+
+	if s.attachment.deleted {
+		return nil, "REVISION_REF_UNRESOLVED", nil
+	}
+	// Preferred parity with completion (MarkCompletedTx requires the
+	// preferred rendition): a non-preferred rendition must be obsoleted
+	// HERE — otherwise it burns full processing runs and ends
+	// LEASE_EXHAUSTED (claim allowing what completion forbids).
 	if !s.attachment.preferred {
 		return nil, "ATTACHMENT_NOT_PREFERRED", nil
 	}
 
 	// Hash currency: the revision's ContentHash is the intake truth. The
-	// mirror's current hash must agree (non-forced) — a moved-on mirror
-	// means a newer revision was published and this job is stale.
+	// projection's current hash must agree (non-forced) — a moved-on
+	// projection means a newer revision was published and this job is
+	// stale.
 	hash := s.attachment.contentHash
 	if hash == nil || *hash == "" {
 		return nil, "CONTENT_HASH_MISSING", nil
@@ -114,59 +108,33 @@ func (r *Repo) loadAndLockRevisionState(ctx context.Context, tx pgx.Tx, c *candi
 	if !c.forceRebuild && fr.ContentHash != "" && fr.ContentHash != *hash {
 		return nil, "CONTENT_HASH_CHANGED", nil
 	}
-	// Legacy-lane collision guard (review F1): the claim UPDATE persists
-	// the resolved attachment_id, which would ENTER the legacy idempotency
-	// partial index (attachment_id, content_hash) WHERE force_rebuild=false
-	// — a legacy job already holding that pair means the revision is a
-	// duplicate of tracked sync work; a raw unique violation here would
-	// poison the FIFO head forever. Obsolete with a readable reason
-	// instead (the transition's honest answer while both lanes coexist).
-	if !c.forceRebuild {
-		var legacyHolds bool
-		if err := tx.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM ingest_jobs x
-				WHERE x.intake_kind = 'zotero'
-				  AND x.attachment_id = $1::uuid AND x.content_hash = $2
-				  AND x.force_rebuild = false)`,
-			s.attachment.id, *hash).Scan(&legacyHolds); err != nil {
-			return nil, "", fmt.Errorf("legacy-lane collision check: %w", err)
-		}
-		if legacyHolds {
-			// Transition debt (documented): the legacy idempotency index
-			// is status-blind, so a revision whose content matches a
-			// permanently-FAILED legacy job is obsoleted too — the escape
-			// arrives when the index narrows to the zotero lane (DM06) or
-			// a lane-cleanup job lands.
-			return nil, "REVISION_SUPERSEDED_BY_SYNC_LANE", nil
-		}
-	}
 
-	s.document.parentKey, s.document.linkMode = docParentKey, docLinkMode
 	// The revision's own citation class rules the KG gate (contract truth;
-	// F07 derives the ledger class from the mirror so both agree — reading
-	// it from the revision keeps the lane mirror-honest even before F12).
+	// the projection carries the intake-time class so both agree).
 	if fr.Bibliography.CitationClass == "contextual" {
 		s.document.contextual = true
 	} else {
 		s.document.contextual = false
 	}
+	s.document.zoteroVersion = s.attachment.zoteroVersion
 	if bib, err := json.Marshal(fr.Bibliography); err == nil {
 		s.document.rawData = bib // the publishable metadata this lane freezes
 	}
+	s.revision = &fr
 	return s, "", nil
 }
 
 // buildRevisionFrozenInput assembles the revision lane's durable snapshot:
-// the SAME FrozenInput wire the legacy lane freezes (so the dispatcher's
+// the SAME FrozenInput wire the legacy lane froze (so the dispatcher's
 // request build, the persist validation and the source-serving endpoint
-// work unchanged), populated from the revision + the resolved mirror rows,
-// PLUS the additive intake marker and revision block.
-func buildRevisionFrozenInput(c *candidate, s *frozenState, proc FrozenProcessing, profileHash, idemKey string, fr revision.SourceRevision) []byte {
+// work unchanged), populated from the revision + the resolved projection
+// row, PLUS the additive intake marker and revision block.
+func buildRevisionFrozenInput(c *candidate, s *frozenState, proc FrozenProcessing, profileHash, idemKey string) []byte {
+	fr := *s.revision
 	fi := FrozenInput{
 		ContractVersion: "1.0",
 		Intake:          "revision",
-		Revision:        &fr,
+		Revision:        s.revision,
 		JobID:           c.id,
 		IdempotencyKey:  idemKey,
 		ProfileHash:     profileHash,
