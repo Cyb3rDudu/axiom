@@ -4,9 +4,10 @@
 # events, and strands open a PR from the start (the reviewer gate already
 # operates that way), so a bare branch push never bills a full matrix
 # run. The heavy DB/topology jobs are path-gated by the `changes` job
-# below — a docs-only or script-only change does not pay for them. The
-# per-ref concurrency group cancels superseded runs (rapid merges to
-# main, rapid review-round pushes on a PR) instead of billing them all.
+# below — a change outside the gated surfaces (root docs/, scripts/)
+# does not pay for them. The per-ref concurrency group cancels superseded
+# runs (rapid merges to main, rapid review-round pushes on a PR) instead
+# of billing them all.
 
 name: ci
 
@@ -65,10 +66,11 @@ jobs:
           while IFS= read -r f; do
             case "$f" in
               # the whole axiom tree is go-suite surface: Go sources,
-              # go.mod/sum, SQL schemas — AND testdata fixtures the DB ITs
-              # consume (binary fixtures are not .go/.sql; under-gating
-              # them silently skips verification — lane finding on #354).
-              # axiom/docs prose over-triggers by design: fail-open side.
+              # go.mod/sum, SQL schemas — and any other input the gated
+              # suites consume (binary testdata fixtures are neither
+              # .go nor .sql; under-gating them silently skips
+              # verification (#354)). axiom/docs prose over-triggers by
+              # design: fail-open side.
               axiom/*) go_sql=true; topology=true ;;
               deploy/postgres/roles.sql) go_sql=true; topology=true ;;
               axiom-compute-worker/*|deploy/*) topology=true ;;
