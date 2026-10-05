@@ -446,6 +446,55 @@ credentials on the worker. Sizing, GPU pinning, transport rules and the
 `--network=host` requirement for bulk flows:
 [Deployment](deployment.md).
 
+## v0.2.3: the mirror plane moves to the Library database (#358)
+
+v0.2.3 completes the component split for the Zotero mirror plane (the
+decision and its reasoning: [ADR 0002](../adr/0002-mirror-plane-end-state.md)).
+What an operator needs to know:
+
+**What moves.** The Zotero mirror (`zotero_*` tables) and the sync that
+writes them now run on the **Library database**. The Store keeps its own
+denormalized projection (`store_documents`, written at intake time) for
+everything processing needs — search titles, source serving, claim
+resolution, retention anchors. Nothing about endpoints or jobs changes
+shape; the documents listing gains `serving` and `removed` outcome
+values ([API semantics](../references/api.md)) and fresh Zotero deletes
+surface once as `tombstoned` rows instead of lingering as phantoms.
+
+**The one-time catch-up.** The Library database's mirror copy has been
+frozen since the cutover. After deploying v0.2.3, run ONE full
+reconcile:
+
+```bash
+curl -X POST http://127.0.0.1:8011/api/zotero/sync \
+  -H 'Content-Type: application/json' -d '{"full": true}'
+```
+
+The full sync re-lists every Zotero item, applies the divergence since
+the freeze, reconciles Zotero-absent phantoms into tombstones, and
+re-offers every document to the Store (unchanged, already-served content
+is suppressed — the active-snapshot defense). The response's
+`tombstoned_documents` count is the reconciliation report.
+
+**Topology requirements.**
+
+- The library-bearing processes (`serve library`, `serve api`, `serve
+  all`) need the Library PostgreSQL profile; `AXIOM_LIBRARY_DATABASE_URL`
+  must point at the Library database (it already does in the split
+  topology; in the single-database shape it stays unset and both planes
+  share the one database — supported).
+- `AXIOM_STORAGE_LIBRARY_DRIVER=sqlite` is no longer combinable with the
+  sync role: the boot refuses loudly.
+- `serve store` runs without the repair wave gate (the repair queue is
+  Library-side); healing coordination lives where repair is visible.
+
+**What stays behind.** The Store database's `zotero_*` tables remain as
+a frozen archive through the v0.2.3 soak — a bestand backfill (store
+migration 0004) mints the projection rows from the archive so search
+hydration, retention anchors and in-flight claims keep working from the
+first boot. Dropping the archive tables is documented follow-up after
+the soak.
+
 ## Troubleshooting: 0.2.0 patterns
 
 Symptom→cause→fix patterns for processing and transport classes live in

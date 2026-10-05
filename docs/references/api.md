@@ -214,27 +214,47 @@ The effective cascade is:
 
 | Query parameter | Default | Accepted values |
 | --- | --- | --- |
-| `sync_state` | all | `synced`, `held`, `processing`, `pending` |
+| `sync_state` | all | `synced`, `held`, `processing`, `pending`, `tombstoned` |
 
 The response is `{"documents":[...]}`. Each row contains `document_id`,
 `zotero_key`, `title`, `item_type`, `sync_state`, optional `job_status`, optional
 preferred `attachment`, and `updated_at`. `held` means the document is excluded
-or has no job; `synced` means the preferred attachment has a completed job.
+or has no job; `synced` means the document is served — a completed job OR a
+surviving active snapshot (#356). Freshly Zotero-deleted documents list as
+`tombstoned` for a bounded visibility window after their reconciliation, then
+drop out of the listing (#358).
 
-Each row also carries the derived per-document outcome (#252) — the human
-answer to "what happened to this doc?", projected from job/repair-case/selection
-state, no DB forensics needed:
+Each row also carries the derived per-document outcome (#252, truth fix
+#356) — the human answer to "what happened to this doc?", projected from
+job/snapshot/repair-case/selection state, no DB forensics needed:
 
-| Field | Meaning |
+| `outcome` | Meaning |
 | --- | --- |
-| `outcome` | `completed` (processed, searchable) \| `in_repair` (repair track active) \| `needs_ocr` (scan without a text layer — not text-searchable until the OCR rebuild heals it) \| `failed` \| `processing` \| `pending` \| `excluded` (held by selection) |
-| `outcome_reason` | Short reason excerpt: repair-case status, `error_code: message` (capped at 160 runes), `selection-excluded`, or `never enqueued` |
-| `repair_status` | Newest `repair_cases` status for the preferred attachment, live (`rejected`, `queued`, `in_repair`, `healed`, `failed`, `blocked_for_dudu`); omitted when no case exists |
+| `completed` | newest job completed — processed, searchable |
+| `serving` | the newest job closed administratively (cancelled wave, cleanup closure, skip) BUT an active snapshot keeps the document served; the closure is named in `outcome_reason` (#356) |
+| `in_repair` | repair track active (`rejected`, `queued`, `in_repair`, `blocked_for_dudu`) |
+| `needs_ocr` | scan without a text layer — not text-searchable until the OCR rebuild heals it |
+| `failed` | NO active snapshot and the last attempt failed; `outcome_reason` carries `error_code: message` (capped at 160 runes) |
+| `removed` | deleted in Zotero — reconciled tombstone (#358) |
+| `processing` / `pending` | running / awaiting work |
+| `excluded` | held by selection |
 
-Derivation precedence: `excluded` → running → `needs_ocr` → live repair
-track → `completed` → `failed`+reason → `never enqueued`. Closed repair
-cases (`healed`/`failed`) defer to the job status as truth until
-reprocessing re-runs the document.
+`outcome_reason` excerpts the truth: the closure label for `serving`
+rows, the repair-case status for `in_repair`, `error_code: message` for
+`failed`, `selection-excluded`, `never enqueued`, or the reconciliation
+time for `removed`.
+
+Derivation precedence (#356 semantics: `failed` is reserved for
+documents with no active snapshot whose last attempt failed):
+
+```
+excluded → running → pending → needs_ocr → live repair track
+        → completed → serving(terminal closure + active snapshot)
+        → failed(no snapshot) → never enqueued/served
+```
+
+Closed repair cases (`healed`/`failed`) defer to the job status as
+truth until reprocessing re-runs the document.
 
 ## Search and passages
 
