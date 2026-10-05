@@ -1,0 +1,43 @@
+{
+  "path": "",
+  "status": "completed",
+  "mode": "post-write",
+  "reverse_bundle": "reverse",
+  "reverse_report": "reverse-delta-report.json",
+  "gates": [
+    {
+      "gate": "rb:maintenance",
+      "status": "completed",
+      "started_at": "2026-10-05T14:03:02.878313Z",
+      "finished_at": "2026-10-05T14:03:02.892585Z",
+      "note": "1 stop command(s) executed"
+    },
+    {
+      "gate": "rb:reverse-delta",
+      "status": "completed",
+      "started_at": "2026-10-05T14:03:02.893086Z",
+      "finished_at": "2026-10-05T14:03:03.043326Z",
+      "note": "post-write path: 2 row(s) reversed into cutover_shadow_* tables (0 applied, 2 idempotent from earlier runs) — tombstone keys are REPORTED, never auto-deleted",
+      "evidence": [
+        "reverse/",
+        "reverse-delta-report.json"
+      ]
+    },
+    {
+      "gate": "rb:config-revert",
+      "status": "completed",
+      "started_at": "2026-10-05T14:03:03.043638Z",
+      "finished_at": "2026-10-05T14:03:03.044792Z",
+      "note": "config restored to the pre-switch state (backup config-backup.json)"
+    },
+    {
+      "gate": "rb:restart",
+      "status": "completed",
+      "started_at": "2026-10-05T14:03:03.045029Z",
+      "finished_at": "2026-10-05T14:03:03.050438Z",
+      "note": "old stack restarted (0 checks green)"
+    }
+  ],
+  "started_at": "2026-10-05T14:03:02.878008Z",
+  "updated_at": "2026-10-05T14:03:03.050745Z"
+}

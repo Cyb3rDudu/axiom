@@ -1,0 +1,145 @@
+{
+  "format": "axiom-cutover-delta-report",
+  "format_version": 1,
+  "kind": "reverse",
+  "run_id": "cutover-20261005-140025",
+  "baseline": "baseline",
+  "cutoff": "2026-10-05T14:03:02.970533Z",
+  "build": "axiom dev (commit none, debug build)",
+  "tables": [
+    {
+      "table": "zotero_sources",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 12
+    },
+    {
+      "table": "zotero_items",
+      "added": 1,
+      "changed": 1,
+      "tombstoned": 0,
+      "unchanged": 982
+    },
+    {
+      "table": "zotero_collections",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 59
+    },
+    {
+      "table": "zotero_item_collections",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 563
+    },
+    {
+      "table": "zotero_documents",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 370
+    },
+    {
+      "table": "zotero_attachments",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 443
+    },
+    {
+      "table": "zotero_selections",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 1
+    },
+    {
+      "table": "zotero_collection_selections",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 0
+    },
+    {
+      "table": "repair_cases",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 48
+    },
+    {
+      "table": "zotero_write_audit",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 112
+    },
+    {
+      "table": "library_imports",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 0
+    },
+    {
+      "table": "library_import_events",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 0
+    },
+    {
+      "table": "library_import_steps",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 0
+    },
+    {
+      "table": "library_external_identifiers",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 0
+    },
+    {
+      "table": "library_metadata_provenance",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 0
+    },
+    {
+      "table": "library_source_revisions",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 361
+    },
+    {
+      "table": "library_write_audit",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 0
+    },
+    {
+      "table": "library_provider_anchors",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 0
+    },
+    {
+      "table": "library_writer_leases",
+      "added": 0,
+      "changed": 0,
+      "tombstoned": 0,
+      "unchanged": 0
+    }
+  ],
+  "ok": true
+}

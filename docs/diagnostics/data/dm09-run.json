@@ -1,0 +1,317 @@
+{
+  "run_id": "cutover-20261005-140025",
+  "kind": "cutover",
+  "status": "completed",
+  "plan_path": "plan.json",
+  "plan_digest": "4ee4a14bb1572156416581026a636eeb8e4d5a13a23b3f94babb5b78702162cb",
+  "plan_snapshot": "plan.json",
+  "created_at": "2026-10-05T14:00:25.243394Z",
+  "updated_at": "2026-10-05T14:03:03.050942Z",
+  "gates": [
+    {
+      "gate": "maintenance",
+      "status": "completed",
+      "started_at": "2026-10-05T14:00:25.243982Z",
+      "finished_at": "2026-10-05T14:01:07.29915Z",
+      "note": "mutators stopped, leases drained (choice cancel), witness: 636 jobs, 0 active leases"
+    },
+    {
+      "gate": "freeze",
+      "status": "completed",
+      "started_at": "2026-10-05T14:01:07.299655Z",
+      "finished_at": "2026-10-05T14:01:07.503734Z",
+      "note": "freeze bundle + delta report landed (cutoff 2026-10-05T14:01:07.376014Z)",
+      "evidence": [
+        "freeze/",
+        "delta-report.json"
+      ]
+    },
+    {
+      "gate": "target-schema",
+      "status": "completed",
+      "started_at": "2026-10-05T14:01:07.504006Z",
+      "finished_at": "2026-10-05T14:01:07.513576Z",
+      "note": "verified prepared target (migrations applied pre-window): ledgered and complete — Migrate is idempotent"
+    },
+    {
+      "gate": "delta-import",
+      "status": "completed",
+      "started_at": "2026-10-05T14:01:07.513872Z",
+      "finished_at": "2026-10-05T14:01:07.75246Z",
+      "note": "delta applied: 1 inserted, 0 replaced, 0 idempotent, 0 tombstoned rows deleted; anchor written",
+      "evidence": [
+        "anchor.json"
+      ]
+    },
+    {
+      "gate": "store-adoption",
+      "status": "completed",
+      "started_at": "2026-10-05T14:01:07.752764Z",
+      "finished_at": "2026-10-05T14:01:07.775342Z",
+      "note": "store migrations applied on the adopted database (DM06 FK drops in-window)"
+    },
+    {
+      "gate": "config-switch",
+      "status": "completed",
+      "started_at": "2026-10-05T14:01:07.775642Z",
+      "finished_at": "2026-10-05T14:01:07.779404Z",
+      "note": "config switched atomically (1 set, 0 unset; backup config-backup.json)",
+      "evidence": [
+        "config-backup.json"
+      ]
+    },
+    {
+      "gate": "restart",
+      "status": "completed",
+      "started_at": "2026-10-05T14:01:07.779666Z",
+      "finished_at": "2026-10-05T14:01:09.837855Z",
+      "note": "restart OK (1 checks green)"
+    },
+    {
+      "gate": "shadow",
+      "status": "completed",
+      "started_at": "2026-10-05T14:01:09.838394Z",
+      "finished_at": "2026-10-05T14:01:10.17106Z",
+      "note": "shadow re-run green (zero unexpected deviations)",
+      "evidence": [
+        "shadow-report.json"
+      ]
+    },
+    {
+      "gate": "reenable:dispatcher",
+      "status": "completed",
+      "started_at": "2026-10-05T14:01:10.171396Z",
+      "finished_at": "2026-10-05T14:01:12.228638Z",
+      "note": "stage dispatcher re-enabled (1 checks green)"
+    },
+    {
+      "gate": "done",
+      "status": "completed",
+      "started_at": "2026-10-05T14:01:12.229086Z",
+      "finished_at": "2026-10-05T14:01:12.229086Z",
+      "note": "cutover complete — workers re-enabled per plan"
+    }
+  ],
+  "freeze_bundle_dir": "freeze",
+  "delta_report_file": "delta-report.json",
+  "anchor_file": "anchor.json",
+  "config_backup": "config-backup.json",
+  "shadow_report": "shadow-report.json",
+  "lease_decisions": [
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "choice": "cancel",
+      "action": "cancellation requested (converges when the lease expires)",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:25.258334Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 2,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:28.261933Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 5,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:31.264688Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 8,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:34.267202Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 11,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:37.269512Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 14,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:40.271684Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 17,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:43.273381Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 20,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:46.276353Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 23,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:49.279493Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 26,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:52.282202Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 29,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:55.284594Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 32,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:00:58.286226Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 35,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:01:01.28924Z"
+    },
+    {
+      "job_id": "ede0acda-c41b-47c9-b4e2-582bb8463809",
+      "status": "claimed",
+      "claimed_by": "dm09-stuck-worker",
+      "lease_until": "2026-10-05T14:01:05Z",
+      "heartbeat_age_s": 39,
+      "choice": "cancel",
+      "action": "cancellation already requested",
+      "outcome": "cancelled",
+      "at": "2026-10-05T14:01:04.292158Z"
+    }
+  ],
+  "switch": {
+    "path": "<window-dir>/config.sqlite",
+    "set": {
+      "AXIOM_DISPATCHER_ENABLED": "5feceb66ffc8"
+    },
+    "backup_file": "config-backup.json",
+    "env_compat": [
+      {
+        "key": "AXIOM_DISPATCHER_ENABLED",
+        "env": "absent"
+      }
+    ],
+    "at": "2026-10-05T14:01:07.779403Z"
+  },
+  "witness": {
+    "count": 636,
+    "max_updated_at": "2026-10-05T14:01:07.365387Z",
+    "active_leases": 0
+  },
+  "rollback": {
+    "path": "",
+    "status": "completed",
+    "mode": "post-write",
+    "reverse_bundle": "reverse",
+    "reverse_report": "reverse-delta-report.json",
+    "gates": [
+      {
+        "gate": "rb:maintenance",
+        "status": "completed",
+        "started_at": "2026-10-05T14:03:02.878313Z",
+        "finished_at": "2026-10-05T14:03:02.892585Z",
+        "note": "1 stop command(s) executed"
+      },
+      {
+        "gate": "rb:reverse-delta",
+        "status": "completed",
+        "started_at": "2026-10-05T14:03:02.893086Z",
+        "finished_at": "2026-10-05T14:03:03.043326Z",
+        "note": "post-write path: 2 row(s) reversed into cutover_shadow_* tables (0 applied, 2 idempotent from earlier runs) — tombstone keys are REPORTED, never auto-deleted",
+        "evidence": [
+          "reverse/",
+          "reverse-delta-report.json"
+        ]
+      },
+      {
+        "gate": "rb:config-revert",
+        "status": "completed",
+        "started_at": "2026-10-05T14:03:03.043638Z",
+        "finished_at": "2026-10-05T14:03:03.044792Z",
+        "note": "config restored to the pre-switch state (backup config-backup.json)"
+      },
+      {
+        "gate": "rb:restart",
+        "status": "completed",
+        "started_at": "2026-10-05T14:03:03.045029Z",
+        "finished_at": "2026-10-05T14:03:03.050438Z",
+        "note": "old stack restarted (0 checks green)"
+      }
+    ],
+    "started_at": "2026-10-05T14:03:02.878008Z",
+    "updated_at": "2026-10-05T14:03:03.050745Z"
+  }
+}

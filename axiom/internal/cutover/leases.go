@@ -165,6 +165,7 @@ func drainLeases(ctx context.Context, pool *pgxpool.Pool, opts drainOptions) err
 	}
 	deadline := time.Now().Add(timeout)
 
+	cancelRequested := false
 	for {
 		now := time.Now()
 		leases, err := activeLeases(ctx, pool, now)
@@ -172,6 +173,15 @@ func drainLeases(ctx context.Context, pool *pgxpool.Pool, opts drainOptions) err
 			return err
 		}
 		if len(leases) == 0 {
+			// A cancel whose lease expired between polls converges HERE
+			// (the empty active set alone is not convergence — the row
+			// is still claimed until the terminalization runs; the
+			// recorded outcome must match the row, not the poll).
+			if cancelRequested {
+				if _, err := convergeExpiredCancels(ctx, pool); err != nil {
+					return fmt.Errorf("converge expired cancels: %w", err)
+				}
+			}
 			return nil
 		}
 
@@ -190,6 +200,7 @@ func drainLeases(ctx context.Context, pool *pgxpool.Pool, opts drainOptions) err
 				return fmt.Errorf("maintenance: %d active lease(s) and the plan chooses abort — run aborted (first: job %s held by %q, lease until %s)",
 					len(leases), l.JobID, l.ClaimedBy, d.LeaseUntil)
 			case LeaseCancel:
+				cancelRequested = true
 				if !l.CancelRequested {
 					if err := requestCancellation(ctx, pool, l.JobID); err != nil {
 						return fmt.Errorf("cancel job %s: %w", l.JobID, err)
