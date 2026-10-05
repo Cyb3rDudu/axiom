@@ -56,16 +56,18 @@ variable at a scratch database — never a production or shared-development DSN.
 
 The `ci.yml` gate fires on `pull_request` events and on pushes to `main`
 (#354): work strands open a PR from the start, so a bare branch push never
-bills a full matrix run, and a merged SHA runs exactly once. The heavy
-legs (`go-db-it`, `split-topology`, `container-topology` — together ~16 of
-the ~24 billed minutes per run) are path-gated by the `changes` job: they
-run only when Go sources, `go.mod`/`go.sum`, SQL schemas, `deploy/**`,
-the compute-worker surface, or the workflow definition itself changed;
+bills a full matrix run, and a merged SHA runs at most once — superseded
+runs on the same ref (rapid merges, rapid review-round pushes) are
+cancelled mid-flight, not billed in full. The heavy legs (`go-db-it`,
+`split-topology`, `container-topology` — together ~16 of the ~24 billed
+minutes per run) are path-gated by the `changes` job: they run only when
+Go sources, `go.mod`/`go.sum`, SQL schemas, `deploy/**`, the
+compute-worker surface, or the workflow definition itself changed;
 docs-only and script-only changes run the remaining jobs only. The gate
 is fail-open: an unresolvable diff base classifies everything as changed,
-so verification is never skipped by an accident of history. Superseded
-runs on the same ref (rapid review-round pushes, rapid merges) are
-cancelled mid-flight instead of billed in full.
+so verification is never skipped by an accident of history. Heavy legs
+run per cumulative PR diff — the merged result is what must verify,
+not the last commit.
 
 ## Mutation-testing culture (the "probe")
 
