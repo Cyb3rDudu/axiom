@@ -33,3 +33,7 @@ sessions/
 
 # Deployment staging (#205)
 dist/
+
+# Stray go-build outputs in the module dir (go build ./cmd/x/ drops
+# ./x next to the module root)
+/meta-backfill
