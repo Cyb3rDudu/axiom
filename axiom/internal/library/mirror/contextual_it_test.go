@@ -61,12 +61,21 @@ func ctxSeed(t *testing.T, lr *mirrorRepo, srcID, docKey string, collections, ta
 		srcID, docID, docKey+"ATT", docKey); err != nil {
 		t.Fatal(err)
 	}
+	// The Store-side projection row (the hydration probe's source, #358).
+	if _, err := lr.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, title, citation_class, content_type, preferred)
+		SELECT document_id, id, source_id, zotero_key, $3, $2, 'citable', 'application/pdf', true
+		FROM zotero_attachments WHERE source_id=$1 AND zotero_key=$3`,
+		srcID, docKey, docKey+"ATT"); err != nil {
+		t.Fatal(err)
+	}
 	return docID
 }
 
 // ctxApply runs one canonical apply (projections + memberships + citation
 // class) for the seeded world under the given rules.
-func ctxApply(t *testing.T, lr *mirrorRepo, srcID string, rules ContextualRules) {
+func ctxApply(t *testing.T, lr *mirrorRepo, srcID string, rules ContextualRules) CanonicalApplyResult {
 	t.Helper()
 	ctx := context.Background()
 	tx, err := lr.pool.Begin(ctx)
@@ -84,12 +93,14 @@ func ctxApply(t *testing.T, lr *mirrorRepo, srcID string, rules ContextualRules)
 		"CTXDOC2ATT": {LocalPath: "/tmp/x.pdf", Exists: true, Hash: "sha256:ctx2"},
 		"CTXDOC3ATT": {LocalPath: "/tmp/x.pdf", Exists: true, Hash: "sha256:ctx3"},
 	}
-	if _, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zoteroprovider.CanonicalBatch{NewVersion: 2}, colls, files, rules); err != nil {
+	res, err := lr.rep.ApplyCanonicalBatch(ctx, tx, srcID, zoteroprovider.CanonicalBatch{NewVersion: 2}, colls, files, rules)
+	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
+	return res
 }
 
 func ctxClass(t *testing.T, lr *mirrorRepo, docID string) string {
@@ -132,16 +143,25 @@ func TestContextualProjectionIT(t *testing.T) {
 	if got := ctxClass(t, lr, tagged); got != "contextual" {
 		t.Fatalf("tagged outlier must be contextual, got %q", got)
 	}
-	// Searchable: the contextual document got its ingest job like everyone
-	// else (equal-rank substrate — no selection gate ever sees the class).
-	var n int
-	if err := lr.pool.QueryRow(ctx,
-		`SELECT count(*) FROM ingest_jobs j JOIN zotero_documents d ON d.id=j.document_id
-		 WHERE d.zotero_key='CTXDOC1' AND j.status='pending'`).Scan(&n); err != nil {
+	// Searchable: the contextual document is OFFERED to the Store like
+	// everyone else (equal-rank substrate — no selection gate ever sees
+	// the class; the sync's store phase mints its intake like any's).
+	applyRes := ctxApply(t, lr, srcID, rules)
+	// The sync's store phase would carry the class into the projection at
+	// intake — simulate it for the hydration probe below.
+	if _, err := lr.pool.Exec(context.Background(), `
+		UPDATE store_documents p SET citation_class = d.citation_class
+		FROM zotero_documents d WHERE d.id = p.document_id`); err != nil {
 		t.Fatal(err)
 	}
-	if n == 0 {
-		t.Fatal("contextual document must be enqueued (searchable) like any other")
+	offered := false
+	for _, r := range applyRes.Renditions {
+		if r.DocumentKey == "CTXDOC1" {
+			offered = true
+		}
+	}
+	if !offered {
+		t.Fatal("contextual document must be offered (searchable) like any other")
 	}
 	// Hit hydration: the search/passage source block query carries the
 	// class — a contextual hit reports contextual, the passenger citable.
@@ -259,9 +279,12 @@ func TestClaimContextualKGGateIT(t *testing.T) {
 		sourceBaseURL: "http://localhost/ctx2", libraryID: "users/0",
 		docKey: "CTXDOC", attKey: "CTXDOC", contentHash: &hash, preferred: true,
 	}, "pending", 3)
-	// The lecture doc is contextual; the passenger stays citable.
+	// The lecture doc is contextual; the passenger stays citable. The
+	// claim gate reads the REVISION's class (#358: contract truth — the
+	// projection carries it at intake).
 	if _, err := lr.pool.Exec(ctx,
-		`UPDATE zotero_documents SET citation_class='contextual' WHERE zotero_key='CTXDOC'`); err != nil {
+		`UPDATE ingest_jobs SET revision_json = jsonb_set(revision_json, '{bibliography,citation_class}', '"contextual"')
+		 WHERE id=$1`, jobContextual); err != nil {
 		t.Fatal(err)
 	}
 

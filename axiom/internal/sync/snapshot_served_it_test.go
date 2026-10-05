@@ -201,8 +201,10 @@ func TestSuppressedEnqueueDoesNotResolveFailuresIT(t *testing.T) {
 	// anchor age-ineligible and the retention tail below vacuous).
 	var anchor string
 	if err := d.Pool().QueryRow(ctx, `
-		UPDATE ingest_jobs SET status='completed', enqueued_at = now() - interval '21 days', updated_at = now() - interval '20 days'
-		WHERE attachment_id=$1::uuid RETURNING id::text`, attID).Scan(&anchor); err != nil {
+		UPDATE ingest_jobs SET status='completed', attachment_id=$1::uuid, document_id=$2::uuid,
+		       enqueued_at = now() - interval '21 days', updated_at = now() - interval '20 days'
+		WHERE revision_source_id=$3 AND revision_rendition_id='RA1'
+		RETURNING id::text`, attID, docID, res.SourceID).Scan(&anchor); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Pool().Exec(ctx, `

@@ -47,6 +47,10 @@ type Store struct {
 // wired compositions always set it).
 type StoreLink interface {
 	MarkAttachmentRepairLinked(ctx context.Context, attachmentID string) error
+	// HasJobForDocumentSince answers the wave gate's post-heal question:
+	// does the document hold a job enqueued at/after the given time (the
+	// targeted post-heal sync's intake)?
+	HasJobForDocumentSince(ctx context.Context, documentID string, since time.Time) (bool, error)
 }
 
 // NewStore builds a repair Store over the LIBRARY pool (repair_cases and
@@ -525,21 +529,59 @@ func (s *Store) DocumentHealedCases(ctx context.Context, documentID string) (int
 // Terminal parks (failed / blocked_for_dudu) and manual-track rejected
 // cases NEVER gate — an unrepairable document must not block the wave.
 // Observer-only: this never marks jobs, it only defers claiming.
+// WaveRepairGate (#282) decides whether processing waves hold: an OPEN
+// case (queued/in_repair) holds; a fresh HEALED case whose document has
+// no newer job yet holds (the post-heal sync enqueues it). #358: repair
+// cases are Library-database residents — the newer-job check runs
+// through the Store-side seam (the same repo the sync's intake writes).
+// Without the seam (a store-slice process with no Library plane) the
+// stranded check degrades to "not stranded" — documented ADR-0002
+// behavior: the repair track and the wave gate both belong to processes
+// that can see the Library database.
 func (s *Store) WaveRepairGate(ctx context.Context) (bool, string, error) {
-	var open, stranded int
+	var open int
 	if err := s.pool.QueryRow(ctx, `
-		SELECT count(*) FILTER (WHERE status IN ('queued','in_repair')),
-		       count(*) FILTER (WHERE status='healed' AND updated_at > now() - interval '1 hour'
-		         AND NOT EXISTS (
-		           SELECT 1 FROM ingest_jobs j
-		           JOIN zotero_attachments a ON a.id = j.attachment_id
-		           WHERE a.document_id = repair_cases.document_id
-		             AND j.enqueued_at >= repair_cases.updated_at))
-		FROM repair_cases`).Scan(&open, &stranded); err != nil {
+		SELECT count(*) FROM repair_cases WHERE status IN ('queued','in_repair')`).Scan(&open); err != nil {
 		return false, "", err
 	}
 	if open > 0 {
 		return true, fmt.Sprintf("%d repair case(s) queued/in_repair", open), nil
+	}
+	// healed cases in the window with their documents
+	type healedCase struct {
+		docID string
+		at    time.Time
+	}
+	hrows, err := s.pool.Query(ctx, `
+		SELECT document_id::text, updated_at FROM repair_cases
+		WHERE status='healed' AND updated_at > now() - interval '1 hour' AND document_id IS NOT NULL`)
+	if err != nil {
+		return false, "", err
+	}
+	defer hrows.Close()
+	var healedCases []healedCase
+	for hrows.Next() {
+		var h healedCase
+		if err := hrows.Scan(&h.docID, &h.at); err != nil {
+			return false, "", err
+		}
+		healedCases = append(healedCases, h)
+	}
+	if err := hrows.Err(); err != nil {
+		return false, "", err
+	}
+	stranded := 0
+	for _, h := range healedCases {
+		if s.link == nil {
+			continue // degraded: no Store plane visible (see the doc note)
+		}
+		has, jerr := s.link.HasJobForDocumentSince(ctx, h.docID, h.at)
+		if jerr != nil {
+			return false, "", jerr
+		}
+		if !has {
+			stranded++
+		}
 	}
 	if stranded > 0 {
 		return true, fmt.Sprintf("%d healed case(s) not yet enqueued (post-heal sync pending)", stranded), nil

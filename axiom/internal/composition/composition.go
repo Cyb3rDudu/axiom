@@ -179,12 +179,12 @@ type Root struct {
 	libProvider *zoteroprovider.Provider
 	// libSvc is the wired Library service (nil without a provider) — the
 	// internal edge (F11) serves it when configured.
-	libSvc       *library.Service
-	libEdge      internalEdge
-	storeEdge    internalEdge
-	broker       *events.Broker
-	syncSvc      *axsync.Service
-	storeSvc     *store.Service
+	libSvc    *library.Service
+	libEdge   internalEdge
+	storeEdge internalEdge
+	broker    *events.Broker
+	syncSvc   *axsync.Service
+	storeSvc  *store.Service
 	// mirrorRepo is the Zotero mirror over the LIBRARY pool (#358); set
 	// by the store component's library gate (PostgreSQL profile only).
 	mirrorRepo   *mirror.Repo
@@ -1137,9 +1137,16 @@ func (r *Root) componentsFor() []Component {
 			// F09 #303: the repair-case seam — the adapter over the
 			// Library-owned repair store keeps internal/library/* out of
 			// the dispatcher's production imports.
-			rq := repair.NewStore(r.mirrorRepo.Pool())
-			rq.SetStoreLink(r.rep)
-			r.disp.SetRepairQueue(&repairQueueAdapter{store: rq})
+			if r.mirrorRepo != nil {
+				// The wave gate's repair queue lives on the Library plane;
+				// a store-slice process (no Library runtime) runs without
+				// it — ADR-0002: the gate belongs where repair is visible.
+				rq := repair.NewStore(r.mirrorRepo.Pool())
+				rq.SetStoreLink(r.rep)
+				r.disp.SetRepairQueue(&repairQueueAdapter{store: rq})
+			} else {
+				r.logger.Printf("dispatcher: no Library plane in this role set — repair wave gate unwired (ADR-0002)")
+			}
 			// #214: a fatal dispatcher error must exit the process non-zero
 			// so launchd/KeepAlive restarts it. A graceful shutdown
 			// (rootCtx cancelled) returns nil and never lands here.

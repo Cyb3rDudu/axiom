@@ -130,7 +130,9 @@ func TestContextualBootDegradedNoSyncIT(t *testing.T) {
 	// bootstrap-order case (deploy before the Zotero side exists).
 	src := ctxBootWorld("ctxboot1", false)
 	svc, buf := ctxBootSvc(t, src)
-	svc.store = repo.New(d.Pool())
+	rep := repo.New(d.Pool())
+	svc.store = rep
+	svc.mirror = mirror.New(rep.Pool())
 
 	if err := svc.InitContextual(ctx, []string{"VWL/Lectures"}, []string{"Vorlesung"}); err != nil {
 		t.Fatalf("#262: boot must succeed degraded on a never-synced DB, got fatal: %v", err)
@@ -186,7 +188,9 @@ func TestContextualBootConvergesAfterFirstSyncIT(t *testing.T) {
 
 	src := ctxBootWorld("ctxboot2", true)
 	svc, buf := ctxBootSvc(t, src)
-	svc.store = repo.New(d.Pool())
+	rep := repo.New(d.Pool())
+	svc.store = rep
+	svc.mirror = mirror.New(rep.Pool())
 
 	if err := svc.InitContextual(ctx, []string{"VWL/Lectures"}, []string{"Vorlesung"}); err != nil {
 		t.Fatalf("degraded boot: %v", err)
@@ -237,7 +241,9 @@ func TestContextualBootSyncedUnknownStillFatalIT(t *testing.T) {
 	// world the sync never carried.
 	src := ctxBootWorld("ctxboot3", true)
 	svc, buf := ctxBootSvc(t, src)
-	svc.store = repo.New(d.Pool())
+	rep := repo.New(d.Pool())
+	svc.store = rep
+	svc.mirror = mirror.New(rep.Pool())
 	if _, err := svc.Run(ctx, nil); err != nil {
 		t.Fatalf("seed sync: %v", err)
 	}
@@ -287,7 +293,9 @@ func TestContextualBootActiveSurvivesCollectionDeletionIT(t *testing.T) {
 
 	src := ctxBootWorld("ctxboot4", true)
 	svc, buf := ctxBootSvc(t, src)
-	svc.store = repo.New(d.Pool())
+	rep := repo.New(d.Pool())
+	svc.store = rep
+	svc.mirror = mirror.New(rep.Pool())
 	// Collection-path rule ONLY: the doc carries no ruled tag, so its class
 	// is observable through the collection axis alone.
 	if err := svc.InitContextual(ctx, []string{"VWL/Lectures"}, nil); err != nil {
@@ -363,6 +371,7 @@ func TestContextualActivationFailClosedIT(t *testing.T) {
 	svc, buf := ctxBootSvc(t, src)
 	rep := repo.New(d.Pool())
 	svc.store = rep
+	svc.mirror = mirror.New(rep.Pool())
 	if err := svc.InitContextual(ctx, []string{"VWL/Lectures"}, []string{"Vorlesung"}); err != nil {
 		t.Fatalf("degraded boot: %v", err)
 	}

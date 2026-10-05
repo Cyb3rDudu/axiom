@@ -313,7 +313,9 @@ func TestClaimWaitsForConcurrentAttachmentChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT id FROM zotero_attachments WHERE zotero_key='W1' FOR UPDATE`); err != nil {
+	// #358: the claim locks the PROJECTION row — the mirror's attachment
+	// row is no longer read at claim time.
+	if _, err := tx.Exec(ctx, `SELECT attachment_id FROM store_documents WHERE rendition_key='W1' FOR UPDATE`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -334,7 +336,7 @@ func TestClaimWaitsForConcurrentAttachmentChange(t *testing.T) {
 		// still blocked -> good
 	}
 
-	if _, err := tx.Exec(ctx, `UPDATE zotero_attachments SET content_hash='sha256:changed' WHERE zotero_key='W1'`); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE store_documents SET content_hash='sha256:changed' WHERE rendition_key='W1'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {

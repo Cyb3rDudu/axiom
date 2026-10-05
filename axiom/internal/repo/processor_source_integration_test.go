@@ -28,16 +28,15 @@ func TestProcessorSourceLeaseFreshnessIsDBDomain(t *testing.T) {
 		docKey: "DOC-FRESH", attKey: "ATT-FRESH",
 		contentHash: h("freshness-hash"), preferred: true,
 	}, "pending", 3)
-	_ = attID
 
 	ctx := context.Background()
 
-	// 1) Lease due one hour in the DB's future => fresh, regardless of any
-	// host clock. `now()` here is the DB clock, exactly as the predicate uses.
+	// The source endpoint resolves the job's attachment through the
+	// projection — pin the FK as the claim would have (#358).
 	if _, err := lr.pool.Exec(ctx, `
-		UPDATE ingest_jobs SET status='processing', lease_until = now() + interval '1 hour'
-		WHERE id=$1`, jobID); err != nil {
-		t.Fatalf("set future lease: %v", err)
+		UPDATE ingest_jobs SET attachment_id=$2::uuid, status='processing', lease_until = now() + interval '1 hour'
+		WHERE id=$1`, jobID, attID); err != nil {
+		t.Fatalf("pin attachment + future lease: %v", err)
 	}
 	got, err := lr.rep.ProcessorSource(ctx, jobID)
 	if err != nil {

@@ -63,17 +63,16 @@ func TestOverrideOnceAndPersistedSelectionIT(t *testing.T) {
 	jobCount := func(sourceID string) int {
 		var n int
 		if err := d.Pool().QueryRow(ctx, `
-			SELECT count(*) FROM ingest_jobs j
-			JOIN zotero_attachments a ON a.id=j.attachment_id
-			WHERE a.source_id=$1`, sourceID).Scan(&n); err != nil {
+			SELECT count(*) FROM ingest_jobs
+			WHERE revision_source_id=$1 OR source_id=$1::uuid`, sourceID).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
 	}
 	delJobs := func(sourceID string) {
 		if _, err := d.Pool().Exec(ctx, `
-			DELETE FROM ingest_jobs j USING zotero_attachments a
-			WHERE a.id=j.attachment_id AND a.source_id=$1`, sourceID); err != nil {
+			DELETE FROM ingest_jobs
+			WHERE revision_source_id=$1 OR source_id=$1::uuid`, sourceID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -193,17 +192,17 @@ func TestCollectionSelectionGatesSyncIT(t *testing.T) {
 
 	delJobs := func(sourceID string) {
 		if _, err := d.Pool().Exec(ctx, `
-			DELETE FROM ingest_jobs j USING zotero_attachments a
-			WHERE a.id=j.attachment_id AND a.source_id=$1`, sourceID); err != nil {
+			DELETE FROM ingest_jobs
+			WHERE revision_source_id=$1 OR source_id=$1::uuid`, sourceID); err != nil {
 			t.Fatal(err)
 		}
 	}
 	docJobs := func(sourceID string) map[string]int {
 		rows, err := d.Pool().Query(ctx, `
-			SELECT d.zotero_key, count(*) FROM ingest_jobs j
-			JOIN zotero_attachments a ON a.id=j.attachment_id
-			JOIN zotero_documents d ON d.id=a.document_id
-			WHERE a.source_id=$1 GROUP BY d.zotero_key`, sourceID)
+			SELECT p.record_key, count(*) FROM ingest_jobs j
+			JOIN store_documents p ON p.source_id::text = j.revision_source_id
+			                      AND p.rendition_key = j.revision_rendition_id
+			WHERE j.revision_source_id=$1 GROUP BY p.record_key`, sourceID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -338,8 +337,7 @@ func TestSyncIncludeOverrideEnqueuesJob(t *testing.T) {
 	var pending int
 	if err := d.Pool().QueryRow(ctx, `
 		SELECT count(*) FROM ingest_jobs j
-		JOIN zotero_attachments a ON a.id=j.attachment_id
-		WHERE a.source_id=$1 AND j.status='pending'`, res2.SourceID).Scan(&pending); err != nil {
+		WHERE j.revision_source_id=$1 AND j.status='pending'`, res2.SourceID).Scan(&pending); err != nil {
 		t.Fatal(err)
 	}
 	if pending < 1 {

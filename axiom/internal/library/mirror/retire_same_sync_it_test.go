@@ -27,16 +27,6 @@ func TestSyncRetiresDeletedAttachmentSameTxIT(t *testing.T) {
 	attID, _ := lr.seed(t, mirrorSeedSpec{sourceBaseURL: "https://zoteroprovider.live", libraryID: "lib-zombie",
 		docKey: "ZOMBIEDOC", attKey: "ZOMBIEATT", contentHash: &ch}, "completed", 1)
 
-	// The Store-side projection row for the rendition (the sync's store
-	// phase would have written it while the attachment was live).
-	if _, err := lr.pool.Exec(ctx, `
-		INSERT INTO store_documents (document_id, attachment_id, source_id, record_key, rendition_key)
-		SELECT a.document_id, a.id, a.source_id, d.zotero_key, a.zotero_key
-		FROM zotero_attachments a JOIN zotero_documents d ON d.id=a.document_id
-		WHERE a.id=$1`, attID); err != nil {
-		t.Fatalf("seed projection: %v", err)
-	}
-
 	var snapID string
 	if err := lr.pool.QueryRow(ctx, `
 		INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name,

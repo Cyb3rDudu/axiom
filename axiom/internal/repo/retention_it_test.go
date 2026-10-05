@@ -37,9 +37,9 @@ func (e *retEnv) seedSnapshot(t *testing.T, active bool, jobID *string, chunks i
 	if err := e.pool.QueryRow(ctx, `
 		INSERT INTO processing_snapshots (attachment_id, content_hash, processor_name, processor_version,
 			profile_hash, document_id, profile, active, ingest_job_id)
-		SELECT a.id, 'hash-' || gen_random_uuid()::text, 'p', 'v1', 'ph', a.document_id, '{}', $1,
+		SELECT p.attachment_id, 'hash-' || gen_random_uuid()::text, 'p', 'v1', 'ph', p.document_id, '{}', $1,
 		       CASE WHEN $2::text IS NULL THEN NULL ELSE $2::uuid END
-		FROM zotero_attachments a LIMIT 1
+		FROM store_documents p LIMIT 1
 		RETURNING id::text`, active, job).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +101,8 @@ func (e *retEnv) seedJobForAttachment(t *testing.T, attKey, status string, age, 
 	}
 	if err := e.pool.QueryRow(context.Background(), `
 		INSERT INTO ingest_jobs (status, attachment_id, content_hash, enqueued_at, updated_at, error_code, error_message)
-		SELECT $1, a.id, 'h-' || gen_random_uuid()::text, now() - make_interval(secs => $2), `+upd+`, 'X', 'old attempt'
-		FROM zotero_attachments a WHERE a.zotero_key = $3 RETURNING id::text`, status, age.Seconds(), attKey).Scan(&id); err != nil {
+		SELECT $1, p.attachment_id, 'h-' || gen_random_uuid()::text, now() - make_interval(secs => $2), `+upd+`, 'X', 'old attempt'
+		FROM store_documents p WHERE p.rendition_key = $3 RETURNING id::text`, status, age.Seconds(), attKey).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -148,9 +148,10 @@ func TestRetentionIT(t *testing.T) {
 	// sibling axis for repro A without touching RETATT1's outcome key)
 	sib := e.seedJobForAttachment(t, "RETATT2", "completed", time.Hour, 0)
 	_ = sib // young sibling; covered by total counts
+	// #358: the repair guard reads the projection's repair_linked flag
+	// (set once by the repair track's repo seam).
 	if _, err := e.pool.Exec(ctx, `
-		INSERT INTO repair_cases (attachment_id, document_id, status, suspicion_class, analysis)
-		VALUES ($1::uuid, NULL, 'healed', '🔴 reparierbar', '{}')`, att2); err != nil {
+		UPDATE store_documents SET repair_linked=true WHERE attachment_id=$1::uuid`, att2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -162,14 +163,12 @@ func TestRetentionIT(t *testing.T) {
 	if err := e.pool.QueryRow(ctx, `
 		WITH s AS (INSERT INTO zotero_sources (base_url, library_id, server_id)
 			VALUES ('https://zotero.ret2', 'lib-ret2', 'srv2') RETURNING id),
-		d AS (INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title, creators, publication_year)
-			SELECT id, 'RETDOC2', 1, 'book', 'Retention Old Latest', '[{"first":"A","last":"Autor"}]', 2024 FROM s RETURNING id),
-		a AS (INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
-			parent_zotero_key, link_mode, content_type, filename, local_path, preferred)
-			SELECT s.id, d.id, 'RETATT3', 1, 'RETDOC2', 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf', true
-			FROM s, d RETURNING id)
+		p AS (INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, title, publication_year, preferred)
+			SELECT gen_random_uuid(), gen_random_uuid(), id, 'RETDOC2', 'RETATT3', 'Retention Old Latest', 2024, true
+			FROM s RETURNING attachment_id)
 		INSERT INTO ingest_jobs (status, attachment_id, content_hash, enqueued_at)
-		SELECT 'completed', a.id, 'old-latest-hash', now() - interval '20 days' FROM a
+		SELECT 'completed', p.attachment_id, 'old-latest-hash', now() - interval '20 days' FROM p
 		RETURNING id::text`).Scan(&oldLatest); err != nil {
 		t.Fatal(err)
 	}
@@ -319,22 +318,22 @@ func TestRetentionIT(t *testing.T) {
 	}
 }
 
-// seedAttachmentIfAbsent adds a second attachment under the harness document.
+// seedAttachmentIfAbsent adds a second rendition under the harness document.
 func (e *retEnv) seedAttachmentIfAbsent(t *testing.T, key string) string {
 	t.Helper()
 	var id string
 	if err := e.pool.QueryRow(context.Background(), `
-		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
-			parent_zotero_key, link_mode, content_type, filename, local_path)
-		SELECT source_id, document_id, $1, 1, 'RETDOC', 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf'
-		FROM zotero_attachments WHERE zotero_key = 'RETATT1'
-		RETURNING id::text`, key).Scan(&id); err != nil {
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, preferred)
+		SELECT document_id, gen_random_uuid(), source_id, record_key, $1, true
+		FROM store_documents WHERE rendition_key = 'RETATT1'
+		RETURNING attachment_id::text`, key).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-// seedDocWithAttachment creates a minimal source/document/preferred-attachment
+// seedDocWithAttachment creates a minimal preferred-rendition projection
 // fixture and returns the attachment id.
 func (e *retEnv) seedDocWithAttachment(t *testing.T, docKey, attKey string) string {
 	t.Helper()
@@ -342,27 +341,27 @@ func (e *retEnv) seedDocWithAttachment(t *testing.T, docKey, attKey string) stri
 	if err := e.pool.QueryRow(context.Background(), `
 		WITH s AS (INSERT INTO zotero_sources (base_url, library_id, server_id)
 			VALUES ('https://zotero.' || $1, 'lib-' || $1, 'srv-' || $1) RETURNING id),
-		d AS (INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
-			SELECT id, $1, 1, 'book', 'Retention ' || $1 FROM s RETURNING id)
-		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
-			parent_zotero_key, link_mode, content_type, filename, local_path, preferred)
-		SELECT s.id, d.id, $2, 1, $1, 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf', true
-		FROM s, d RETURNING id::text`, docKey, attKey).Scan(&attID); err != nil {
+		d AS (SELECT gen_random_uuid()::text AS doc, (SELECT id::text FROM s) AS src)
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, title, preferred)
+		SELECT d.doc::uuid, gen_random_uuid(), d.src::uuid, $1, $2, 'Retention ' || $1, true
+		FROM d RETURNING attachment_id::text`, docKey, attKey).Scan(&attID); err != nil {
 		t.Fatal(err)
 	}
 	return attID
 }
 
-// seedAttachmentForDoc adds another attachment under an existing document
-// (by document zotero_key), preferred flag optional.
+// seedAttachmentForDoc adds another rendition under an existing document
+// (by record key), preferred flag optional.
 func (e *retEnv) seedAttachmentForDoc(t *testing.T, docKey, attKey string, preferred bool) string {
 	t.Helper()
 	var id string
 	if err := e.pool.QueryRow(context.Background(), `
-		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
-			parent_zotero_key, link_mode, content_type, filename, local_path, preferred)
-		SELECT source_id, id, $2, 1, $1, 'imported_file', 'application/pdf', 'x.pdf', '/tmp/x.pdf', $3
-		FROM zotero_documents WHERE zotero_key = $1 RETURNING id::text`, docKey, attKey, preferred).Scan(&id); err != nil {
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, preferred)
+		SELECT document_id, gen_random_uuid(), source_id, record_key, $2, $3
+		FROM store_documents WHERE record_key = $1 AND preferred
+		RETURNING attachment_id::text`, docKey, attKey, preferred).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -400,12 +399,12 @@ func TestRetention294IT(t *testing.T) {
 	att7 := e.seedDocWithAttachment(t, "RETDOC7", "RETATT7")
 	_ = e.seedAttachmentForDoc(t, "RETDOC7", "RETATT8", true)
 	if _, err := e.pool.Exec(ctx,
-		`UPDATE zotero_attachments SET preferred=false WHERE zotero_key='RETATT7'`); err != nil {
+		`UPDATE store_documents SET preferred=false WHERE rendition_key='RETATT7'`); err != nil {
 		t.Fatal(err)
 	}
 	var doc7 string
 	if err := e.pool.QueryRow(ctx,
-		`SELECT id::text FROM zotero_documents WHERE zotero_key='RETDOC7'`).Scan(&doc7); err != nil {
+		`SELECT document_id::text FROM store_documents WHERE record_key='RETDOC7'`).Scan(&doc7); err != nil {
 		t.Fatal(err)
 	}
 	// J_A: completed, enqueued 480h ago, updated 456h ago (long run —
@@ -429,7 +428,7 @@ func TestRetention294IT(t *testing.T) {
 	att9 := e.seedDocWithAttachment(t, "RETDOC9", "RETATT9")
 	var doc9 string
 	if err := e.pool.QueryRow(ctx,
-		`SELECT id::text FROM zotero_documents WHERE zotero_key='RETDOC9'`).Scan(&doc9); err != nil {
+		`SELECT document_id::text FROM store_documents WHERE record_key='RETDOC9'`).Scan(&doc9); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.pool.Exec(ctx, `
@@ -500,8 +499,8 @@ func (e *retEnv) seedFailedJobNullHash(t *testing.T, attKey string, age time.Dur
 	var id string
 	if err := e.pool.QueryRow(context.Background(), `
 		INSERT INTO ingest_jobs (status, attachment_id, content_hash, enqueued_at, updated_at, error_code, error_message)
-		SELECT 'failed', a.id, NULL, now() - make_interval(secs => $1), now() - make_interval(secs => $1), 'X', 'failed fast'
-		FROM zotero_attachments a WHERE a.zotero_key = $2 RETURNING id::text`, age.Seconds(), attKey).Scan(&id); err != nil {
+		SELECT 'failed', p.attachment_id, NULL, now() - make_interval(secs => $1), now() - make_interval(secs => $1), 'X', 'failed fast'
+		FROM store_documents p WHERE p.rendition_key = $2 RETURNING id::text`, age.Seconds(), attKey).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -528,11 +527,20 @@ func TestRetentionPrunesFKlessRevisionCorpses(t *testing.T) {
 		        '11111111-1111-1111-1111-111111111111','DOCR','ATTTR','1','{}',3,$1,$1)`, old); err != nil {
 		t.Fatal(err)
 	}
-	// The anchored control: same age, mirror-attached, the document's
-	// outcome row (newest job of the preferred attachment) — must stay.
+	// The anchored control: same age, projection-attached, the document's
+	// outcome row (newest job of the preferred rendition) — must stay.
 	hash := "sha256:anchored" + "retention"
-	attID, _ := lr.seed(t, seedSpec{sourceBaseURL: "https://fkless-retention.local", libraryID: "users/0",
+	attID, ctrlJob := lr.seed(t, seedSpec{sourceBaseURL: "https://fkless-retention.local", libraryID: "users/0",
 		docKey: "DOCR", attKey: "ATTTR", contentHash: &hash}, "completed", 3)
+	// The seed mints FK-less revision rows; pin the control's FKs as the
+	// claim would (the anchored shape the guard branch exists for).
+	if _, err := lr.pool.Exec(ctx, `
+		UPDATE ingest_jobs SET attachment_id=$2::uuid,
+		       document_id=(SELECT document_id FROM store_documents WHERE attachment_id=$2::uuid),
+		       source_id=(SELECT source_id FROM store_documents WHERE attachment_id=$2::uuid)
+		WHERE id=$1`, ctrlJob, attID); err != nil {
+		t.Fatal(err)
+	}
 
 	rep, err := lr.rep.RetentionPlan(ctx, 30*24*time.Hour)
 	if err != nil {

@@ -19,16 +19,18 @@ func (h *dispatchHarness) seedRepairCaseForJob(t *testing.T, jobID, status strin
 	ctx := context.Background()
 	var attID string
 	if err := h.pool.QueryRow(ctx,
-		`SELECT attachment_id::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&attID); err != nil {
+		`SELECT p.attachment_id::text FROM ingest_jobs j
+		 JOIN store_documents p ON p.source_id::text = j.revision_source_id
+		                       AND p.rendition_key = j.revision_rendition_id
+		 WHERE j.id=$1`, jobID).Scan(&attID); err != nil {
 		t.Fatal(err)
 	}
 	var caseID string
 	if err := h.pool.QueryRow(ctx, `
 		INSERT INTO repair_cases (attachment_id, document_id, status, suspicion_class, analysis)
-		SELECT a.id, a.document_id, $2::repair_status, '🔴 reparierbar', '{}'
-		FROM ingest_jobs j JOIN zotero_attachments a ON a.id = j.attachment_id
-		WHERE j.id = $1
-		RETURNING id::text`, jobID, status).Scan(&caseID); err != nil {
+		SELECT $1::uuid, p.document_id, $2::repair_status, '🔴 reparierbar', '{}'
+		FROM store_documents p WHERE p.attachment_id=$1::uuid
+		RETURNING id::text`, attID, status).Scan(&caseID); err != nil {
 		t.Fatal(err)
 	}
 	return caseID
@@ -39,10 +41,14 @@ func (h *dispatchHarness) seedRepairCaseForJob(t *testing.T, jobID, status strin
 func (h *dispatchHarness) enqueueJobForDocument(t *testing.T, caseID string) {
 	t.Helper()
 	ctx := context.Background()
+	// The post-heal sync's intake shape: a revision job for the healed
+	// document's rendition (FKs resolve at claim).
 	tag, err := h.pool.Exec(ctx, `
-		INSERT INTO ingest_jobs (status, attachment_id, content_hash)
-		SELECT 'pending', a.id, 'healed-hash'
-		FROM repair_cases c JOIN zotero_attachments a ON a.id = c.attachment_id
+		INSERT INTO ingest_jobs (intake_kind, status, content_hash,
+		                         revision_source_id, revision_record_id, revision_rendition_id, revision_no, revision_json)
+		SELECT 'revision', 'pending', 'healed-hash',
+		       p.source_id::text, p.record_key, p.rendition_key, '1', '{}'
+		FROM repair_cases c JOIN store_documents p ON p.attachment_id = c.attachment_id
 		WHERE c.id = $1`, caseID)
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +194,10 @@ func TestPreflightAutoQueueDocLevelLoopGuard(t *testing.T) {
 	// this test pins the auto-queue guard, not the gate
 	var attID, docID string
 	if err := h.pool.QueryRow(context.Background(),
-		`SELECT attachment_id::text, document_id::text FROM ingest_jobs WHERE id=$1`, jobID).
+		`SELECT p.attachment_id::text, p.document_id::text FROM ingest_jobs j
+		 JOIN store_documents p ON p.source_id::text = j.revision_source_id
+		                       AND p.rendition_key = j.revision_rendition_id
+		 WHERE j.id=$1`, jobID).
 		Scan(&attID, &docID); err != nil {
 		t.Fatal(err)
 	}

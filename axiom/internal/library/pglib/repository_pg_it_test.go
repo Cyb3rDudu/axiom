@@ -119,7 +119,7 @@ func TestMitschriebLaneOnLibraryOnlyDatabaseFoldsToAbsence(t *testing.T) {
 		t.Fatalf("sync mitschrieb on a mirrorless DB must fold to (0, nil), got (%d, %v)", n, err)
 	}
 	if err := st.RecordAttachmentRevision(ctx, "11111111-1111-4111-8111-111111111111", "DOC1", "ATT1", "sha", "application/pdf"); err != nil {
-		t.Fatalf("heal mitschrieb on a mirrorless DB must fold to nil, got %v", err)
+		t.Fatalf("heal mitschrieb on an empty mirror (library-only DB, never synced) must fold to nil, got %v", err)
 	}
 	// The NEGATIVE half of the fold split: a missing LIBRARY-OWNED
 	// relation is a schema fault and stays a RAW error — absent() must

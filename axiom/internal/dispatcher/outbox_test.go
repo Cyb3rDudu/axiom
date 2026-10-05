@@ -539,17 +539,27 @@ func TestOutboxTombstoneRoundtrip(t *testing.T) {
 		if force {
 			// B re-processes A's attachment via a force job (different profile
 			// hash): the sibling/deactivation path only exists on a SHARED
-			// attachment.
+			// attachment. The copy reuses the base job's revision identity.
 			if _, err := h.pool.Exec(ctx, `
-				INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-				VALUES ($1,$2,$3,$4,'pending',true)`, srcID, docID, attID, chRef); err != nil {
+				INSERT INTO ingest_jobs (intake_kind, content_hash, status, force_rebuild, max_attempts,
+				                         revision_source_id, revision_record_id, revision_rendition_id,
+				                         revision_no, revision_json)
+				SELECT 'revision', content_hash, 'pending', true, 3,
+				       revision_source_id, revision_record_id, revision_rendition_id,
+				       revision_no, revision_json
+				FROM ingest_jobs WHERE attachment_id=$1 AND NOT force_rebuild
+				ORDER BY enqueued_at LIMIT 1`, attID); err != nil {
 				t.Fatalf("force job: %v", err)
 			}
 			jobID = h.seededPendingForceID(t, attID)
 		} else {
 			jobID = h.seedJob(t, key, 3)
 			if err := h.pool.QueryRow(ctx,
-				`SELECT attachment_id::text, source_id::text, document_id::text, content_hash FROM ingest_jobs WHERE id=$1`, jobID,
+				`SELECT p.attachment_id::text, p.source_id::text, p.document_id::text, p.content_hash
+				 FROM ingest_jobs j
+				 JOIN store_documents p ON p.source_id::text = j.revision_source_id
+				                       AND p.rendition_key = j.revision_rendition_id
+				 WHERE j.id=$1`, jobID,
 			).Scan(&attID, &srcID, &docID, &chRef); err != nil {
 				t.Fatalf("refs: %v", err)
 			}
@@ -655,7 +665,11 @@ func (h *dispatchHarness) seededPendingForceID(t *testing.T, attID string) strin
 	t.Helper()
 	var id string
 	if err := h.pool.QueryRow(context.Background(),
-		`SELECT id::text FROM ingest_jobs WHERE attachment_id=$1 AND force_rebuild ORDER BY enqueued_at DESC LIMIT 1`, attID).Scan(&id); err != nil {
+		`SELECT f.id::text FROM ingest_jobs f
+		 JOIN store_documents p ON p.attachment_id=$1::uuid
+		 WHERE f.force_rebuild AND f.revision_source_id=p.source_id::text
+		   AND f.revision_rendition_id=p.rendition_key
+		 ORDER BY f.enqueued_at DESC LIMIT 1`, attID).Scan(&id); err != nil {
 		t.Fatalf("force id: %v", err)
 	}
 	return id
@@ -849,14 +863,23 @@ func TestForceReplaceFrozenTombstoneDeletesOldChunks(t *testing.T) {
 	jA := h.seedJob(t, "frz-a", 3)
 	var attID, srcID, docID, chRef string
 	if err := h.pool.QueryRow(ctx,
-		`SELECT attachment_id::text, source_id::text, document_id::text, content_hash FROM ingest_jobs WHERE id=$1`, jA,
+		`SELECT p.attachment_id::text, p.source_id::text, p.document_id::text, p.content_hash
+		 FROM ingest_jobs j
+		 JOIN store_documents p ON p.source_id::text = j.revision_source_id
+		                       AND p.rendition_key = j.revision_rendition_id
+		 WHERE j.id=$1`, jA,
 	).Scan(&attID, &srcID, &docID, &chRef); err != nil {
 		t.Fatalf("refs: %v", err)
 	}
 	seedForce := func() {
 		if _, err := h.pool.Exec(ctx, `
-			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-			VALUES ($1,$2,$3,$4,'pending',true)`, srcID, docID, attID, chRef); err != nil {
+			INSERT INTO ingest_jobs (intake_kind, content_hash, status, force_rebuild, max_attempts,
+			                         revision_source_id, revision_record_id, revision_rendition_id,
+			                         revision_no, revision_json)
+			SELECT 'revision', content_hash, 'pending', true, 3,
+			       revision_source_id, revision_record_id, revision_rendition_id,
+			       revision_no, revision_json
+			FROM ingest_jobs WHERE id=$1`, jA); err != nil {
 			t.Fatalf("force job: %v", err)
 		}
 	}

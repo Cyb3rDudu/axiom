@@ -38,10 +38,12 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/config"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library/repair"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -112,9 +114,13 @@ func createCompositionDB(t *testing.T, base string) *compositionHarness {
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, database.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 	h.pool = database.Pool()
 	h.rep = repo.New(h.pool)
 	h.repairs = repair.NewStore(h.pool)
+	h.repairs.SetStoreLink(h.rep)
 	return h
 }
 
@@ -131,7 +137,7 @@ func (h *compositionHarness) truncate(t *testing.T) {
 		t.Fatalf("REFUSING to truncate: %q does not end in _test", dbName)
 	}
 	if _, err := h.pool.Exec(ctx,
-		`TRUNCATE ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
+		`TRUNCATE ingest_jobs, store_documents, zotero_attachments, zotero_documents, zotero_items,
 		         zotero_item_collections, zotero_collections, zotero_sources,
 		         zotero_selections, zotero_collection_selections,
 		         repair_cases, zotero_write_audit, processing_snapshots,
@@ -180,10 +186,26 @@ func (h *compositionHarness) seedPendingJob(t *testing.T, key string) string {
 		 RETURNING id::text`, srcID, docID, key, "sha256:"+key).Scan(&attID); err != nil {
 		t.Fatal(err)
 	}
+	// The Store projection + revision-lane job (#358 claim shape).
+	if _, err := h.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, content_hash, title, content_type, local_path, preferred)
+		VALUES ($1, $2, $3, $4, $4, $5, 'Comp IT', 'application/pdf', '/tmp/x.pdf', true)`,
+		docID, attID, srcID, key, "sha256:"+key); err != nil {
+		t.Fatal(err)
+	}
+	revJSON, _ := json.Marshal(revision.SourceRevision{
+		SourceID: srcID, RevisionID: "1", RenditionID: key,
+		ContentHash: "sha256:" + key, MediaType: revision.MediaTypePDF,
+		Bibliography:  revision.Bibliography{RecordID: key, Title: "Comp IT", CitationClass: revision.CitationClassCitable},
+		ContentTicket: "zat:" + srcID + ":" + key,
+	})
 	if err := h.pool.QueryRow(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts)
-		VALUES ($1,$2,$3,$4,'pending',3) RETURNING id::text`,
-		srcID, docID, attID, "sha256:"+key).Scan(&jobID); err != nil {
+		INSERT INTO ingest_jobs (intake_kind, content_hash, status, max_attempts,
+		                         revision_source_id, revision_record_id, revision_rendition_id,
+		                         revision_no, revision_json)
+		VALUES ('revision', $1, 'pending', 3, $2, $3, $3, '1', $4::jsonb) RETURNING id::text`,
+		"sha256:"+key, srcID, key, revJSON).Scan(&jobID); err != nil {
 		t.Fatal(err)
 	}
 	return jobID

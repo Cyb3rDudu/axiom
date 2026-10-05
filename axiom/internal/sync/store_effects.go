@@ -19,6 +19,8 @@ package sync
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,13 +34,14 @@ import (
 // bibRow is the document-side bibliography block read from the mirror
 // (post-commit, post-citation-class-recompute — the class is final).
 type bibRow struct {
-	Title        string
-	Creators     []byte
-	Year         *int
-	Publisher    string
-	Language     string
-	Tags         []byte
+	Title         string
+	Creators      []byte
+	Year          *int
+	Publisher     string
+	Language      string
+	Tags          []byte
 	CitationClass string
+	DocVersion    int64
 }
 
 // readBibliographies loads the bibliographic block for the changed
@@ -59,7 +62,7 @@ func (s *Service) readBibliographies(ctx context.Context, sourceID string, rendi
 	rows, err := s.mir().Pool().Query(ctx, `
 		SELECT id::text, title, creators, publication_year,
 		       COALESCE(publisher,''), COALESCE(language,''), tags,
-		       COALESCE(citation_class,'citable')
+		       COALESCE(citation_class,'citable'), zotero_version
 		FROM zotero_documents
 		WHERE id = ANY($1::uuid[])`, ids)
 	if err != nil {
@@ -69,7 +72,7 @@ func (s *Service) readBibliographies(ctx context.Context, sourceID string, rendi
 	for rows.Next() {
 		var id string
 		var b bibRow
-		if err := rows.Scan(&id, &b.Title, &b.Creators, &b.Year, &b.Publisher, &b.Language, &b.Tags, &b.CitationClass); err != nil {
+		if err := rows.Scan(&id, &b.Title, &b.Creators, &b.Year, &b.Publisher, &b.Language, &b.Tags, &b.CitationClass, &b.DocVersion); err != nil {
 			return nil, err
 		}
 		out[id] = b
@@ -154,6 +157,13 @@ func buildSyncRevision(sourceID string, r mirror.SyncRendition, b bibRow) revisi
 	return rev
 }
 
+// revisionFingerprint digests the canonical revision JSON into a short
+// stable key component (sha256, first 16 hex chars).
+func revisionFingerprint(revJSON []byte) string {
+	sum := sha256.Sum256(revJSON)
+	return hex.EncodeToString(sum[:8])
+}
+
 // applyStoreEffects runs the sync's Store phase. Returns minted intake
 // jobs and recorded failed rows.
 func (s *Service) applyStoreEffects(ctx context.Context, sourceID, serverID string, res mirror.CanonicalApplyResult, selection map[string]string) (int, int, error) {
@@ -220,8 +230,15 @@ func (s *Service) applyStoreEffects(ctx context.Context, sourceID, serverID stri
 		if err != nil {
 			return 0, 0, fmt.Errorf("marshal revision %s: %w", r.AttachmentKey, err)
 		}
+		// The key derives from the revision CONTENT: identical offers
+		// replay cleanly, ANY change (content hash, rendition version,
+		// bibliography — Zotero may re-offer metadata at an equal item
+		// version; the projection upserts tolerate it) yields a new key and
+		// the identity dedup / #294 suppression decide join-vs-mint. A key
+		// mismatch is impossible by construction.
+		intakeKey := "sync:" + sourceID + ":" + r.AttachmentKey + ":" + revisionFingerprint(revJSON)
 		_, minted, err := s.store.EnqueueRevisionIntakeTx(ctx, tx, repo.IntakeRequest{
-			IdempotencyKey:      "sync:" + sourceID + ":" + r.AttachmentKey + ":" + r.Hash + ":v" + rev.RevisionID,
+			IdempotencyKey:      intakeKey,
 			RevisionSourceID:    sourceID,
 			RevisionRecordID:    r.DocumentKey,
 			RevisionRenditionID: r.AttachmentKey,

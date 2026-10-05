@@ -17,11 +17,13 @@ package pglib
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library"
+	"github.com/jackc/pgx/v5"
 )
 
 // RecordSyncRevisions walks the active attachments of the source and
@@ -101,6 +103,12 @@ func (s *Store) recordMirrorRevision(ctx context.Context, sourceID, documentKey,
 		sourceID, documentKey).Scan(&title, &publisher, &language, &creators, &year, &class)
 	if isMissingRelation(err) {
 		return false, nil // no mirror — absence, not an error (see above)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		// #358: every fresh library database carries the mirror schema —
+		// the remaining absence shape is the EMPTY mirror (a library-only
+		// database whose sync never ran). Absence, not an error.
+		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("revision mitschrieb document %s: %w", documentKey, err)

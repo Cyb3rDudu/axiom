@@ -242,8 +242,9 @@ func TestChainClaimWorkerApplySyncReenqueue(t *testing.T) {
 	var jobs int
 	if err := e.pool.QueryRow(context.Background(), `
 		SELECT count(*) FROM ingest_jobs j
-		JOIN zotero_attachments a ON a.id = j.attachment_id
-		JOIN repair_cases c ON c.attachment_id = a.id
+		JOIN store_documents p ON p.source_id::text = j.revision_source_id
+		                      AND p.rendition_key = j.revision_rendition_id
+		JOIN repair_cases c ON c.attachment_id = p.attachment_id
 		WHERE c.id=$1 AND j.enqueued_at >= c.updated_at`, caseID).Scan(&jobs); err != nil {
 		t.Fatal(err)
 	}
@@ -266,11 +267,15 @@ func (c *chainSyncer) Run(ctx context.Context, ov *axiomsync.SyncOverride) (axio
 		return axiomsync.Result{}, fmt.Errorf("chain syncer: expected include override, got %+v", ov)
 	}
 	docID := ov.Include[0]
+	// The targeted sync's intake shape: a revision job for the document's
+	// preferred rendition (FKs resolve at claim — #358).
 	tag, err := c.pool.Exec(ctx, `
-		INSERT INTO ingest_jobs (status, attachment_id, content_hash)
-		SELECT 'pending', a.id, 'healed-chain-hash'
-		FROM zotero_attachments a WHERE a.document_id=$1::uuid
-		ORDER BY a.preferred DESC LIMIT 1`, docID)
+		INSERT INTO ingest_jobs (intake_kind, status, content_hash,
+		                         revision_source_id, revision_record_id, revision_rendition_id, revision_no, revision_json)
+		SELECT 'revision', 'pending', 'healed-chain-hash',
+		       p.source_id::text, p.record_key, p.rendition_key, '1', '{}'
+		FROM store_documents p WHERE p.document_id=$1::uuid
+		ORDER BY p.preferred DESC LIMIT 1`, docID)
 	if err != nil || tag.RowsAffected() != 1 {
 		return axiomsync.Result{}, fmt.Errorf("chain syncer enqueue (doc %s): %v rows=%d", docID, err, tag.RowsAffected())
 	}

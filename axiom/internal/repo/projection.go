@@ -11,6 +11,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -187,4 +188,23 @@ func (r *Repo) DocumentJobStates(ctx context.Context, attachmentIDs, documentIDs
 		}
 	}
 	return jobs, serving, nil
+}
+
+// HasJobForDocumentSince answers the wave gate's post-heal question: does
+// the document hold a job enqueued at/after the given time? Unclaimed
+// revision jobs resolve their document through the projection (their FKs
+// fill only at claim).
+func (r *Repo) HasJobForDocumentSince(ctx context.Context, documentID string, since time.Time) (bool, error) {
+	var has bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM ingest_jobs j
+			JOIN store_documents p ON p.source_id::text = j.revision_source_id
+			                      AND p.rendition_key = j.revision_rendition_id
+			WHERE p.document_id = $1::uuid AND j.enqueued_at >= $2)
+		   OR EXISTS (
+			SELECT 1 FROM ingest_jobs j2
+			WHERE j2.document_id = $1::uuid AND j2.enqueued_at >= $2)`,
+		documentID, since).Scan(&has)
+	return has, err
 }

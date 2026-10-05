@@ -173,8 +173,9 @@ const TombstoneVisibility = 7 * 24 * time.Hour
 // per-document selection mode and repair status, plus FRESH tombstones
 // (reconciled deletions inside the visibility window). Job truth and
 // active-snapshot truth live on the Store database — the caller merges
-// them in code via DocumentListing.
-func (m *Repo) ListDocumentsMirror(ctx context.Context, syncState string) ([]ZoteroDocumentState, error) {
+// them in code via DocumentListing (which also owns the sync_state
+// FILTER: live rows only learn their sync state in the merge).
+func (m *Repo) ListDocumentsMirror(ctx context.Context) ([]ZoteroDocumentState, error) {
 	rows, err := m.pool.Query(ctx, `
 		SELECT d.id::text, d.zotero_key, COALESCE(d.title,''), COALESCE(d.item_type,''), d.updated_at,
 		       d.deleted,
@@ -213,12 +214,11 @@ func (m *Repo) ListDocumentsMirror(ctx context.Context, syncState string) ([]Zot
 			z.Outcome = "removed"
 			z.OutcomeReason = "deleted in Zotero — reconciled at " + z.UpdatedAt.Format(time.RFC3339)
 		}
+		_ = deleted // filtering happens in DocumentListing (post-merge)
 		if attKey != "" {
 			z.Attachment = &AttachmentState{ZoteroKey: attKey, Filename: attName, ContentType: attType, ContentHash: attHash}
 		}
-		if syncState == "" || syncState == z.SyncState {
-			out = append(out, z)
-		}
+		out = append(out, z)
 	}
 	return out, rows.Err()
 }
@@ -227,7 +227,7 @@ func (m *Repo) ListDocumentsMirror(ctx context.Context, syncState string) ([]Zot
 // Library's mirror rows (with selection + repair truth) and the Store's
 // job/snapshot truth per rendition. Tombstoned rows pass through
 // untouched (their truth is mirror-only).
-func DocumentListing(mirrorRows []ZoteroDocumentState, jobs map[string]repo.JobState, serving map[string]bool) []ZoteroDocumentState {
+func DocumentListing(mirrorRows []ZoteroDocumentState, jobs map[string]repo.JobState, serving map[string]bool, syncState string) []ZoteroDocumentState {
 	out := make([]ZoteroDocumentState, 0, len(mirrorRows))
 	for _, z := range mirrorRows {
 		if z.SyncState == "tombstoned" {
@@ -269,7 +269,9 @@ func DocumentListing(mirrorRows []ZoteroDocumentState, jobs map[string]repo.JobS
 		}
 		z.Outcome, z.OutcomeReason = DeriveOutcome(z.SelectionMode, status, job.ErrorCode, job.ErrorMessage,
 			pagination, z.RepairStatus, snap)
-		out = append(out, z)
+		if syncState == "" || syncState == z.SyncState {
+			out = append(out, z)
+		}
 	}
 	return out
 }

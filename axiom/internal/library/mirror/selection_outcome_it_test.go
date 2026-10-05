@@ -37,7 +37,7 @@ func TestOutcomeProjectionIT(t *testing.T) {
 
 	listing := func() ZoteroDocumentState {
 		t.Helper()
-		rows, err := lr.rep.ListDocumentsMirror(ctx, "")
+		rows, err := lr.rep.ListDocumentsMirror(ctx)
 		if err != nil {
 			t.Fatalf("mirror listing: %v", err)
 		}
@@ -53,7 +53,7 @@ func TestOutcomeProjectionIT(t *testing.T) {
 		if err != nil {
 			t.Fatalf("store job states: %v", err)
 		}
-		docs := DocumentListing(rows, jobs, serving)
+		docs := DocumentListing(rows, jobs, serving, "")
 		if len(docs) != 1 {
 			t.Fatalf("want 1 merged document, got %d", len(docs))
 		}

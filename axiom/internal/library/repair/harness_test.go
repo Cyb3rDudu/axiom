@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -62,8 +64,13 @@ func openStoreDB(t *testing.T) *storeEnv {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 	t.Cleanup(d.Close)
-	return &storeEnv{pool: d.Pool(), store: NewStore(d.Pool())}
+	st := NewStore(d.Pool())
+	st.SetStoreLink(repo.New(d.Pool()))
+	return &storeEnv{pool: d.Pool(), store: st}
 }
 
 func dsnDatabaseName(dsn string) string {

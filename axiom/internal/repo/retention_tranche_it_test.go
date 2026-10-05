@@ -130,7 +130,7 @@ func TestRetentionLayer2GuardIT(t *testing.T) {
 		t.Fatalf("survivor's artifact path must never be reported for unlink, got %v", sr.rem.ArtifactPaths)
 	}
 
-	// ── repair leg: repair_cases row saves the locked job ────────────
+	// ── repair leg: the repair_linked flag saves the locked job ────────
 	// victim on the preferred attachment (repair flip targets it); other on
 	// a second, non-preferred attachment of the same document (keeps its
 	// doc-level newer sibling, stays prunable despite the repair case)
@@ -160,10 +160,11 @@ func TestRetentionLayer2GuardIT(t *testing.T) {
 			t.Fatal("job tranche never blocked on the victim row lock — choreography broken")
 		}
 	}
+	// #358: the repair guard flips the projection's repair_linked flag
+	// (what the Library-side repair track sets through the repo seam).
 	if _, err := jlockTx.Exec(ctx, `
-		INSERT INTO repair_cases (attachment_id, document_id, status, suspicion_class, analysis)
-		SELECT a.id, a.document_id, 'healed', '🔴 reparierbar', '{}'
-		FROM zotero_attachments a WHERE a.zotero_key = 'TRTATT'`); err != nil {
+		UPDATE store_documents SET repair_linked=true
+		WHERE attachment_id = (SELECT attachment_id FROM store_documents WHERE rendition_key='TRTATT')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := jlockTx.Commit(ctx); err != nil {

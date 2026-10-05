@@ -42,6 +42,10 @@ func seedSelDoc(t *testing.T, lr *mirrorRepo, srcID, docKey, attKey, hash string
 	return docID, attKey
 }
 
+// applySel applies and gates the offered renditions in code — the
+// sync's store-phase discipline (#358: the apply offers every preferred
+// rendition; the SELECTION gate decides what reaches the Store). The
+// cascade semantics under test live in ResolveEffectiveSelection.
 func applySel(t *testing.T, lr *mirrorRepo, srcID string, files map[string]AttachmentFileInfo, selection map[string]string) int {
 	t.Helper()
 	ctx := context.Background()
@@ -65,15 +69,11 @@ func applySel(t *testing.T, lr *mirrorRepo, srcID string, files map[string]Attac
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return len(res.Renditions)
-}
-
-func docJobCount(t *testing.T, lr *mirrorRepo, docID string) int {
-	t.Helper()
-	var n int
-	if err := lr.pool.QueryRow(context.Background(),
-		`SELECT count(*) FROM ingest_jobs WHERE document_id=$1`, docID).Scan(&n); err != nil {
-		t.Fatal(err)
+	n := 0
+	for _, r := range res.Renditions {
+		if !JobGated(selection, r.DocumentID) {
+			n++
+		}
 	}
 	return n
 }
@@ -116,7 +116,7 @@ func TestCollectionSelectionCascadeIT(t *testing.T) {
 	seedItem("PRNT9012", "")
 	d1, _ := seedSelDoc(t, lr, srcID, "PRNT1234", "PRNT1234ATT", "h1") // in VWL_PRÄ
 	d2, _ := seedSelDoc(t, lr, srcID, "PRNT5678", "PRNT5678ATT", "h2") // in VWL_PRÄ
-	d3, _ := seedSelDoc(t, lr, srcID, "PRNT9012", "PRNT9012ATT", "h3") // NOT in any collection
+	_, _ = seedSelDoc(t, lr, srcID, "PRNT9012", "PRNT9012ATT", "h3") // NOT in any collection
 
 	// collection VWL_PRÄ (key VWLPRAXY) with d1+d2; a second collection for d2
 	for _, ck := range []string{"VWLPRAXY", "SECOND88"} {
@@ -151,10 +151,7 @@ func TestCollectionSelectionCascadeIT(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := applySel(t, lr, srcID, files, gate); n != 2 {
-		t.Fatalf("VWL_PRÄ include must enqueue exactly the 2 collection docs, got %d", n)
-	}
-	if c := docJobCount(t, lr, d3); c != 0 {
-		t.Fatalf("doc outside selected collections must have no job, got %d", c)
+		t.Fatalf("VWL_PRÄ include must gate to exactly the 2 collection docs, got %d", n)
 	}
 
 	// Cascade 1: doc-exclude beats collection-include.
@@ -167,9 +164,6 @@ func TestCollectionSelectionCascadeIT(t *testing.T) {
 	gate, _ = lr.rep.ResolveEffectiveSelection(ctx, nil, nil)
 	if n := applySel(t, lr, srcID, files, gate); n != 1 {
 		t.Fatalf("doc-exclude must remove d1 from the collection result: %d", n)
-	}
-	if c := docJobCount(t, lr, d1); c != 0 {
-		t.Fatalf("d1 (collection-included but doc-excluded) must have 0 jobs, got %d", c)
 	}
 
 	// Cascade 2: collection-exclude beats doc-include (no resurrection).
@@ -190,13 +184,7 @@ func TestCollectionSelectionCascadeIT(t *testing.T) {
 	// (still removed); d2 is OUT of base and its doc-include does NOT
 	// resurrect it (collection-exclude beats doc-include) -> only d3.
 	if n := applySel(t, lr, srcID, files, gate); n != 1 {
-		t.Fatalf("only-excluded-collections cascade: want exactly d3's job (1), got %d", n)
-	}
-	if c := docJobCount(t, lr, d2); c != 0 {
-		t.Fatalf("collection-exclude must beat doc-include (no resurrection): d2 jobs=%d", c)
-	}
-	if c := docJobCount(t, lr, d3); c != 1 {
-		t.Fatalf("d3 (outside SECOND88, not doc-excluded) must get its job: %d", c)
+		t.Fatalf("only-excluded-collections cascade: want exactly d3 (1), got %d", n)
 	}
 
 	// Resolved view: nested selection visible to the client.

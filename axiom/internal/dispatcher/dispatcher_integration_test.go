@@ -20,6 +20,7 @@ import (
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library/repair"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
@@ -86,7 +87,10 @@ func openDispatchDB(t *testing.T) *dispatchHarness {
 		t.Fatalf("store migrate: %v", err)
 	}
 	t.Cleanup(d.Close)
-	return &dispatchHarness{pool: d.Pool(), rep: repo.New(d.Pool()), repairs: repair.NewStore(d.Pool()), dsn: dispatchDSN}
+	rep := repo.New(d.Pool())
+	rst := repair.NewStore(d.Pool())
+	rst.SetStoreLink(rep)
+	return &dispatchHarness{pool: d.Pool(), rep: rep, repairs: rst, dsn: dispatchDSN}
 }
 
 func cloneDSN(u *url.URL, dbname string) string {
@@ -129,11 +133,28 @@ func (h *dispatchHarness) seedJob(t *testing.T, key string, maxAttempts int) str
 	itemID := h.insertItem(t, srcID, key)
 	h.pool.Exec(ctx, `UPDATE zotero_documents SET canonical_item_id=$2 WHERE id=$1`, docID, itemID)
 	attID := h.insertAttachment(t, srcID, docID, key)
+	// The Store projection row (#358: the claim resolves here).
+	if _, err := h.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, content_hash, content_type, filename, local_path, preferred)
+		VALUES ($1, $2, $3, $4, $4, $5, 'application/pdf', 'x.pdf', '/tmp/x.pdf', true)`,
+		docID, attID, srcID, key, "sha256:"+key); err != nil {
+		t.Fatalf("insert projection: %v", err)
+	}
+	// Revision-lane job (the claimable shape since #358).
+	revJSON, _ := json.Marshal(revision.SourceRevision{
+		SourceID: srcID, RevisionID: "1", RenditionID: key,
+		ContentHash: "sha256:" + key, MediaType: revision.MediaTypePDF,
+		Bibliography:  revision.Bibliography{RecordID: key, Title: "Test", CitationClass: revision.CitationClassCitable},
+		ContentTicket: "zat:" + srcID + ":" + key,
+	})
 	var jobID string
 	if err := h.pool.QueryRow(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts)
-		VALUES ($1,$2,$3,$4,'pending',$5) RETURNING id::text`,
-		srcID, docID, attID, "sha256:"+key, maxAttempts).Scan(&jobID); err != nil {
+		INSERT INTO ingest_jobs (intake_kind, content_hash, status, max_attempts,
+		                         revision_source_id, revision_record_id, revision_rendition_id,
+		                         revision_no, revision_json)
+		VALUES ('revision', $1, 'pending', $2, $3, $4, $4, '1', $5::jsonb) RETURNING id::text`,
+		"sha256:"+key, maxAttempts, srcID, key, revJSON).Scan(&jobID); err != nil {
 		t.Fatalf("insert job: %v", err)
 	}
 	return jobID
@@ -450,7 +471,10 @@ func TestRepairBlindPreflightSkipsWithoutCase(t *testing.T) {
 	jobID := h.seedJob(t, "RBPF1", 3)
 	var attID string
 	if err := h.pool.QueryRow(context.Background(),
-		`SELECT attachment_id::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&attID); err != nil {
+		`SELECT p.attachment_id::text FROM ingest_jobs j
+		 JOIN store_documents p ON p.source_id::text = j.revision_source_id
+		                      AND p.rendition_key = j.revision_rendition_id
+		 WHERE j.id=$1`, jobID).Scan(&attID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1133,8 +1157,10 @@ func TestRealPersisterCompletesAndAcks(t *testing.T) {
 	// return a §14-valid result whose identity matches the claim-time frozen input.
 	var attID, contentHash string
 	if err := h.pool.QueryRow(context.Background(),
-		`SELECT a.id::text, a.content_hash FROM ingest_jobs j
-		 JOIN zotero_attachments a ON a.id = j.attachment_id WHERE j.id=$1`, jobID,
+		`SELECT p.attachment_id::text, p.content_hash FROM ingest_jobs j
+		 JOIN store_documents p ON p.source_id::text = j.revision_source_id
+		                      AND p.rendition_key = j.revision_rendition_id
+		 WHERE j.id=$1`, jobID,
 	).Scan(&attID, &contentHash); err != nil {
 		t.Fatalf("lookup attachment identity: %v", err)
 	}
@@ -1407,7 +1433,10 @@ func TestPreflightFailSkipsJobAndCreatesRepairCase(t *testing.T) {
 	// The attachment must now be a repair-case candidate.
 	var attID string
 	if err := h.pool.QueryRow(context.Background(),
-		`SELECT attachment_id::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&attID); err != nil {
+		`SELECT p.attachment_id::text FROM ingest_jobs j
+		 JOIN store_documents p ON p.source_id::text = j.revision_source_id
+		                      AND p.rendition_key = j.revision_rendition_id
+		 WHERE j.id=$1`, jobID).Scan(&attID); err != nil {
 		t.Fatalf("read attachment: %v", err)
 	}
 	if n := h.openRepairCaseCount(t, attID); n != 1 {
@@ -1767,7 +1796,10 @@ func TestStaleRepairableCaseNotRecycledIntoQueue(t *testing.T) {
 	// pre-auto-queue world (created manually or by older code).
 	var attID string
 	if err := h.pool.QueryRow(context.Background(),
-		`SELECT attachment_id::text FROM ingest_jobs WHERE id=$1`, jobID).Scan(&attID); err != nil {
+		`SELECT p.attachment_id::text FROM ingest_jobs j
+		 JOIN store_documents p ON p.source_id::text = j.revision_source_id
+		                      AND p.rendition_key = j.revision_rendition_id
+		 WHERE j.id=$1`, jobID).Scan(&attID); err != nil {
 		t.Fatalf("read attachment: %v", err)
 	}
 	if _, err := h.pool.Exec(context.Background(), `

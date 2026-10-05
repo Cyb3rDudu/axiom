@@ -1260,9 +1260,27 @@ func TestUpgrade0005To0006Additive(t *testing.T) {
 		t.Fatal(err)
 	}
 	var oldJobID string
+	// The Store projection row (the claim's resolution source since #358 —
+	// its ledger is separate from the core 0006 columns under test).
+	if _, err := lr.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, content_hash, content_type, preferred)
+		VALUES ($1, $2, $3, 'OLD', 'OLD', 'sha256:upgrade', 'application/pdf', true)`,
+		docID, attID, srcID); err != nil {
+		t.Fatal(err)
+	}
+	revJSON, _ := json.Marshal(revision.SourceRevision{
+		SourceID: srcID, RevisionID: "1", RenditionID: "OLD",
+		ContentHash: "sha256:upgrade", MediaType: revision.MediaTypePDF,
+		Bibliography:  revision.Bibliography{RecordID: "OLD", CitationClass: revision.CitationClassCitable},
+		ContentTicket: "zat:" + srcID + ":OLD",
+	})
 	if err := lr.pool.QueryRow(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status)
-		VALUES ($1,$2,$3,'sha256:upgrade','pending') RETURNING id::text`, srcID, docID, attID).Scan(&oldJobID); err != nil {
+		INSERT INTO ingest_jobs (intake_kind, content_hash, status,
+		                         revision_source_id, revision_record_id, revision_rendition_id,
+		                         revision_no, revision_json)
+		VALUES ('revision', 'sha256:upgrade', 'pending', $1, 'OLD', 'OLD', '1', $2::jsonb) RETURNING id::text`,
+		srcID, revJSON).Scan(&oldJobID); err != nil {
 		t.Fatal(err)
 	}
 

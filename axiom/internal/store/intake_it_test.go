@@ -79,6 +79,18 @@ func seedMirror(t *testing.T, d *db.DB, docKey, attKey, contentHash string) (src
 		srcID, docID, attKey, docKey, contentHash).Scan(&attID); err != nil {
 		t.Fatalf("attachment: %v", err)
 	}
+	// The Store projection row (#358: the claim resolves here). One row per
+	// (source, rendition) — tests re-seed the same keys, so upsert.
+	if _, err := d.Pool().Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, content_hash, title, citation_class, content_type, local_path, preferred)
+		VALUES ($1, $2, $3, $4, $5, $6, 'Intake IT Book', 'citable', 'application/pdf', '/tmp/it.pdf', true)
+		ON CONFLICT (source_id, rendition_key) DO UPDATE SET
+			document_id=EXCLUDED.document_id, attachment_id=EXCLUDED.attachment_id,
+			content_hash=EXCLUDED.content_hash, preferred=EXCLUDED.preferred, deleted=false, updated_at=now()`,
+		docID, attID, srcID, docKey, attKey, contentHash); err != nil {
+		t.Fatalf("projection: %v", err)
+	}
 	return srcID, docID, attID
 }
 
@@ -272,7 +284,7 @@ func TestRevisionIntakeClaimObsoletesOnStaleHash(t *testing.T) {
 	}
 	// The mirror advances under the revision (a newer content hash).
 	if _, err := d.Pool().Exec(ctx,
-		`UPDATE zotero_attachments SET content_hash='newer-hash' WHERE zotero_key='ATTIT1'`); err != nil {
+		`UPDATE store_documents SET content_hash='newer-hash' WHERE rendition_key='ATTIT1'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
@@ -291,11 +303,12 @@ func TestRevisionIntakeClaimObsoletesOnStaleHash(t *testing.T) {
 	}
 }
 
-// TestRevisionIntakeClaimObsoletesWhenSyncLaneHoldsThePair — the
-// transition-collision guard (review F1.1): a legacy job already holds the
-// resolved (attachment, content_hash); the revision claim must NOT enter
-// the legacy idempotency partial index (unique violation would poison the
-// FIFO head forever) — it obsoletes with a readable reason instead.
+// TestRevisionIntakeClaimObsoletesWhenSyncLaneHoldsThePair — store
+// migration 0004 narrowed the legacy idempotency index to the zotero
+// lane, so a legacy job's (attachment, hash) pair no longer collides with
+// a revision claim AT ALL: the claim proceeds cleanly (the guard that
+// obsoleted with REVISION_SUPERSEDED_BY_SYNC_LANE died with the
+// lane-blind index — the documented escape, now landed).
 func TestRevisionIntakeClaimObsoletesWhenSyncLaneHoldsThePair(t *testing.T) {
 	d := openIntakeDB(t)
 	hash := revision.HashContent([]byte("collision bytes"))
@@ -317,19 +330,12 @@ func TestRevisionIntakeClaimObsoletesWhenSyncLaneHoldsThePair(t *testing.T) {
 	if err != nil || !minted {
 		t.Fatalf("mint: %v %v", job, err)
 	}
-	if _, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
-		WorkerID: "coll-it", LeaseDuration: 30 * time.Second,
+	claimed, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
+		WorkerID: "coll-it-2", LeaseDuration: 30 * time.Second,
 		Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
-	}); err != nil {
-		t.Fatalf("claim must not hit the legacy unique index: %v", err)
-	}
-	var status, msg string
-	if err := d.Pool().QueryRow(ctx,
-		`SELECT status::text, COALESCE(error_message,'') FROM ingest_jobs WHERE id=$1`, job.ID).Scan(&status, &msg); err != nil {
-		t.Fatal(err)
-	}
-	if status != "skipped" || !strings.Contains(msg, "REVISION_SUPERSEDED_BY_SYNC_LANE") {
-		t.Fatalf("collision must be obsoleted with REVISION_SUPERSEDED_BY_SYNC_LANE, got %s / %q", status, msg)
+	})
+	if err != nil || claimed == nil || claimed.JobID != job.ID {
+		t.Fatalf("the revision claim must proceed past the legacy row: %v %v", claimed, err)
 	}
 }
 
@@ -344,7 +350,7 @@ func TestRevisionIntakeClaimObsoletesNonPreferred(t *testing.T) {
 	ctx := context.Background()
 	// Demote the seeded attachment; add a preferred sibling.
 	if _, err := d.Pool().Exec(ctx,
-		`UPDATE zotero_attachments SET preferred=false WHERE zotero_key='ATTIT1'`); err != nil {
+		`UPDATE store_documents SET preferred=false WHERE rendition_key='ATTIT1'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.Pool().Exec(ctx, `
@@ -445,12 +451,20 @@ func TestRevisionReIntakeAfterObsoletion(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 
-	// The transient cause resolves: the rendition appears in the mirror.
+	// The transient cause resolves: the rendition appears in the mirror
+	// AND the Store projection (what the sync's store phase would write).
 	if _, err := d.Pool().Exec(ctx, `
 		INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
 		   parent_zotero_key, link_mode, content_type, filename, local_path, content_hash, preferred, deleted)
 		SELECT $1::uuid, d.id, 'GHOST1', 1, 'DOCIT1', 'imported_file','application/pdf','g.pdf','/tmp/g.pdf',$2,true,false
 		FROM zotero_documents d WHERE d.zotero_key='DOCIT1' AND d.source_id::text=$1::text`, srcID, hash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Pool().Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, content_hash, citation_class, content_type, local_path, preferred)
+		SELECT a.document_id, a.id, a.source_id, 'DOCIT1', 'GHOST1', $2, 'citable', 'application/pdf', '/tmp/g.pdf', true
+		FROM zotero_attachments a WHERE a.source_id::text=$1 AND a.zotero_key='GHOST1'`, srcID, hash); err != nil {
 		t.Fatal(err)
 	}
 
@@ -500,6 +514,15 @@ func TestRevisionIntakeCrossSourceNoFalseDedup(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := d.Pool().QueryRow(ctx, `INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version, parent_zotero_key, link_mode, content_type, filename, local_path, content_hash, preferred, deleted) VALUES ($1,$2,'ATTDUP',1,'DOCA','imported_file','application/pdf','b.pdf','/tmp/b.pdf',$3,true,false) RETURNING id::text`, srcB, docB, hash).Scan(&attB); err != nil {
+		t.Fatal(err)
+	}
+	// B's Store projection row (same keys, own source — the identity is
+	// the (source, rendition) pair).
+	if _, err := d.Pool().Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, content_hash, citation_class, content_type, local_path, preferred)
+		VALUES ($1, $2, $3, 'DOCA', 'ATTDUP', $4, 'citable', 'application/pdf', '/tmp/b.pdf', true)`,
+		docB, attB, srcB, hash); err != nil {
 		t.Fatal(err)
 	}
 

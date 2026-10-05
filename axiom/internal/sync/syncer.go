@@ -307,7 +307,14 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	defer release()
+	// The session lock guards the MIRROR phase (cursor read → apply →
+	// cursor commit). It is released EXPLICITLY after that commit: the
+	// store-effect phase takes its own transaction-scoped twin lock (same
+	// key definition) on the Store database — in the single-database
+	// topology both locks would share one namespace and self-deadlock if
+	// held across both phases. The once-guard keeps early returns safe.
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(release)
 
 	since, err := s.mir().CanonicalCursor(ctx, sourceID)
 	if err != nil {
@@ -376,6 +383,9 @@ func (s *Service) Run(ctx context.Context, override *SyncOverride) (Result, erro
 	if err := tx.Commit(ctx); err != nil {
 		return Result{}, err
 	}
+	// The mirror phase is committed: end the session lock BEFORE the
+	// store-effect phase (see the comment at acquisition).
+	releaseOnce.Do(release)
 
 	// The STORE phase (#358): projection upserts + revision intake +
 	// failed-file records + deleted marks + snapshot reconciliation, in

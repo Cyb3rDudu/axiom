@@ -76,7 +76,13 @@ func (r *Repo) loadAndLockRevisionState(ctx context.Context, tx pgx.Tx, c *candi
 		return nil, "", fmt.Errorf("lock rendition projection: %w", err)
 	}
 	// The rendition row carries document + attachment identity together
-	// (one row per rendition — the chain check is structural).
+	// (one row per rendition — the chain check is structural), and its
+	// record key MUST match the revision's: a ghost record (the revision
+	// names a document that no longer exists) obsoletes HERE, never at
+	// the hash check (the false-resolution guard the ghost IT pins).
+	if s.document.zoteroKey != c.revRecordID {
+		return nil, "REVISION_REF_UNRESOLVED", nil
+	}
 	s.attachment.documentID = s.document.id
 	s.attachment.sourceID = c.revSourceID
 	s.attachment.zoteroKey = c.revRendition

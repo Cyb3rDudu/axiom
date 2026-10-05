@@ -533,9 +533,11 @@ func TestCanonicalMissingRestoredMissingNewFailedJob(t *testing.T) {
 	pendingCount := func(srcID string) int { //nolint:unparam
 		t.Helper()
 		var n int
+		// Revision-lane jobs resolve their FKs at CLAIM; the durable
+		// identity at pending-time is the rendition triple.
 		if err := d.Pool().QueryRow(ctx, `
 			SELECT count(*) FROM ingest_jobs
-			WHERE attachment_id=(SELECT id FROM zotero_attachments WHERE source_id=$1 AND zotero_key='A1')
+			WHERE revision_source_id=$1 AND revision_rendition_id='A1'
 			  AND status='pending'`, srcID).Scan(&n); err != nil {
 			t.Fatalf("count pending: %v", err)
 		}

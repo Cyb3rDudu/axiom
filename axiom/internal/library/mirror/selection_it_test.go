@@ -19,8 +19,8 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 	ctx := context.Background()
 
 	ch := "hash-a2"
-	attID, _ := lr.seed(t, mirrorSeedSpec{sourceBaseURL: "https://zoteroprovider.a2", libraryID: "lib-1",
-		docKey: "SELD1", attKey: "SELATT1", contentHash: &ch}, "completed", 1)
+	attID, jobID := lr.seed(t, mirrorSeedSpec{sourceBaseURL: "https://zoteroprovider.a2", libraryID: "lib-1",
+		docKey: "SELD1", attKey: "SELATT1", contentHash: &ch, preferred: true}, "completed", 1)
 	var docID, srcID string
 	if err := lr.pool.QueryRow(ctx, `SELECT a.document_id::text, a.source_id::text FROM zotero_attachments a
 		JOIN zotero_documents d ON d.id=a.document_id WHERE a.id=$1`, attID).Scan(&docID, &srcID); err != nil {
@@ -29,7 +29,7 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 
 	listing := func(filter string) []ZoteroDocumentState {
 		t.Helper()
-		rows, err := lr.rep.ListDocumentsMirror(ctx, filter)
+		rows, err := lr.rep.ListDocumentsMirror(ctx)
 		if err != nil {
 			t.Fatalf("mirror listing %q: %v", filter, err)
 		}
@@ -44,11 +44,15 @@ func TestSelectiveSyncAcceptanceIT(t *testing.T) {
 		if err != nil {
 			t.Fatalf("store job states: %v", err)
 		}
-		return DocumentListing(rows, jobs, serving)
+		return DocumentListing(rows, jobs, serving, filter)
 	}
 
-	// The harness seed created a fixture job row (completed baseline).
-	if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET status='completed', updated_at=now() WHERE attachment_id=$1`, attID); err != nil {
+	// The harness seed created a fixture job row (completed baseline);
+	// pin its FKs as the claim would so the listing's job lookup resolves.
+	if _, err := lr.pool.Exec(ctx, `UPDATE ingest_jobs SET status='completed', attachment_id=$2::uuid,
+		document_id=(SELECT document_id FROM store_documents WHERE attachment_id=$2::uuid),
+		source_id=(SELECT source_id FROM store_documents WHERE attachment_id=$2::uuid),
+		updated_at=now() WHERE id=$1`, jobID, attID); err != nil {
 		t.Fatal(err)
 	}
 

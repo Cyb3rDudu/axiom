@@ -44,7 +44,7 @@ func (c *selectionListing) ResolveSelectionView(ctx context.Context) (*mirror.Re
 // ListZoteroDocuments merges the Library's mirror rows with the Store's
 // job/snapshot truth: two engine-local queries, one code merge (#358).
 func (c *selectionListing) ListZoteroDocuments(ctx context.Context, syncState string) ([]mirror.ZoteroDocumentState, error) {
-	rows, err := c.mir.ListDocumentsMirror(ctx, syncState)
+	rows, err := c.mir.ListDocumentsMirror(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -61,5 +61,5 @@ func (c *selectionListing) ListZoteroDocuments(ctx context.Context, syncState st
 	if err != nil {
 		return nil, err
 	}
-	return mirror.DocumentListing(rows, jobs, serving), nil
+	return mirror.DocumentListing(rows, jobs, serving, syncState), nil
 }

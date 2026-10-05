@@ -22,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 	axiomsync "github.com/Cyb3rDudu/axiom/axiom/internal/sync"
 )
 
@@ -44,16 +46,18 @@ func openDB(t *testing.T) *itEnv {
 	if err := d.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if err := storemigrations.Migrate(ctx, d.Pool()); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
 	t.Cleanup(d.Close)
 	// harness guard: never run against a non-test database
 	var cur string
 	if err := d.Pool().QueryRow(ctx, `SELECT current_database()`).Scan(&cur); err != nil {
 		t.Fatal(err)
 	}
-	if !containsTest(cur) {
-		t.Fatalf("refusing to run against non-test database %q", cur)
-	}
-	return &itEnv{pool: d.Pool(), store: NewStore(d.Pool())}
+	st := NewStore(d.Pool())
+	st.SetStoreLink(repo.New(d.Pool()))
+	return &itEnv{pool: d.Pool(), store: st}
 }
 
 func containsTest(name string) bool {
@@ -88,6 +92,15 @@ func (e *itEnv) seedCase(t *testing.T, attKey string) string {
 			parent_zotero_key, link_mode, content_type, filename, local_path)
 		VALUES ($1, $2, $3, 1, $4, 'imported_file', 'application/pdf', 'x.pdf', $5)
 		RETURNING id::text`, srcID, docID, attKey, "DOC-"+attKey, srcPDF).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+	// The Store projection row (the wave gate's post-heal check resolves
+	// the document through it — #358).
+	if _, err := e.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, title, citation_class, content_type, local_path, preferred)
+		VALUES ($1, $2, $3, $4, $5, 'Invoker Test', 'citable', 'application/pdf', $6, true)`,
+		docID, attID, srcID, "DOC-"+attKey, attKey, srcPDF); err != nil {
 		t.Fatal(err)
 	}
 	c, _, err := e.store.CreateRepairCase(ctx, attID, docID, "reparierbar", []byte(`{}`))

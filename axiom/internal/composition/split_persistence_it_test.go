@@ -9,11 +9,6 @@ package composition
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -182,67 +177,17 @@ func bootSplitPersistenceExpectStartError(t *testing.T, storeDSN string, mutate 
 	return root
 }
 
-// TestIT_SQLiteLibraryProfileBoots — the SQLite profile: full stack
-// boots, the Library lives in ONE file (restrictive permissions, only
-// the library_* namespace — the sqlite package pins the deeper rules),
-// the store database gains no library tables, and the public health
-// shape carries no storage-topology detail (the frozen baseline).
-func TestIT_SQLiteLibraryProfileBoots(t *testing.T) {
+// TestIT_SQLiteLibraryProfileWithSyncRefused — #358: the Zotero mirror is
+// Library-database-resident and PostgreSQL-only; the SQLite profile has no
+// mirror home, so a composition running the SYNC role on SQLite aborts
+// loudly at start (the refusal that replaced the old "mirror on the store
+// database" compromise).
+func TestIT_SQLiteLibraryProfileWithSyncRefused(t *testing.T) {
 	storePool, storeDSN, storeCleanup := freshScratch(t, "splitsqlite")
 	defer storeCleanup()
 	storePool.Close()
-	libFile := filepath.Join(t.TempDir(), "library.sqlite")
-	root := bootSplitPersistence(t, storeDSN, func(cfg *config.Config) {
+	bootSplitPersistenceExpectStartError(t, storeDSN, func(cfg *config.Config) {
 		cfg.StorageLibraryDriver = "sqlite"
-		cfg.LibrarySQLitePath = libFile
-	})
-	if root.libSQLite == nil || root.libDB != nil {
-		t.Fatalf("sqlite profile must wire the file engine, not a pool: libSQLite=%v libDB=%v", root.libSQLite, root.libDB)
-	}
-	fi, err := os.Stat(libFile)
-	if err != nil {
-		t.Fatalf("library.sqlite: %v", err)
-	}
-	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("library.sqlite must be 0600, got %o", fi.Mode().Perm())
-	}
-	ctx := context.Background()
-	storeChk, err := pgxpool.New(ctx, storeDSN)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer storeChk.Close()
-	var n int
-	if err := storeChk.QueryRow(ctx,
-		`SELECT COUNT(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'library\_%' ESCAPE '\'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatal("the sqlite profile must not migrate library tables into the store database")
-	}
-
-	// Health stays the frozen shape: no storage/topology field appears.
-	healthURL := fmt.Sprintf("http://127.0.0.1:%d/api/health", root.cfg.APIPort)
-	resp, err := noKeepAliveGet(healthURL)
-	if err != nil {
-		t.Fatalf("health: %v", err)
-	}
-	body, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("health status: %d body=%s", resp.StatusCode, body)
-	}
-	var hb map[string]any
-	if err := json.Unmarshal(body, &hb); err != nil {
-		t.Fatalf("health body: %v", err)
-	}
-	for k := range hb {
-		lk := strings.ToLower(k)
-		if strings.Contains(lk, "sqlite") || strings.Contains(lk, "storage") || strings.Contains(lk, "driver") {
-			t.Fatalf("health leaked the storage topology (%s) — the public shape is frozen: %s", k, body)
-		}
-	}
+		cfg.LibrarySQLitePath = filepath.Join(t.TempDir(), "library.sqlite")
+	}, "no Zotero mirror")
 }

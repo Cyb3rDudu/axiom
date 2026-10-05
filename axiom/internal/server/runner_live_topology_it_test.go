@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/dispatcher"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/events"
@@ -112,9 +113,26 @@ func seedLiveJob(t *testing.T, d *db.DB, key string) {
 		srcID, docID, key, "sha256:"+key).Scan(&attID); err != nil {
 		t.Fatalf("insert attachment: %v", err)
 	}
+	// The Store projection + revision-lane job (#358 claim shape).
 	if _, err := d.Pool().Exec(ctx,
-		`INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts)
-		 VALUES ($1,$2,$3,$4,'pending',3)`, srcID, docID, attID, "sha256:"+key); err != nil {
+		`INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, content_hash, title, content_type, local_path, preferred)
+		VALUES ($1, $2, $3, $4, $4, $5, 'Test Book', 'application/pdf', '/tmp/x.pdf', true)`,
+		docID, attID, srcID, key, "sha256:"+key); err != nil {
+		t.Fatalf("insert projection: %v", err)
+	}
+	revJSON, _ := json.Marshal(revision.SourceRevision{
+		SourceID: srcID, RevisionID: "1", RenditionID: key,
+		ContentHash: "sha256:" + key, MediaType: revision.MediaTypePDF,
+		Bibliography:  revision.Bibliography{RecordID: key, Title: "Test Book", CitationClass: revision.CitationClassCitable},
+		ContentTicket: "zat:" + srcID + ":" + key,
+	})
+	if _, err := d.Pool().Exec(ctx,
+		`INSERT INTO ingest_jobs (intake_kind, content_hash, status, max_attempts,
+		                         revision_source_id, revision_record_id, revision_rendition_id,
+		                         revision_no, revision_json)
+		 VALUES ('revision', $1, 'pending', 3, $2, $3, $3, '1', $4::jsonb)`,
+		"sha256:"+key, srcID, key, revJSON); err != nil {
 		t.Fatalf("insert job: %v", err)
 	}
 }
@@ -137,7 +155,7 @@ func TestRunnerLiveEndToEndSingleAgent(t *testing.T) {
 	// processing_snapshots is explicit since the cross-component FKs fell
 	// (DM06 #315): TRUNCATE … CASCADE on the zotero_* tables no longer
 	// reaches the store rows.
-	if _, err := d.Pool().Exec(ctxSeed, `TRUNCATE ingest_jobs, zotero_attachments, zotero_documents,
+	if _, err := d.Pool().Exec(ctxSeed, `TRUNCATE ingest_jobs, store_documents, zotero_attachments, zotero_documents,
 		zotero_items, zotero_sources, processing_snapshots CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

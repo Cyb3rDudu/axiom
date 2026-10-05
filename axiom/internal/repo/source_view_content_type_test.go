@@ -30,9 +30,10 @@ func TestDocumentMetaContentTypeActiveSnapshot(t *testing.T) {
 	seedAtt := func(key, ctype string) string {
 		var id string
 		if err := lr.pool.QueryRow(ctx, `
-			INSERT INTO zotero_attachments (source_id, document_id, zotero_key, zotero_version,
-				parent_zotero_key, link_mode, content_type, filename)
-			VALUES ($1, $2, $3, 1, 'CTDOC', 'imported_file', $4, $3) RETURNING id::text`,
+			INSERT INTO store_documents (document_id, attachment_id, source_id,
+				record_key, rendition_key, content_type, filename, preferred)
+			VALUES ($2::uuid, gen_random_uuid(), $1::uuid, 'CTDOC', $3, $4, $3, false)
+			RETURNING attachment_id::text`,
 			srcID, docID, key, ctype).Scan(&id); err != nil {
 			t.Fatal(err)
 		}

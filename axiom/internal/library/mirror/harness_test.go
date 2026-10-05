@@ -8,11 +8,13 @@ package mirror
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
@@ -126,7 +128,8 @@ func (mr *mirrorRepo) truncateFixtures(t *testing.T) {
 	if _, err := mr.pool.Exec(ctx, `
 		TRUNCATE ingest_jobs, zotero_attachments, zotero_documents, zotero_items,
 		         zotero_item_collections, zotero_collections, zotero_sources,
-		         zotero_selections, zotero_collection_selections, processing_snapshots
+		         zotero_selections, zotero_collection_selections, store_documents,
+		         processing_snapshots, repair_cases
 		CASCADE`); err != nil {
 		t.Fatalf("truncate fixtures: %v", err)
 	}
@@ -181,11 +184,46 @@ func (mr *mirrorRepo) seed(t *testing.T, spec mirrorSeedSpec, jobStatus string, 
 		srcID, docID, spec.attKey, spec.docKey, spec.contentHash, spec.preferred, spec.deleted).Scan(&attachmentID); err != nil {
 		t.Fatalf("insert attachment: %v", err)
 	}
+	// #358: the Store-side projection row (claim resolution source).
+	if _, err := mr.pool.Exec(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id, server_id,
+			record_key, rendition_key, source_version, content_hash, title,
+			citation_class, content_type, filename, local_path, preferred, deleted)
+		VALUES ($1, $2, $3, 'test-server', $4, $5, 1, $6, 'Test Doc',
+			'citable', 'application/pdf', 'x.pdf', '/tmp/x.pdf', $7, $8)`,
+		docID, attachmentID, srcID, spec.docKey, spec.attKey, spec.contentHash, spec.preferred, spec.deleted); err != nil {
+		t.Fatalf("insert projection: %v", err)
+	}
+	// Revision-lane job (the claim resolves the projection).
+	revJSON, _ := json.Marshal(revision.SourceRevision{
+		SourceID: srcID, RevisionID: "1", RenditionID: spec.attKey,
+		ContentHash: deref(spec.contentHash), MediaType: revision.MediaTypePDF,
+		Bibliography:  revision.Bibliography{RecordID: spec.docKey, CitationClass: revision.CitationClassCitable},
+		ContentTicket: "zat:" + srcID + ":" + spec.attKey,
+	})
 	if err := mr.pool.QueryRow(ctx, `
-		INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, max_attempts)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`,
-		srcID, docID, attachmentID, spec.contentHash, jobStatus, maxAttempts).Scan(&jobID); err != nil {
+		INSERT INTO ingest_jobs (intake_kind, content_hash, status, max_attempts,
+		                         revision_source_id, revision_record_id, revision_rendition_id,
+		                         revision_no, revision_json)
+		VALUES ('revision', $1, $2, $3, $4, $5, $6, '1', $7::jsonb) RETURNING id::text`,
+		spec.contentHash, jobStatus, maxAttempts, srcID, spec.docKey, spec.attKey, revJSON).Scan(&jobID); err != nil {
 		t.Fatalf("insert job: %v", err)
 	}
+	// Terminal fixture statuses pin the FKs as a claim would have — the
+	// listing/job-state lookups resolve by attachment.
+	if jobStatus != "pending" {
+		if _, err := mr.pool.Exec(ctx, `
+			UPDATE ingest_jobs SET attachment_id=$2::uuid, document_id=$3::uuid, source_id=$4::uuid
+			WHERE id=$1`, jobID, attachmentID, docID, srcID); err != nil {
+			t.Fatalf("pin job FKs: %v", err)
+		}
+	}
 	return attachmentID, jobID
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

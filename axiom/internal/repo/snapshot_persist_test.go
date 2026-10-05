@@ -29,6 +29,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/processor"
 )
 
@@ -1106,19 +1107,7 @@ func TestReplayToleratesExpiredLease(t *testing.T) {
 	}
 	forceJob := func() (jobID string) {
 		t.Helper()
-		var srcID, docID string
-		if err := h.pool.QueryRow(ctx,
-			`SELECT source_id::text, document_id::text FROM ingest_jobs WHERE id=$1`, h.jobID,
-		).Scan(&srcID, &docID); err != nil {
-			t.Fatalf("job refs: %v", err)
-		}
-		if err := h.pool.QueryRow(ctx, `
-			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-			VALUES ($1,$2,$3,$4,'pending',true) RETURNING id::text`,
-			srcID, docID, h.attachmentID, h.contentHash).Scan(&jobID); err != nil {
-			t.Fatalf("seed force job: %v", err)
-		}
-		return jobID
+		return h.leaseRepo.seedExtraForceJob(t, h.jobID)
 	}
 
 	// Force job 1: creates the identity, completes its row.
@@ -1194,21 +1183,9 @@ func TestForceRerunReplacesSnapshotContent(t *testing.T) {
 		`UPDATE ingest_jobs SET status='cancelled', updated_at=now() WHERE id=$1`, h.jobID); err != nil {
 		t.Fatalf("cancel harness job: %v", err)
 	}
-	var srcID, docID string
-	if err := h.pool.QueryRow(ctx,
-		`SELECT source_id::text, document_id::text FROM ingest_jobs WHERE id=$1`, h.jobID,
-	).Scan(&srcID, &docID); err != nil {
-		t.Fatalf("job refs: %v", err)
-	}
 	newForceJob := func() (jobID string) {
 		t.Helper()
-		if err := h.pool.QueryRow(ctx, `
-			INSERT INTO ingest_jobs (source_id, document_id, attachment_id, content_hash, status, force_rebuild)
-			VALUES ($1,$2,$3,$4,'pending',true) RETURNING id::text`,
-			srcID, docID, h.attachmentID, h.contentHash).Scan(&jobID); err != nil {
-			t.Fatalf("seed force job: %v", err)
-		}
-		return jobID
+		return h.leaseRepo.seedExtraForceJob(t, h.jobID)
 	}
 	drive := func(jobID string, marker string) (snapID string, err error) {
 		cj, cerr := h.rep.ClaimNextJob(ctx, defaultClaim("worker-frep-"+jobID[:8]))
@@ -1358,27 +1335,40 @@ func TestPersistLocatorRoundTripToDB(t *testing.T) {
 func (h *persistHarness) seedSecondAttachment(t *testing.T, suffix, contentHash string) (attID, jobID string) {
 	t.Helper()
 	ctx := context.Background()
-	var docID string
+	var srcID, docID string
 	if err := h.pool.QueryRow(ctx,
-		`SELECT document_id FROM zotero_attachments WHERE id=$1`, h.attachmentID).Scan(&docID); err != nil {
+		`SELECT source_id::text, document_id::text FROM store_documents WHERE attachment_id=$1`, h.attachmentID,
+	).Scan(&srcID, &docID); err != nil {
 		t.Fatalf("doc lookup: %v", err)
 	}
 	if err := h.pool.QueryRow(ctx, `
-		INSERT INTO zotero_attachments
-		  (source_id, document_id, zotero_key, zotero_version, parent_zotero_key,
-		   link_mode, content_type, filename, local_path, content_hash, preferred)
-		SELECT source_id, document_id, $2, 1, parent_zotero_key,
-		       'linked_file', 'application/epub+zip', 'book.epub', '/tmp/book.epub', $3, true
-		FROM zotero_attachments WHERE id=$1
-		RETURNING id::text`, h.attachmentID, "ATTSWITCH"+suffix, contentHash).Scan(&attID); err != nil {
-		t.Fatalf("second attachment: %v", err)
+		INSERT INTO store_documents
+		  (document_id, attachment_id, source_id, record_key, rendition_key,
+		   content_type, filename, local_path, content_hash, preferred)
+		VALUES ($1::uuid, gen_random_uuid(), $2::uuid, (SELECT record_key FROM store_documents WHERE attachment_id=$3::uuid),
+		        $4, 'application/epub+zip', 'book.epub', '/tmp/book.epub', $5, true)
+		RETURNING attachment_id::text`, docID, srcID, h.attachmentID, "ATTSWITCH"+suffix, contentHash).Scan(&attID); err != nil {
+		t.Fatalf("second rendition projection: %v", err)
 	}
+	// The twin's job: revision-lane, resolvable through the new row (the
+	// record key is the BASE document's — the twin rides the same record).
+	var baseRecord string
+	if err := h.pool.QueryRow(ctx,
+		`SELECT record_key FROM store_documents WHERE attachment_id=$1::uuid`, h.attachmentID).Scan(&baseRecord); err != nil {
+		t.Fatalf("base record: %v", err)
+	}
+	revJSON, _ := json.Marshal(revision.SourceRevision{
+		SourceID: srcID, RevisionID: "1", RenditionID: "ATTSWITCH" + suffix,
+		ContentHash: contentHash, MediaType: "application/epub+zip",
+		Bibliography:  revision.Bibliography{RecordID: baseRecord, CitationClass: revision.CitationClassCitable},
+		ContentTicket: "zat:" + srcID + ":ATTSWITCH" + suffix,
+	})
 	if err := h.pool.QueryRow(ctx, `
 		INSERT INTO ingest_jobs
-		  (source_id, document_id, attachment_id, content_hash, status, max_attempts)
-		SELECT source_id, document_id, id, $2, 'pending', 3
-		FROM zotero_attachments WHERE id=$1
-		RETURNING id::text`, attID, contentHash).Scan(&jobID); err != nil {
+		  (intake_kind, content_hash, status, max_attempts,
+		   revision_source_id, revision_record_id, revision_rendition_id, revision_no, revision_json)
+		VALUES ('revision', $1, 'pending', 3, $2, $3, $4, '1', $5::jsonb)
+		RETURNING id::text`, contentHash, srcID, baseRecord, "ATTSWITCH"+suffix, revJSON).Scan(&jobID); err != nil {
 		t.Fatalf("job: %v", err)
 	}
 	cj, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-switch"))
@@ -1391,7 +1381,6 @@ func (h *persistHarness) seedSecondAttachment(t *testing.T, suffix, contentHash 
 	if err := h.rep.MarkProcessing(ctx, cj.LeaseRef); err != nil {
 		t.Fatalf("mark processing: %v", err)
 	}
-	_ = docID
 	return attID, jobID
 }
 
@@ -1434,8 +1423,8 @@ func TestDocumentOneActiveSnapshotOnFormatSwitch(t *testing.T) {
 	var activeSnaps, activeChunks int
 	if err := h.pool.QueryRow(ctx, `
 		SELECT count(*) FROM processing_snapshots s
-		JOIN zotero_attachments a ON a.id = s.attachment_id
-		WHERE a.document_id = (SELECT document_id FROM zotero_attachments WHERE id=$1)
+		JOIN store_documents p ON p.attachment_id = s.attachment_id
+		WHERE p.document_id = (SELECT document_id FROM store_documents WHERE attachment_id=$1::uuid)
 		  AND s.active`, att2).Scan(&activeSnaps); err != nil {
 		t.Fatal(err)
 	}
@@ -1445,8 +1434,8 @@ func TestDocumentOneActiveSnapshotOnFormatSwitch(t *testing.T) {
 	if err := h.pool.QueryRow(ctx, `
 		SELECT count(*) FROM processing_chunks c
 		JOIN processing_snapshots s ON s.id = c.snapshot_id
-		JOIN zotero_attachments a ON a.id = s.attachment_id
-		WHERE a.document_id = (SELECT document_id FROM zotero_attachments WHERE id=$1)
+		JOIN store_documents p ON p.attachment_id = s.attachment_id
+		WHERE p.document_id = (SELECT document_id FROM store_documents WHERE attachment_id=$1::uuid)
 		  AND s.active`, att2).Scan(&activeChunks); err != nil {
 		t.Fatal(err)
 	}
@@ -1490,8 +1479,8 @@ func TestDocumentOneActiveSnapshotOnFormatSwitch(t *testing.T) {
 	if err := h.pool.QueryRow(ctx, `
 		SELECT count(*) FROM processing_entities e
 		JOIN processing_snapshots s ON s.id = e.snapshot_id
-		JOIN zotero_attachments a ON a.id = s.attachment_id
-		WHERE a.document_id = (SELECT document_id FROM zotero_attachments WHERE id=$1)
+		JOIN store_documents p ON p.attachment_id = s.attachment_id
+		WHERE p.document_id = (SELECT document_id FROM store_documents WHERE attachment_id=$1::uuid)
 		  AND s.active`, att2).Scan(&activeEntities); err != nil {
 		t.Fatal(err)
 	}
@@ -1509,8 +1498,8 @@ func TestDocumentOneActiveSnapshotOnFormatSwitch(t *testing.T) {
 	var activeAfterReplay int
 	if err := h.pool.QueryRow(ctx, `
 		SELECT count(*) FROM processing_snapshots s
-		JOIN zotero_attachments a ON a.id = s.attachment_id
-		WHERE a.document_id = (SELECT document_id FROM zotero_attachments WHERE id=$1)
+		JOIN store_documents p ON p.attachment_id = s.attachment_id
+		WHERE p.document_id = (SELECT document_id FROM store_documents WHERE attachment_id=$1::uuid)
 		  AND s.active`, att2).Scan(&activeAfterReplay); err != nil {
 		t.Fatal(err)
 	}
@@ -1520,8 +1509,8 @@ func TestDocumentOneActiveSnapshotOnFormatSwitch(t *testing.T) {
 	var activeSnap string
 	if err := h.pool.QueryRow(ctx, `
 		SELECT s.id::text FROM processing_snapshots s
-		JOIN zotero_attachments a ON a.id = s.attachment_id
-		WHERE a.document_id = (SELECT document_id FROM zotero_attachments WHERE id=$1)
+		JOIN store_documents p ON p.attachment_id = s.attachment_id
+		WHERE p.document_id = (SELECT document_id FROM store_documents WHERE attachment_id=$1::uuid)
 		  AND s.active`, att2).Scan(&activeSnap); err != nil {
 		t.Fatal(err)
 	}
@@ -1547,7 +1536,7 @@ func TestDocumentOneActiveSnapshotUniqueIndex(t *testing.T) {
 		  (attachment_id, content_hash, processor_name, processor_version, profile_hash,
 		   document_id, profile, active)
 		SELECT $1, 'sha256:rogue', 'rogue', '1', 'rogue', document_id, '{}', true
-		FROM zotero_attachments WHERE id=$1`, att2)
+		FROM store_documents WHERE attachment_id=$1`, att2)
 	if err == nil || !strings.Contains(err.Error(), "processing_snapshots_one_active_per_document_uq") {
 		t.Fatalf("rogue second active snapshot must fail on the 0019 index, got: %v", err)
 	}
