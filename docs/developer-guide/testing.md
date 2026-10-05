@@ -52,6 +52,19 @@ touch the DSN database itself; the remaining integration tests (db, Zotero
 sync, search) open the DSN database directly and **write** to it. So point the
 variable at a scratch database — never a production or shared-development DSN.
 
+## CI — when the gate runs
+
+The `ci.yml` gate fires on `pull_request` events and on pushes to `main`
+(#354): work strands open a PR from the start, so a bare branch push never
+bills a full matrix run, and a merged SHA runs exactly once. The heavy
+legs (`go-db-it`, `split-topology`, `container-topology` — together ~16 of
+the ~24 billed minutes per run) are path-gated by the `changes` job: they
+run only when Go sources, `go.mod`/`go.sum`, SQL schemas, `deploy/**`,
+the compute-worker surface, or the workflow definition itself changed;
+docs-only and script-only changes run the remaining jobs only. Superseded
+runs on the same ref (rapid review-round pushes, rapid merges) are
+cancelled mid-flight instead of billed in full.
+
 ## Mutation-testing culture (the "probe")
 
 The suites do not just assert happy paths — the Python suite carries explicit
