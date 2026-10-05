@@ -1,15 +1,78 @@
+# CI gate — #354 CI cost discipline.
+#
+# Push runs fire for main only: branch verification rides pull_request
+# events, and strands open a PR from the start (the reviewer gate already
+# operates that way), so a bare branch push never bills a full matrix
+# run. The heavy DB/topology jobs are path-gated by the `changes` job
+# below — a docs-only or script-only change does not pay for them. The
+# per-ref concurrency group cancels superseded runs (rapid merges to
+# main, rapid review-round pushes on a PR) instead of billing them all.
+
 name: ci
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 defaults:
   run:
     working-directory: axiom
 
 jobs:
+  # --- #354: changed-file classification -------------------------------
+  # Fail-open classifier for the heavy jobs: if the diff base cannot be
+  # resolved (rewritten history, unknown base), treat EVERYTHING as
+  # changed — verification must never be skipped by an accident of
+  # history. A ~30s job that saves 16.4 min of heavy legs on
+  # docs/script-only changes.
+  changes:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # repo-root relative paths — the workflow default (axiom/) would
+        # break both the diff output matching and the ls-files fallback
+        working-directory: .
+    outputs:
+      go_sql: ${{ steps.diff.outputs.go_sql }}
+      topology: ${{ steps.diff.outputs.topology }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: classify changed files
+        id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -eu
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            range="origin/${BASE_REF}...HEAD"
+          else
+            range="${BEFORE}...HEAD"
+          fi
+          # shellcheck disable=SC2312  # classification, not consumption
+          if ! files="$(git diff --name-only "$range")"; then
+            files="$(git ls-files)"
+          fi
+          go_sql=false
+          topology=false
+          while IFS= read -r f; do
+            case "$f" in
+              axiom/*.go|axiom/go.mod|axiom/go.sum|axiom/*.sql) go_sql=true; topology=true ;;
+              deploy/postgres/roles.sql) go_sql=true; topology=true ;;
+              axiom-compute-worker/*|deploy/*) topology=true ;;
+              .github/workflows/ci.yml) go_sql=true; topology=true ;;
+            esac
+          done <<< "$files"
+          echo "go_sql=$go_sql" >> "$GITHUB_OUTPUT"
+          echo "topology=$topology" >> "$GITHUB_OUTPUT"
+
   # --- #295: frozen v0.1.18 compatibility baseline -----------------------
   # The environment-independent half of the golden gate: router-derived
   # API inventory (red on any route surface change), comparator mutation
@@ -88,6 +151,11 @@ jobs:
       - name: launchd plist QoS gate
         working-directory: .
         run: python3 scripts/test_launchd_plists.py
+      # #354: the path-gate classifier controls 16+ min of heavy CI legs —
+      # its case patterns are asserted here, not trusted.
+      - name: ci path-gate classifier probe
+        working-directory: .
+        run: python3 scripts/test_ci_path_gate.py
 
   go-unit:
     runs-on: ubuntu-latest
@@ -189,6 +257,8 @@ jobs:
   # worker is a reference-mode child process the test itself spawns
   # (AXIOM_F14_WORKER_PYTHON — a requirements-only venv). No host state.
   split-topology:
+    needs: changes
+    if: needs.changes.outputs.topology == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -266,6 +336,8 @@ jobs:
   # as STRUCTURAL artifacts: kubeconform validates them — no cluster in
   # CI (documented equivalent per #308).
   container-topology:
+    needs: changes
+    if: needs.changes.outputs.topology == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -294,6 +366,9 @@ jobs:
           /tmp/kubeconform -strict -summary deploy/k8s/topology.yaml
 
   go-db-it:
+    # #354: path-gated — only Go/SQL/workflow surfaces pay for this leg.
+    needs: changes
+    if: needs.changes.outputs.go_sql == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
