@@ -61,7 +61,9 @@ legs (`go-db-it`, `split-topology`, `container-topology` — together ~16 of
 the ~24 billed minutes per run) are path-gated by the `changes` job: they
 run only when Go sources, `go.mod`/`go.sum`, SQL schemas, `deploy/**`,
 the compute-worker surface, or the workflow definition itself changed;
-docs-only and script-only changes run the remaining jobs only. Superseded
+docs-only and script-only changes run the remaining jobs only. The gate
+is fail-open: an unresolvable diff base classifies everything as changed,
+so verification is never skipped by an accident of history. Superseded
 runs on the same ref (rapid review-round pushes, rapid merges) are
 cancelled mid-flight instead of billed in full.
 
