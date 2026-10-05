@@ -21,28 +21,28 @@ import (
 // plus the revision contract's bibliographic shape (author strings, tag
 // strings) and the file facts the processor wire needs.
 type DocumentProjection struct {
-	DocumentID   string
-	AttachmentID string
-	SourceID     string
-	ServerID     string
-	RecordKey    string
-	RenditionKey string
+	DocumentID    string
+	AttachmentID  string
+	SourceID      string
+	ServerID      string
+	RecordKey     string
+	RenditionKey  string
 	SourceVersion int64
-	ContentHash  *string
-	Title        string
-	Creators     []string
-	Year         *int
-	Publisher    string
-	Language     string
-	Tags         []string
+	ContentHash   *string
+	Title         string
+	Creators      []string
+	Year          *int
+	Publisher     string
+	Language      string
+	Tags          []string
 	CitationClass string
-	ContentType  string
-	ItemType     string
-	Filename     string
-	LocalPath    string
-	FileSize     *int64
-	MtimeMS      *int64
-	LinkMode     string
+	ContentType   string
+	ItemType      string
+	Filename      string
+	LocalPath     string
+	FileSize      *int64
+	MtimeMS       *int64
+	LinkMode      string
 }
 
 // UpsertDocumentProjectionTx writes one rendition's projection row (the

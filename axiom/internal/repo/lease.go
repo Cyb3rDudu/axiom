@@ -482,9 +482,9 @@ type claimSourceRow struct {
 }
 
 type claimDocRow struct {
-	id        string
-	sourceID  string
-	zoteroKey string
+	id            string
+	sourceID      string
+	zoteroKey     string
 	zoteroVersion int64
 	// contextual (#255): citation_class='contextual' — the claim-time KG
 	// gate clears the extraction flags for contextual documents.
@@ -495,19 +495,19 @@ type claimDocRow struct {
 }
 
 type claimAttachRow struct {
-	id          string
-	sourceID    string
-	documentID  string
-	zoteroKey   string
+	id            string
+	sourceID      string
+	documentID    string
+	zoteroKey     string
 	zoteroVersion int64
-	contentType *string
-	filename    *string
-	localPath   *string
-	contentHash *string
-	fileSize    *int64
-	mtimeMS     *int64
-	preferred   bool
-	deleted     bool
+	contentType   *string
+	filename      *string
+	localPath     *string
+	contentHash   *string
+	fileSize      *int64
+	mtimeMS       *int64
+	preferred     bool
+	deleted       bool
 }
 
 func derefStr(p *string) string {

@@ -25,12 +25,12 @@ import (
 // reconciliation) run in their own transaction on the Store pool after
 // the mirror commits — one component, one database, per transaction.
 type Service struct {
-	src        zoteroprovider.Source
-	store      *repo.Repo
-	mirror     *mirror.Repo
-	baseURL    string
-	libID      string
-	log        *log.Logger
+	src     zoteroprovider.Source
+	store   *repo.Repo
+	mirror  *mirror.Repo
+	baseURL string
+	libID   string
+	log     *log.Logger
 
 	// contextual (#255/#262): the resolved rules (collection zotero_keys +
 	// tag names). Zero value = no rules = everything citable. ctxPaths/ctxTags
@@ -266,8 +266,8 @@ type Result struct {
 	FailedJobs  int    `json:"failed_jobs"`
 	// Tombstoned counts documents deactivated THIS run (deleted in Zotero,
 	// held rows reconciled away — #358).
-	Tombstoned  int    `json:"tombstoned_documents"`
-	NewVersion  int64  `json:"library_version"`
+	Tombstoned int   `json:"tombstoned_documents"`
+	NewVersion int64 `json:"library_version"`
 }
 
 // Run performs the lossless canonical sync for the Zotero source — the single

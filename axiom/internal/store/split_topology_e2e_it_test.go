@@ -686,4 +686,3 @@ func tailLogsN(buf *bytes.Buffer, n int) string {
 }
 
 func tailLogs(buf *bytes.Buffer) string { return tailLogsN(buf, 25) }
-

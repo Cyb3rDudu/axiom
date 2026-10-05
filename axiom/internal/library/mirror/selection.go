@@ -82,21 +82,21 @@ type AttachmentState struct {
 // #358: the row is a CODE merge of the Library's mirror truth and the
 // Store's job/snapshot truth; #356 adds the serving outcome.
 type ZoteroDocumentState struct {
-	DocumentID    string           `json:"document_id"`
-	ZoteroKey     string           `json:"zotero_key"`
-	Title         string           `json:"title"`
-	ItemType      string           `json:"item_type"`
-	SyncState     string           `json:"sync_state"` // synced | held | processing | pending | tombstoned
-	JobStatus     string           `json:"job_status,omitempty"`
-	Attachment    *AttachmentState `json:"attachment,omitempty"`
+	DocumentID string           `json:"document_id"`
+	ZoteroKey  string           `json:"zotero_key"`
+	Title      string           `json:"title"`
+	ItemType   string           `json:"item_type"`
+	SyncState  string           `json:"sync_state"` // synced | held | processing | pending | tombstoned
+	JobStatus  string           `json:"job_status,omitempty"`
+	Attachment *AttachmentState `json:"attachment,omitempty"`
 	// AttachmentID is the preferred rendition's durable uuid — the join
 	// key the listing merge resolves the Store's job truth by (internal).
-	AttachmentID  string           `json:"-"`
-	RepairStatus  string           `json:"repair_status,omitempty"` // newest repair_cases.status, live
-	SelectionMode string           `json:"-"`                       // persisted selection mode (internal)
-	Outcome       string           `json:"outcome"`                 // completed | serving | in_repair | needs_ocr | failed | removed | processing | pending | excluded
-	OutcomeReason string           `json:"outcome_reason,omitempty"`
-	UpdatedAt     time.Time        `json:"updated_at"`
+	AttachmentID  string    `json:"-"`
+	RepairStatus  string    `json:"repair_status,omitempty"` // newest repair_cases.status, live
+	SelectionMode string    `json:"-"`                       // persisted selection mode (internal)
+	Outcome       string    `json:"outcome"`                 // completed | serving | in_repair | needs_ocr | failed | removed | processing | pending | excluded
+	OutcomeReason string    `json:"outcome_reason,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // DeriveOutcome projects job/snapshot/repair/selection truth into the
@@ -107,6 +107,7 @@ type ZoteroDocumentState struct {
 //	job's quality_state pagination_state, set by the #254 preflight) →
 //	live repair track → completed → serving (terminal job closure BUT an
 //	active snapshot keeps the document served — cancelled waves, cleanup
+//
 // closures, skips) → failed+reason excerpt → never enqueued/served.
 //
 // #356 semantics: `failed` is reserved for documents with NO active

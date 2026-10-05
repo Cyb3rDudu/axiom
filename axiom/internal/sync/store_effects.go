@@ -203,7 +203,7 @@ func (s *Service) applyStoreEffects(ctx context.Context, sourceID, serverID stri
 			SourceID: sourceID, ServerID: serverID,
 			RecordKey: r.DocumentKey, RenditionKey: r.AttachmentKey,
 			SourceVersion: r.Version,
-			Title: b.Title, Creators: authorStrings(b.Creators), Year: b.Year,
+			Title:         b.Title, Creators: authorStrings(b.Creators), Year: b.Year,
 			Publisher: b.Publisher, Language: b.Language, Tags: tagStrings(b.Tags),
 			CitationClass: b.CitationClass, ContentType: r.ContentType,
 			ItemType: "", Filename: r.Filename, LocalPath: r.LocalPath,
@@ -280,4 +280,3 @@ func (s *Service) applyStoreEffects(ctx context.Context, sourceID, serverID stri
 	}
 	return enqueued, failedWritten, nil
 }
-

@@ -116,7 +116,7 @@ func TestCollectionSelectionCascadeIT(t *testing.T) {
 	seedItem("PRNT9012", "")
 	d1, _ := seedSelDoc(t, lr, srcID, "PRNT1234", "PRNT1234ATT", "h1") // in VWL_PRÄ
 	d2, _ := seedSelDoc(t, lr, srcID, "PRNT5678", "PRNT5678ATT", "h2") // in VWL_PRÄ
-	_, _ = seedSelDoc(t, lr, srcID, "PRNT9012", "PRNT9012ATT", "h3") // NOT in any collection
+	_, _ = seedSelDoc(t, lr, srcID, "PRNT9012", "PRNT9012ATT", "h3")   // NOT in any collection
 
 	// collection VWL_PRÄ (key VWLPRAXY) with d1+d2; a second collection for d2
 	for _, ck := range []string{"VWLPRAXY", "SECOND88"} {

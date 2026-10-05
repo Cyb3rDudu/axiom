@@ -339,7 +339,7 @@ func (lr *leaseRepo) seed(t *testing.T, spec seedSpec, jobStatus string, maxAtte
 	revJSON, _ := json.Marshal(revision.SourceRevision{
 		SourceID: srcID, RevisionID: "1", RenditionID: spec.attKey,
 		ContentHash: deref(spec.contentHash), MediaType: revision.MediaTypePDF,
-		Bibliography: revision.Bibliography{RecordID: spec.docKey, CitationClass: revision.CitationClassCitable},
+		Bibliography:        revision.Bibliography{RecordID: spec.docKey, CitationClass: revision.CitationClassCitable},
 		LocatorCapabilities: revision.LocatorCapabilities{Page: &revision.PageCapability{Trust: revision.TrustPhysicalOnly}},
 		ContentTicket:       "zat:" + srcID + ":" + spec.attKey,
 	})

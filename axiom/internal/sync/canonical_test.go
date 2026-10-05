@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
-	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
+	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
 )
 

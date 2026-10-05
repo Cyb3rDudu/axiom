@@ -133,17 +133,17 @@ func (r *Repo) EnqueueForceRebuild(ctx context.Context, documentID string) (*Job
 	_ = json.Unmarshal(creators, &authors)
 	_ = json.Unmarshal(tags, &tagList)
 	rev := revision.SourceRevision{
-		SourceID:     sourceID,
-		RevisionID:   "force-rebuild",
-		RenditionID:  rendKey,
-		ContentHash:  *hash,
-		MediaType:    "application/pdf",
+		SourceID:    sourceID,
+		RevisionID:  "force-rebuild",
+		RenditionID: rendKey,
+		ContentHash: *hash,
+		MediaType:   "application/pdf",
 		Bibliography: revision.Bibliography{
 			RecordID: recKey, Title: title, Authors: authors, Year: year,
 			Publisher: publisher, Language: language, Tags: tagList, CitationClass: class,
 		},
 		LocatorCapabilities: revision.LocatorCapabilities{Page: &revision.PageCapability{Trust: revision.TrustPhysicalOnly}},
-		ContentTicket: "zat:" + sourceID + ":" + rendKey,
+		ContentTicket:       "zat:" + sourceID + ":" + rendKey,
 	}
 	revJSON, err := json.Marshal(rev)
 	if err != nil {

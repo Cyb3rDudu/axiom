@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library/repair"
-	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/processor"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 	storemigrations "github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"

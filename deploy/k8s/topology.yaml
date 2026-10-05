@@ -21,7 +21,10 @@ metadata:
   namespace: axiom
 type: Opaque
 stringData:
-  # operators fill: DSN, source secret — never commit real values
+  # operators fill: DSN, source secret — never commit real values.
+  # #358 (ADR 0002): optionally set AXIOM_LIBRARY_DATABASE_URL to a second
+  # database for the two-plane split (the Zotero mirror lives there);
+  # unset = single-database topology (both planes on this DB, supported).
   AXIOM_DATABASE_URL: postgresql://user:pass@postgres:5432/axiom
   AXIOM_PROCESSOR_SOURCE_SECRET: change-me
 ---

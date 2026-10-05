@@ -150,9 +150,9 @@ func TestOutcomeServingCohortIT(t *testing.T) {
 		return docID, attID, jobID
 	}
 
-	_, _, _ = seedDoc("CANCELWAVE", "cancelled", "", "", true)                                  // 91-cohort shape
+	_, _, _ = seedDoc("CANCELWAVE", "cancelled", "", "", true)                                      // 91-cohort shape
 	_, _, _ = seedDoc("NIGHTCLEAN", "failed", "NIGHT_CLEANUP", "Redundant (Snapshot exists)", true) // 34-cohort shape
-	_, _, _ = seedDoc("REALFAIL", "failed", "RETRY_EXHAUSTED", "lease expired", false)            // honest failure
+	_, _, _ = seedDoc("REALFAIL", "failed", "RETRY_EXHAUSTED", "lease expired", false)              // honest failure
 
 	merged := func() map[string]ZoteroDocumentState {
 		rows, err := lr.rep.ListDocumentsMirror(ctx)

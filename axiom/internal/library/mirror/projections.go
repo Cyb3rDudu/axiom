@@ -24,10 +24,10 @@ type CanonicalDocFlag struct {
 
 // fullProjections is the outcome of deriving projections from zotero_items.
 type fullProjections struct {
-	flags               []CanonicalDocFlag
-	renditions          []SyncRendition
+	flags                []CanonicalDocFlag
+	renditions           []SyncRendition
 	deletedAttachmentIDs []string
-	tombstoned          int
+	tombstoned           int
 }
 
 // attMeta holds canonical attachment-item dimensions used for projection.
@@ -187,7 +187,7 @@ func (m *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 			DocumentKey: parentKey, AttachmentKey: pref.Key,
 			// the NATIVE path (no file:// scheme) — the store's source
 			// serving opens it directly
-			Version:     pref.Version, LocalPath: zoteroprovider.LocalFilePath(pref.LocalPath),
+			Version: pref.Version, LocalPath: zoteroprovider.LocalFilePath(pref.LocalPath),
 			ContentType: meta.contentType, Filename: meta.fileName, LinkMode: meta.linkMode,
 		}
 		if fin.Exists && fin.Hash != "" {
