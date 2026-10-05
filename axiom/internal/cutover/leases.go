@@ -154,6 +154,13 @@ type drainOptions struct {
 // drainLeases enforces quiescence per the documented choice. It
 // returns when zero active leases remain, or aborts with a full
 // diagnosis (identifiers only).
+//
+// The cancel choice additionally CONVERGES every cancel-requested row
+// whose lease has expired — including ones it did not request itself
+// (an operator cancellation with the dispatcher already gone): in the
+// window nobody else runs terminalizeStale, so a non-terminal
+// cancel_requested row would survive the freeze claimed. The choice
+// owns the whole convergence, not just its own requests.
 func drainLeases(ctx context.Context, pool *pgxpool.Pool, opts drainOptions) error {
 	timeout := opts.WaitTimeout
 	if timeout <= 0 {
@@ -165,7 +172,6 @@ func drainLeases(ctx context.Context, pool *pgxpool.Pool, opts drainOptions) err
 	}
 	deadline := time.Now().Add(timeout)
 
-	cancelRequested := false
 	for {
 		now := time.Now()
 		leases, err := activeLeases(ctx, pool, now)
@@ -173,11 +179,13 @@ func drainLeases(ctx context.Context, pool *pgxpool.Pool, opts drainOptions) err
 			return err
 		}
 		if len(leases) == 0 {
-			// A cancel whose lease expired between polls converges HERE
-			// (the empty active set alone is not convergence — the row
-			// is still claimed until the terminalization runs; the
-			// recorded outcome must match the row, not the poll).
-			if cancelRequested {
+			// The empty active set alone is not convergence: a
+			// cancel-requested row with an expired lease is still
+			// claimed until the terminalization runs. Under the cancel
+			// choice the gate converges every such row HERE — its own
+			// requests and pre-existing ones alike (the recorded
+			// outcome must match the row, not the poll).
+			if opts.Choice == LeaseCancel {
 				if _, err := convergeExpiredCancels(ctx, pool); err != nil {
 					return fmt.Errorf("converge expired cancels: %w", err)
 				}
@@ -200,7 +208,6 @@ func drainLeases(ctx context.Context, pool *pgxpool.Pool, opts drainOptions) err
 				return fmt.Errorf("maintenance: %d active lease(s) and the plan chooses abort — run aborted (first: job %s held by %q, lease until %s)",
 					len(leases), l.JobID, l.ClaimedBy, d.LeaseUntil)
 			case LeaseCancel:
-				cancelRequested = true
 				if !l.CancelRequested {
 					if err := requestCancellation(ctx, pool, l.JobID); err != nil {
 						return fmt.Errorf("cancel job %s: %w", l.JobID, err)

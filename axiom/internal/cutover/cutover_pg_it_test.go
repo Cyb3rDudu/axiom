@@ -683,3 +683,101 @@ func freePort(t *testing.T) int {
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port
 }
+
+// TestDrainConvergesPreExistingExpiredCancel — the deterministic
+// regression for the empty-exit convergence: the job is seeded DIRECTLY
+// into the post-expiry state (claimed, cancel_requested_at set,
+// lease_until in the past — an operator cancellation with the
+// dispatcher already gone), so the drain's FIRST poll sees zero active
+// leases and the convergence at the empty exit is the only thing that
+// can terminalize the row. No timers, no polling luck: if the empty-exit
+// convergence is removed, the row stays claimed and this test is red.
+func TestDrainConvergesPreExistingExpiredCancel(t *testing.T) {
+	ctx := context.Background()
+	legacyDSN, cleanupLegacy := itScratch(t, "cvrg")
+	defer cleanupLegacy()
+	_, _, jobID := seedLegacy(t, legacyDSN)
+
+	pool, err := pgxpool.New(ctx, legacyDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	// The seeded state: cancel requested a minute ago, lease expired a
+	// minute ago, still claimed (nobody ran terminalizeStale).
+	tag, err := pool.Exec(ctx, `
+		UPDATE ingest_jobs SET
+			status='claimed', claimed_by='departed-worker', lease_token=gen_random_uuid(),
+			lease_until = now() - interval '60 seconds',
+			last_heartbeat_at = now() - interval '70 seconds',
+			cancel_requested_at = now() - interval '60 seconds'
+		WHERE id=$1`, jobID)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("seed expired cancel: rows=%d err=%v", tag.RowsAffected(), err)
+	}
+
+	// Drain under the cancel choice: the first poll is already
+	// lease-empty; convergence happens at the empty exit.
+	if err := drainLeases(ctx, pool, drainOptions{
+		Choice:       LeaseCancel,
+		WaitTimeout:  5 * time.Second,
+		PollInterval: 1 * time.Second,
+	}); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	var status string
+	var cancelReq bool
+	var claimedBy *string
+	if err := pool.QueryRow(ctx,
+		`SELECT status::text, (cancel_requested_at IS NOT NULL), claimed_by FROM ingest_jobs WHERE id=$1`, jobID,
+	).Scan(&status, &cancelReq, &claimedBy); err != nil {
+		t.Fatal(err)
+	}
+	if status != "cancelled" || !cancelReq || claimedBy != nil {
+		t.Fatalf("row not terminalized: status=%q cancel_requested=%v claimed_by=%v (want cancelled/true/nil)", status, cancelReq, claimedBy)
+	}
+
+	// wait and abort must NOT converge: the choices that did not opt
+	// into cancellation leave the row to the owning semantics.
+	_, _, job2 := seedSecondJob(t, legacyDSN)
+	if _, err := pool.Exec(ctx, `
+		UPDATE ingest_jobs SET
+			status='claimed', claimed_by='w2', lease_token=gen_random_uuid(),
+			lease_until = now() - interval '60 seconds',
+			cancel_requested_at = now() - interval '60 seconds'
+		WHERE id=$1`, job2); err != nil {
+		t.Fatal(err)
+	}
+	if err := drainLeases(ctx, pool, drainOptions{Choice: LeaseWait, WaitTimeout: time.Second, PollInterval: 10 * time.Millisecond}); err != nil {
+		t.Fatalf("wait drain over expired leases: %v", err)
+	}
+	var status2 string
+	if err := pool.QueryRow(ctx, `SELECT status::text FROM ingest_jobs WHERE id=$1`, job2).Scan(&status2); err != nil {
+		t.Fatal(err)
+	}
+	if status2 != "claimed" {
+		t.Fatalf("wait choice must not converge foreign cancels, got %q", status2)
+	}
+}
+
+// seedSecondJob plants one more pending job (the wait/abort control).
+func seedSecondJob(t *testing.T, dsn string) (string, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var src, j string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM zotero_sources ORDER BY id LIMIT 1`).Scan(&src); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO ingest_jobs (source_id, content_hash, status, attempt, max_attempts)
+		VALUES ($1, 'dm09-second', 'pending', 0, 3) RETURNING id::text`, src).Scan(&j); err != nil {
+		t.Fatal(err)
+	}
+	return src, "", j
+}
