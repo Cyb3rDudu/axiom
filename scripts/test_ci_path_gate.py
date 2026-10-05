@@ -77,6 +77,8 @@ CASES = [
     ("role drill sql", ["deploy/postgres/roles.sql"], ("true", "true")),
     ("compose change", ["deploy/container/compose.topology.yml"], ("false", "true")),
     ("worker change", ["axiom-compute-worker/main.py"], ("false", "true")),
+    ("db test fixture", ["axiom/internal/backfill/testdata/poisoned.epub"], ("true", "true")),
+    ("axiom docs prose (fail-open over-trigger)", ["axiom/docs/CITATION_GRANULARITY_MEMO.md"], ("true", "true")),
     ("workflow self", [".github/workflows/ci.yml"], ("true", "true")),
     ("mixed docs+go", ["docs/index.md", "axiom/cmd/axiom-ng/main.go"], ("true", "true")),
 ]
