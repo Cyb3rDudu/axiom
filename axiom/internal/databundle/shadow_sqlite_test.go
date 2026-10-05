@@ -42,12 +42,26 @@ func shadowSQLiteFixture(t *testing.T) (src, dbPath string) {
 	return src, dbPath
 }
 
+// TestOpenSQLiteShadowPathGuard — a target path carrying
+// URL-significant characters (?/#/%) is refused before any stat or
+// open: the DSN would resolve a different file than the literal path
+// the operator named (the library's own opener guards the same
+// class). Engine-free, no database needed.
+func TestOpenSQLiteShadowPathGuard(t *testing.T) {
+	for _, p := range []string{"/tmp/dm08/x?y.sqlite", "/tmp/dm08/x#y.sqlite", "/tmp/dm08/100%.sqlite"} {
+		if _, err := openSQLiteShadow(p); err == nil {
+			t.Fatalf("path %q accepted — the file DSN would redirect", p)
+		} else if !strings.Contains(err.Error(), "URL-significant") {
+			t.Fatalf("path %q refused for the wrong reason: %v", p, err)
+		}
+	}
+}
+
 func TestShadowSQLite(t *testing.T) {
 	if os.Getenv("AXIOM_TEST_DATABASE_URL") == "" {
 		t.Skip("AXIOM_TEST_DATABASE_URL not set — PG-gated shadow tests skip")
 	}
 	src, dbPath := shadowSQLiteFixture(t)
-
 	ctx := context.Background()
 
 	// green: skips on the legacy namespace, full compare on library_*

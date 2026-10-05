@@ -31,6 +31,7 @@ func TestDataUsageErrors(t *testing.T) {
 		{"shadow no target", []string{"shadow", "--component", "library", "--source-dsn", "s", "--out", "r"}, exitUsage},
 		{"shadow two targets", []string{"shadow", "--component", "library", "--source-dsn", "s", "--dsn", "a", "--sqlite", "b", "--out", "r"}, exitUsage},
 		{"shadow missing out", []string{"shadow", "--component", "library", "--source-dsn", "s", "--dsn", "a"}, exitUsage},
+		{"shadow negative samples", []string{"shadow", "--component", "library", "--source-dsn", "s", "--dsn", "a", "--out", "r", "--max-samples", "-1"}, exitUsage},
 		{"unknown component", []string{"export", "--component", "store", "--dsn", "x", "--out", "y"}, exitUsage},
 		{"positional junk", []string{"verify", "--component", "library", "--from", "y", "--dsn", "a", "junk"}, exitUsage},
 	}

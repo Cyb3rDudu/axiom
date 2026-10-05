@@ -26,6 +26,7 @@ import (
 	"io/fs"
 	"math/big"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -257,18 +258,28 @@ func (p *pgSnapshot) close() error {
 // be silently brought to head instead of surfacing as structural
 // drift, and a mistyped path would mint a fresh empty database).
 // mode=ro refuses every write INCLUDING file creation; query_only(1)
-// is the belt. A missing path fails loudly, before any open.
+// is the belt. A missing path fails loudly, before any open; a path
+// carrying URL-significant characters is refused outright — the stat
+// would test the literal path while the open resolved a different
+// file (the library's own opener guards the same class, sqlite.go).
 func openSQLiteShadow(path string) (*sqliteSink, error) {
 	if path == "" {
 		return nil, fmt.Errorf("data bundle: a SQLite path is required")
 	}
-	if _, err := os.Stat(path); err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("cannot stat shadow target %s: %w", path, err)
-		}
-		return nil, fmt.Errorf("shadow target %s does not exist — the shadow reads a frozen imported copy, it never creates one", path)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("shadow target: %w", err)
 	}
-	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)&_pragma=query_only(1)", path, sqliteBusyTimeoutMs))
+	if strings.ContainsAny(abs, "?#%") {
+		return nil, fmt.Errorf("shadow target path %q contains URL-significant characters (?/#/%%) that would corrupt or redirect the file DSN", abs)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("cannot stat shadow target %s: %w", abs, err)
+		}
+		return nil, fmt.Errorf("shadow target %s does not exist — the shadow reads a frozen imported copy, it never creates one", abs)
+	}
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)&_pragma=query_only(1)", abs, sqliteBusyTimeoutMs))
 	if err != nil {
 		return nil, fmt.Errorf("open read-only: %w", err)
 	}

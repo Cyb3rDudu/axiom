@@ -242,6 +242,10 @@ func cmdDataShadow(name string, args []string) int {
 		fmt.Fprintf(os.Stderr, "%s data shadow: --out (report artifact path) is required — the run must leave evidence\n", name)
 		return exitUsage
 	}
+	if maxSamples < 0 {
+		fmt.Fprintf(os.Stderr, "%s data shadow: --max-samples must be >= 0 (0 = package default)\n", name)
+		return exitUsage
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	res, err := databundle.Shadow(ctx, databundle.ShadowOptions{
