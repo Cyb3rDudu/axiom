@@ -1940,3 +1940,75 @@ func TestProjectionUpsertSkipsStaleVersion(t *testing.T) {
 		t.Fatalf("stale offer must not touch the row: title=%q version=%d, want Stale Guard/5", title, version)
 	}
 }
+
+// TestDocumentJobStatesSeesUnclaimedRevisionJobs — the #358 review
+// witness: a freshly minted revision job (FKs NULL until claim) must
+// resolve through the identity arm — waiting documents list as pending,
+// never as "never enqueued".
+func TestDocumentJobStatesSeesUnclaimedRevisionJobs(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	attID, docID, srcID := seedProjectionRow(t, lr, "WAITDOC1", "WAITATT1")
+	revJSON, _ := json.Marshal(revision.SourceRevision{
+		SourceID: srcID, RevisionID: "1", RenditionID: "WAITATT1",
+		ContentHash: "sha256:waiting", MediaType: revision.MediaTypePDF,
+		Bibliography:  revision.Bibliography{RecordID: "WAITDOC1", CitationClass: revision.CitationClassCitable},
+		ContentTicket: "zat:" + srcID + ":WAITATT1",
+	})
+	if _, minted, err := lr.rep.EnqueueRevisionIntake(ctx, IntakeRequest{
+		IdempotencyKey:      "waiting-1",
+		RevisionSourceID:    srcID,
+		RevisionRecordID:    "WAITDOC1",
+		RevisionRenditionID: "WAITATT1",
+		RevisionNo:          "1",
+		ContentHash:         "sha256:waiting",
+		RevisionJSON:        revJSON,
+	}); err != nil || !minted {
+		t.Fatalf("mint: %v minted=%v", err, minted)
+	}
+	// The minted job's FKs are NULL (claim fills them) — the listing's
+	// lookup must still find it.
+	var fkNull bool
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT attachment_id IS NULL FROM ingest_jobs WHERE revision_rendition_id='WAITATT1'`).Scan(&fkNull); err != nil || !fkNull {
+		t.Fatalf("fixture shape: FK must be NULL pre-claim (fkNull=%v err=%v)", fkNull, err)
+	}
+	jobs, _, err := lr.rep.DocumentJobStates(ctx, []string{attID}, []string{docID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	js, ok := jobs[attID]
+	if !ok {
+		t.Fatal("the unclaimed revision job must resolve through the identity arm")
+	}
+	if js.Status != "pending" {
+		t.Fatalf("resolved status = %q, want pending", js.Status)
+	}
+}
+
+// seedProjectionRow writes a bare projection fixture (no job rows) and
+// returns (attachment, document, source) uuids.
+func seedProjectionRow(t *testing.T, lr *leaseRepo, docKey, attKey string) (attID, docID, srcID string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_sources (base_url, library_id, server_id)
+		VALUES ('https://wait.local','users/0','srv') RETURNING id::text`).Scan(&srcID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+		VALUES ($1,$2,1,'book','Waiting') RETURNING id::text`, srcID, docKey).Scan(&docID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO store_documents (document_id, attachment_id, source_id,
+			record_key, rendition_key, content_hash, content_type, preferred)
+		VALUES ($1, gen_random_uuid(), $2, $3, $4, 'sha256:waiting', 'application/pdf', true)
+		RETURNING attachment_id::text`, docID, srcID, docKey, attKey).Scan(&attID); err != nil {
+		t.Fatal(err)
+	}
+	return attID, docID, srcID
+}

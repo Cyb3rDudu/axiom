@@ -45,7 +45,10 @@ func seedSelDoc(t *testing.T, lr *mirrorRepo, srcID, docKey, attKey, hash string
 // applySel applies and gates the offered renditions in code — the
 // sync's store-phase discipline (#358: the apply offers every preferred
 // rendition; the SELECTION gate decides what reaches the Store). The
-// cascade semantics under test live in ResolveEffectiveSelection.
+// cascade semantics under test live in ResolveEffectiveSelection. NOTE:
+// this measures the gate LOCALLY (test-computed JobGated count), not the
+// store phase's actual intakes — that end-to-end leg is pinned by
+// TestCollectionSelectionGatesSyncIT in internal/sync (Service.Run).
 func applySel(t *testing.T, lr *mirrorRepo, srcID string, files map[string]AttachmentFileInfo, selection map[string]string) int {
 	t.Helper()
 	ctx := context.Background()

@@ -225,8 +225,11 @@ func (m *Repo) ListDocumentsMirror(ctx context.Context) ([]ZoteroDocumentState, 
 
 // DocumentListing merges the listing's two halves in code (#358): the
 // Library's mirror rows (with selection + repair truth) and the Store's
-// job/snapshot truth per rendition. Tombstoned rows pass through
-// untouched (their truth is mirror-only).
+// job/snapshot truth per rendition. Tombstoned rows pass through the
+// filter below (their truth is mirror-only). The merge lives HERE
+// deliberately (ADR 0002): the mirror owns the row type, and the
+// mirror→repo import direction is the sanctioned Library→Store edge
+// (the boundary lint forbids only the reverse).
 func DocumentListing(mirrorRows []ZoteroDocumentState, jobs map[string]repo.JobState, serving map[string]bool, syncState string) []ZoteroDocumentState {
 	out := make([]ZoteroDocumentState, 0, len(mirrorRows))
 	for _, z := range mirrorRows {

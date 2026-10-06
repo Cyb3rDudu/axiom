@@ -128,14 +128,19 @@ body applies document overrides to this run only:
 ```json
 {
   "include": ["<document-uuid>"],
-  "exclude": ["<document-uuid>"]
+  "exclude": ["<document-uuid>"],
+  "full": false
 }
 ```
 
 Both arrays contain document UUIDs. The body limit is 4 MiB. An override does
 not modify the persisted selection. When collection choices exist, `include`
 cannot add a document outside the collection base; `exclude` always removes a
-document from the effective set.
+document from the effective set. `full: true` requests a since=0 FULL
+reconciliation (#358): every Zotero item is re-listed and items absent from
+Zotero are reconciled into tombstones — the held-row pass the post-v0.2.3
+catch-up and operator-initiated reconciles ride; steady-state syncs stay
+delta.
 
 A successful response summarizes the committed canonical sync:
 
@@ -146,9 +151,16 @@ A successful response summarizes the committed canonical sync:
   "canonical_collections": 7,
   "document_projections": 18,
   "enqueued_jobs": 3,
+  "failed_jobs": 0,
+  "tombstoned_documents": 1,
   "library_version": 912
 }
 ```
+
+`tombstoned_documents` counts documents deactivated THIS run (reconciled
+deletions — the migration guide's catch-up report); `failed_jobs` counts
+file-resolution failures recorded for renditions whose local file was missing
+or unreadable.
 
 The sync reads canonical items since the stored Zotero library cursor, mirrors
 items and collections, updates normalized projections, hashes active attachment

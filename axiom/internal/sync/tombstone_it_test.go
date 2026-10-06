@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"log"
 	"testing"
+	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library/mirror"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
@@ -229,4 +230,62 @@ func mustEnclosure(it zoteroprovider.CanonicalItem, path string) json.RawMessage
 	env["links"] = map[string]any{"enclosure": map[string]any{"href": "file://" + path}}
 	b, _ := json.Marshal(env)
 	return b
+}
+
+// TestReparentUpdatesRenditionIdentityIT — the #358 review witness: a
+// rendition whose parent record MOVES (same attachment key, new parent
+// document) must carry its new identity everywhere — the mirror's
+// parent key, the projection's record key — so the next job for the new
+// record resolves instead of dying in REVISION_REF_UNRESOLVED forever.
+func TestReparentUpdatesRenditionIdentityIT(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t, ctx)
+	pdf := makePdf(t, "reparent")
+
+	src := &canonicalFake{serverID: "srv", baseURL: newScriptedBase(), version: 10}
+	src.items = []zoteroprovider.CanonicalItem{tombItem("RPOLD", "", "Reparent Book", 10), tombItem("RPATT", "RPOLD", "", 10)}
+	src.items[1].Envelope = mustEnclosure(src.items[1], pdf)
+	rep := repo.New(d.Pool())
+	svc := New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default())
+
+	if _, err := svc.Run(ctx, nil); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	// The move: a NEW parent record carries the SAME rendition key.
+	src.version = 11
+	src.items = []zoteroprovider.CanonicalItem{tombItem("RPNEW", "", "Reparented Book", 11), tombItem("RPATT", "RPNEW", "", 11)}
+	src.items[1].Envelope = mustEnclosure(src.items[1], pdf)
+	if _, err := svc.Run(ctx, nil); err != nil {
+		t.Fatalf("reparent sync: %v", err)
+	}
+
+	// Mirror: the attachment row points at the NEW parent.
+	var parentKey string
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT parent_zotero_key FROM zotero_attachments WHERE zotero_key='RPATT'`).Scan(&parentKey); err != nil {
+		t.Fatal(err)
+	}
+	if parentKey != "RPNEW" {
+		t.Fatalf("mirror parent key = %q, want RPNEW (stale reparent)", parentKey)
+	}
+	// Store: the projection's record key follows the new parent.
+	var recordKey string
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT record_key FROM store_documents WHERE rendition_key='RPATT'`).Scan(&recordKey); err != nil {
+		t.Fatal(err)
+	}
+	if recordKey != "RPNEW" {
+		t.Fatalf("projection record key = %q, want RPNEW (stale reparent — jobs would be unclaimable)", recordKey)
+	}
+
+	// The job minted under the NEW record resolves at claim (the claim's
+	// record-key guard passes).
+	cj, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
+		WorkerID: "reparent", LeaseDuration: 30 * time.Second,
+		Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
+	})
+	if err != nil || cj == nil {
+		t.Fatalf("claim after reparent: %v %v", cj, err)
+	}
 }

@@ -11,7 +11,6 @@ package repo
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -66,8 +65,7 @@ func (r *Repo) UpsertDocumentProjectionTx(ctx context.Context, tx pgx.Tx, p Docu
 	if class == "" {
 		class = "citable"
 	}
-	var applied bool
-	if err := tx.QueryRow(ctx, `
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO store_documents (
 		  document_id, attachment_id, source_id, server_id,
 		  record_key, rendition_key, source_version, content_hash,
@@ -76,7 +74,8 @@ func (r *Repo) UpsertDocumentProjectionTx(ctx context.Context, tx pgx.Tx, p Docu
 		  file_size, mtime_ms, link_mode, preferred, deleted
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,true,false)
 		ON CONFLICT (source_id, rendition_key) DO UPDATE SET
-		  document_id=EXCLUDED.document_id, server_id=EXCLUDED.server_id,
+		  document_id=EXCLUDED.document_id, record_key=EXCLUDED.record_key,
+		  server_id=EXCLUDED.server_id,
 		  source_version=GREATEST(store_documents.source_version, EXCLUDED.source_version),
 		  content_hash=EXCLUDED.content_hash, title=EXCLUDED.title, creators=EXCLUDED.creators,
 		  publication_year=EXCLUDED.publication_year, publisher=EXCLUDED.publisher,
@@ -85,19 +84,12 @@ func (r *Repo) UpsertDocumentProjectionTx(ctx context.Context, tx pgx.Tx, p Docu
 		  filename=EXCLUDED.filename, local_path=EXCLUDED.local_path,
 		  file_size=EXCLUDED.file_size, mtime_ms=EXCLUDED.mtime_ms, link_mode=EXCLUDED.link_mode,
 		  preferred=true, deleted=false, updated_at=now()
-		WHERE EXCLUDED.source_version >= store_documents.source_version
-		RETURNING (xmax = 0) AS inserted`,
+		WHERE EXCLUDED.source_version >= store_documents.source_version`,
 		p.DocumentID, p.AttachmentID, p.SourceID, p.ServerID,
 		p.RecordKey, p.RenditionKey, p.SourceVersion, p.ContentHash,
 		p.Title, creators, p.Year, p.Publisher, p.Language, tags,
 		class, p.ContentType, p.ItemType, p.Filename, p.LocalPath,
-		p.FileSize, p.MtimeMS, p.LinkMode).Scan(&applied); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			// The version guard suppressed the update: a STALE offer
-			// (an older delta or a delayed sync) — the documented skip,
-			// never a phase-aborting error (#358 review).
-			return nil
-		}
+		p.FileSize, p.MtimeMS, p.LinkMode); err != nil {
 		return err
 	}
 	// Exactly one preferred rendition per document.
@@ -147,16 +139,37 @@ type JobState struct {
 // documents hold an active snapshot. The Library half (mirror rows,
 // selections, repair status) is merged in code by the caller — no
 // cross-component SQL.
+//
+// Job resolution is TWO-armed (#358 review): claimed jobs carry the
+// durable FK (attachment_id), but a freshly minted revision job's FKs
+// stay NULL until its claim — the identity arm resolves those through
+// the projection (source uuid + rendition key), so a freshly synced,
+// still-waiting document lists as pending, never as "never enqueued".
 func (r *Repo) DocumentJobStates(ctx context.Context, attachmentIDs, documentIDs []string) (map[string]JobState, map[string]bool, error) {
 	jobs := map[string]JobState{}
 	if len(attachmentIDs) > 0 {
 		rows, err := r.pool.Query(ctx, `
-			SELECT DISTINCT ON (attachment_id) attachment_id::text,
-			       status::text, COALESCE(error_code,''), COALESCE(error_message,''),
-			       COALESCE(quality_state->>'pagination_state','')
-			FROM ingest_jobs
-			WHERE attachment_id = ANY($1::uuid[])
-			ORDER BY attachment_id, updated_at DESC, id DESC`, attachmentIDs)
+			SELECT DISTINCT ON (att) att, status, error_code, error_message, pagination_state
+			FROM (
+				SELECT j.attachment_id::text AS att, j.status::text AS status,
+				       COALESCE(j.error_code,'') AS error_code,
+				       COALESCE(j.error_message,'') AS error_message,
+				       COALESCE(j.quality_state->>'pagination_state','') AS pagination_state,
+				       j.updated_at, j.id
+				FROM ingest_jobs j
+				WHERE j.attachment_id = ANY($1::uuid[])
+				UNION ALL
+				SELECT p.attachment_id::text, j.status::text,
+				       COALESCE(j.error_code,''), COALESCE(j.error_message,''),
+				       COALESCE(j.quality_state->>'pagination_state',''),
+				       j.updated_at, j.id
+				FROM ingest_jobs j
+				JOIN store_documents p ON p.source_id::text = j.revision_source_id
+				                      AND p.rendition_key = j.revision_rendition_id
+				WHERE j.attachment_id IS NULL AND j.intake_kind = 'revision'
+				  AND p.attachment_id = ANY($1::uuid[])
+			) q
+			ORDER BY att, updated_at DESC, id DESC`, attachmentIDs)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -200,7 +213,10 @@ func (r *Repo) DocumentJobStates(ctx context.Context, attachmentIDs, documentIDs
 // HasJobForDocumentSince answers the wave gate's post-heal question: does
 // the document hold a job enqueued at/after the given time? Unclaimed
 // revision jobs resolve their document through the projection (their FKs
-// fill only at claim).
+// fill only at claim). The identity join rides the store_documents
+// document index and stays a bounded scan on the jobs side — the wave
+// gate asks once per healed case inside its 1-hour window (ponytail:
+// add a dedicated identity index if the gate ever runs hot).
 func (r *Repo) HasJobForDocumentSince(ctx context.Context, documentID string, since time.Time) (bool, error) {
 	var has bool
 	err := r.pool.QueryRow(ctx, `

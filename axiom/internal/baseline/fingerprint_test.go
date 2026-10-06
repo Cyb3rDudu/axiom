@@ -292,6 +292,16 @@ var devStructureAllowlist = []string{
 	"ingest_jobs | ingest_jobs_intake_key_uq |",
 	"ingest_jobs | ingest_jobs_revision_identity_uq |",
 	"ingest_jobs | ingest_jobs_intake_kind_chk |",
+	// Delta 5 (#358 mirror-plane finalization): the Store's OWN document
+	// projection surface — the store_documents namespace (table, keys,
+	// indexes, check; a Store-ledger table no core migration creates, so
+	// the prefix cannot swallow future core lines) plus the NARROWED
+	// idempotency index (intake_kind='zotero' scoped — the old lane-blind
+	// line lives on in the frozen fixture and moves to
+	// frozenDroppedConstraints below, the store-owned drop twin of the
+	// DM06 cross-FK entries).
+	"store_documents |",
+	"ingest_jobs | ingest_jobs_idempotency_idx |",
 }
 
 // frozenDroppedConstraints (Delta 4, DM06 #315): the five cross-component
@@ -308,6 +318,12 @@ var frozenDroppedConstraints = []string{
 	"ingest_jobs | fk_ingest_jobs_attachment |",
 	"processing_snapshots | processing_snapshots_document_id_fkey |",
 	"processing_snapshots | processing_snapshots_attachment_id_fkey |",
+	// #358 (Delta 5): the lane-blind idempotency index line the frozen
+	// fixture still carries; store migration 0004 recreates it scoped to
+	// the retired zotero lane (the narrowed line is an ALLOWLISTED extra
+	// above — same index name, different predicate, hence prefix-split
+	// across both lists).
+	"ingest_jobs | ingest_jobs_idempotency_idx |",
 }
 
 // TestSchemaFingerprintDevLive — axiom_dev must be exactly the canonical

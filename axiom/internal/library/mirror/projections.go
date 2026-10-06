@@ -350,6 +350,7 @@ func (m *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, source
 		ON CONFLICT (source_id, zotero_key) DO UPDATE SET
 			zotero_version=GREATEST(zotero_attachments.zotero_version, EXCLUDED.zotero_version),
 			document_id=EXCLUDED.document_id,
+			parent_zotero_key=EXCLUDED.parent_zotero_key,
 			link_mode=EXCLUDED.link_mode, content_type=EXCLUDED.content_type,
 			filename=EXCLUDED.filename, file_uri=EXCLUDED.file_uri, local_path=EXCLUDED.local_path,
 			deleted=EXCLUDED.deleted,

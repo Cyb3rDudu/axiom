@@ -160,6 +160,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS repair_cases_one_open_per_attachment
   WHERE status IN ('rejected', 'queued', 'in_repair');
 CREATE INDEX IF NOT EXISTS repair_cases_status_idx ON repair_cases (status, created_at);
 
+-- Canonical back-references (core 0004 shape): fresh databases get the
+-- same FK integrity the cutover copy carries; on the copy these are
+-- no-ops (constraints already exist).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_zotero_documents_canonical_item') THEN
+    ALTER TABLE zotero_documents
+      ADD CONSTRAINT fk_zotero_documents_canonical_item
+      FOREIGN KEY (canonical_item_id) REFERENCES zotero_items(id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_zotero_attachments_canonical_item') THEN
+    ALTER TABLE zotero_attachments
+      ADD CONSTRAINT fk_zotero_attachments_canonical_item
+      FOREIGN KEY (canonical_item_id) REFERENCES zotero_items(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS zotero_write_audit (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   case_id uuid REFERENCES repair_cases(id),

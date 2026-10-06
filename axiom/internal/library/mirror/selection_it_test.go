@@ -219,3 +219,43 @@ func TestSetSelectionBatchAtomicityIT(t *testing.T) {
 		t.Fatalf("collection rows must NOT persist after the failed batch: %v", m)
 	}
 }
+
+// TestTombstoneVisibilityWindowIT — the #358 review probe: a reconciled
+// deletion stays visible for the bounded window, then drops out of the
+// listing (visible ONCE, never an eternal phantom row).
+func TestTombstoneVisibilityWindowIT(t *testing.T) {
+	lr := openMirrorDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	var srcID string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_sources (base_url, library_id, server_id)
+		VALUES ('https://tombwin.local','users/0','srv') RETURNING id::text`).Scan(&srcID); err != nil {
+		t.Fatal(err)
+	}
+	seedTomb := func(key string, deletedAgo string) {
+		if _, err := lr.pool.Exec(ctx, `
+			INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title, deleted, updated_at)
+			VALUES ($1,$2,1,'book',$3,true, now() - `+deletedAgo+`)`, srcID, key, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedTomb("TOMBFRESH", "interval '1 day'")   // inside the window
+	seedTomb("TOMBSTALE", "interval '30 days'") // outside
+
+	rows, err := lr.rep.ListDocumentsMirror(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, z := range rows {
+		seen[z.ZoteroKey] = true
+		if z.ZoteroKey == "TOMBSTALE" {
+			t.Fatal("a 30-day-old tombstone must have dropped out of the listing")
+		}
+	}
+	if !seen["TOMBFRESH"] {
+		t.Fatal("a fresh tombstone must still be visible")
+	}
+}

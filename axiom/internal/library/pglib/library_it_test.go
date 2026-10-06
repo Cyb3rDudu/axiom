@@ -1662,4 +1662,17 @@ func TestMirrorSchemaIdempotentOverCoreSchema(t *testing.T) {
 	if err := core.Pool().QueryRow(ctx, `SELECT count(*) FROM zotero_sources`).Scan(&n); err != nil {
 		t.Fatalf("mirror readable after overlay: %v", err)
 	}
+	// Constraint parity with the core shape (#358 review): the canonical
+	// back-reference FKs must exist on fresh databases too (the cutover
+	// copy carries them from core 0004).
+	for _, con := range []string{"fk_zotero_documents_canonical_item", "fk_zotero_attachments_canonical_item"} {
+		var has bool
+		if err := core.Pool().QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname=$1)`, con).Scan(&has); err != nil {
+			t.Fatal(err)
+		}
+		if !has {
+			t.Fatalf("fresh library database lacks the canonical FK %s — parity drift against the core shape", con)
+		}
+	}
 }

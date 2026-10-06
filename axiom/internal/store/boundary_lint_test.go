@@ -438,10 +438,12 @@ func probeRepoCopy(t *testing.T, mutate func(root string)) string {
 	return filepath.Join(root, "internal/repo")
 }
 
-// repoMirrorSQLViolations scans a directory's production files for
-// Library-owned table references. The frozen wire field names of the
-// processor contract (zotero_key, zotero_version, parent_zotero_key)
-// are NOT table references and stay legal.
+// repoMirrorSQLViolations scans a directory's production (non-test) Go
+// files for Library-owned table NAME references (case-sensitive,
+// substring match on the table identifier). The frozen wire field names
+// of the processor contract (zotero_key, zotero_version,
+// parent_zotero_key) are NOT table references and stay legal; the store
+// archive's own zotero_* tables are Library-OWNED names and count.
 func repoMirrorSQLViolations(dir string) []string {
 	mirrorTables := []string{
 		"zotero_sources", "zotero_items", "zotero_collections",

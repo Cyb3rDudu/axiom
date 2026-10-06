@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/contracts/revision"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/library/mirror"
@@ -96,9 +97,11 @@ func authorStrings(creators []byte) []string {
 	}
 	var out []string
 	for _, c := range cs {
-		name := c.Name
+		name := strings.TrimSpace(c.Name)
 		if name == "" {
-			name = c.FirstName + " " + c.LastName
+			// same shape the 0004 backfill btrims: trimmed concatenation,
+			// never a leading/trailing-space author
+			name = strings.TrimSpace(c.FirstName + " " + c.LastName)
 		}
 		if name != "" {
 			out = append(out, name)
