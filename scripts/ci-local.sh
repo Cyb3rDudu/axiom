@@ -174,9 +174,14 @@ leg_go_unit() {
 # load flakes), and AXIOM_REQUIRE_DRILL is NEVER set locally: the role
 # drill belongs to the disposable CI clusters and skips here by design.
 leg_go_db_it() { # runs under the dbshared lock (call site)
-    # fresh schema for the mirror IT's persistent fixed-name database
-    # (reused shape drifts into 42P10) — idle-guarded, under the lock
-    drop_db_if_idle axiom_mirror_it_test "mirror IT refresh"
+    # The persistent FIXED-name IT databases (test-harness constants —
+    # the suites migrate them idempotently, so a reused database keeps a
+    # stale schema shape and drifted data across runs: 42P10/23503
+    # failures). Refreshed here every run, idle-guarded, under the lock;
+    # extend the list when a new fixed-name suite lands.
+    for db in axiom_mirror_it_test axiom_repair_test axiom_repo_test axiom_server_test; do
+        drop_db_if_idle "$db" "fixed-name IT refresh"
+    done
     cd "$REPO/axiom" &&
         env -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL \
             AXIOM_TEST_DATABASE_URL="$IT_DSN" \
@@ -398,6 +403,7 @@ scratch_setup() { # derive DSNs, clean scratch, create the bases fresh
             return 1
         }
         IT_DSN_SRC="derived from the env file's database URL"
+        OWN_BASE_MANAGED=1 # this run owns its base and removes it at teardown
     fi
     base_name="$(dsn_dbname "$IT_DSN")"
     case "$base_name" in
