@@ -169,12 +169,12 @@ CREATE INDEX IF NOT EXISTS repair_cases_status_idx ON repair_cases (status, crea
 -- era lack the FKs (the parity IT pins the current shape).
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_zotero_documents_canonical_item') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_zotero_documents_canonical_item' AND conrelid = 'zotero_documents'::regclass) THEN
     ALTER TABLE zotero_documents
       ADD CONSTRAINT fk_zotero_documents_canonical_item
       FOREIGN KEY (canonical_item_id) REFERENCES zotero_items(id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_zotero_attachments_canonical_item') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_zotero_attachments_canonical_item' AND conrelid = 'zotero_attachments'::regclass) THEN
     ALTER TABLE zotero_attachments
       ADD CONSTRAINT fk_zotero_attachments_canonical_item
       FOREIGN KEY (canonical_item_id) REFERENCES zotero_items(id) ON DELETE CASCADE;

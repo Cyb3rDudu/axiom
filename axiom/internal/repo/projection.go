@@ -92,11 +92,18 @@ func (r *Repo) UpsertDocumentProjectionTx(ctx context.Context, tx pgx.Tx, p Docu
 		p.FileSize, p.MtimeMS, p.LinkMode); err != nil {
 		return err
 	}
-	// Exactly one preferred rendition per document.
+	// Exactly one preferred rendition per document — but ONLY when the
+	// offer actually HOLDS preferred now: a version-guard-suppressed
+	// (stale) offer must not clear the document's real preferred sibling
+	// (#358 review round 3 — the pre-Exec early return used to protect
+	// this path; the two-database delayed-sync window can reach it).
 	_, err := tx.Exec(ctx, `
 		UPDATE store_documents SET preferred=false, updated_at=now()
-		WHERE document_id=$1::uuid AND rendition_key<>$2 AND preferred`,
-		p.DocumentID, p.RenditionKey)
+		WHERE document_id=$1::uuid AND rendition_key<>$2 AND preferred
+		  AND EXISTS (SELECT 1 FROM store_documents x
+		              WHERE x.source_id=$3::uuid AND x.rendition_key=$2
+		                AND x.preferred)`,
+		p.DocumentID, p.RenditionKey, p.SourceID)
 	return err
 }
 

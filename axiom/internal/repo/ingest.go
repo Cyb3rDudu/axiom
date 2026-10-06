@@ -129,7 +129,7 @@ func (r *Repo) EnqueueForceRebuild(ctx context.Context, documentID string) (*Job
 		RevisionID:  "force-rebuild",
 		RenditionID: rendKey,
 		ContentHash: *hash,
-		MediaType:   "application/pdf",
+		MediaType:   firstNonEmpty(contentType, "application/pdf"),
 		Bibliography: revision.Bibliography{
 			RecordID: recKey, Title: title, Authors: authors, Year: year,
 			Publisher: publisher, Language: language, Tags: tagList, CitationClass: class,

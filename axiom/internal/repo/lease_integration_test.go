@@ -402,6 +402,17 @@ func (lr *leaseRepo) seedExtraForceJob(t *testing.T, refJobID string) string {
 
 func h(s string) *string { return &s }
 
+// genRandomUUID mints a fresh uuid for fixture rows (DB-side, no import
+// of a uuid lib for one test).
+func genRandomUUID(t *testing.T, pool *pgxpool.Pool) string {
+	t.Helper()
+	var id string
+	if err := pool.QueryRow(context.Background(), `SELECT gen_random_uuid()::text`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 // defaultClaim returns a claim with a fixed profile so freeze assertions are
 // deterministic. profile_hash and idempotency_key are COMPUTED by the repo, not
 // supplied.
@@ -2011,4 +2022,82 @@ func seedProjectionRow(t *testing.T, lr *leaseRepo, docKey, attKey string) (attI
 		t.Fatal(err)
 	}
 	return attID, docID, srcID
+}
+
+// TestStaleOfferKeepsPreferredSibling — #358 review round 3: a
+// version-guard-suppressed (stale) offer must NOT clear the document's
+// real preferred rendition. Shape: preference flipped to rendition B
+// (preferred, newer version); a delayed sync re-offers A (older version)
+// — the guard suppresses A's upsert, and A's sibling-clear must leave
+// B's preferred mark alone (claims would otherwise obsolete with
+// ATTACHMENT_NOT_PREFERRED until the next sync heals).
+func TestStaleOfferKeepsPreferredSibling(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	_, docA, srcA := seedProjectionRow(t, lr, "PREFDOC", "PREFA")
+	upsert := func(rend string, version int64) {
+		t.Helper()
+		tx, err := lr.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		p := DocumentProjection{
+			DocumentID: docA, AttachmentID: genRandomUUID(t, lr.pool), SourceID: srcA,
+			RecordKey: "PREFDOC", RenditionKey: rend, SourceVersion: version,
+			Title: "Pref Guard", ContentType: "application/pdf",
+		}
+		if err := lr.rep.UpsertDocumentProjectionTx(ctx, tx, p); err != nil {
+			t.Fatalf("upsert %s v%d: %v", rend, version, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Bring A's OWN row to version 9 first (the guard compares the offer
+	// against the rendition's stored row, not the document's siblings).
+	upsert("PREFA", 9)
+	// The preference holder: B at version 9, preferred (A's upsert above
+	// left A preferred; B's sibling-clear demotes A — the normal flip).
+	upsert("PREFB", 9)
+	// The stale offer: A at version 3 — BELOW A's stored 9, so the guard
+	// suppresses the upsert entirely. A's sibling-clear must not touch
+	// the document's preferred rendition B.
+	tx, err := lr.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err := lr.rep.UpsertDocumentProjectionTx(ctx, tx, DocumentProjection{
+		DocumentID: docA, AttachmentID: genRandomUUID(t, lr.pool), SourceID: srcA,
+		RecordKey: "PREFDOC", RenditionKey: "PREFA", SourceVersion: 3,
+		Title: "Pref Guard", ContentType: "application/pdf",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var bPreferred bool
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT preferred FROM store_documents WHERE rendition_key='PREFB' AND source_id=$1::uuid`, srcA).Scan(&bPreferred); err != nil {
+		t.Fatal(err)
+	}
+	if !bPreferred {
+		// diagnostic: what does the document actually hold?
+		rows, _ := lr.pool.Query(ctx,
+			`SELECT rendition_key, source_version, preferred FROM store_documents WHERE source_id=$1::uuid ORDER BY rendition_key`, srcA)
+		var state []string
+		for rows.Next() {
+			var rk string
+			var v int64
+			var pr bool
+			_ = rows.Scan(&rk, &v, &pr)
+			state = append(state, fmt.Sprintf("%s(v%d,preferred=%v)", rk, v, pr))
+		}
+		rows.Close()
+		t.Fatalf("a stale offer's sibling-clear must not strip the document's preferred rendition; state: %v", state)
+	}
 }

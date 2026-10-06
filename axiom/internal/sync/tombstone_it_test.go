@@ -293,7 +293,7 @@ func TestReparentUpdatesRenditionIdentityIT(t *testing.T) {
 	// ITs), so drain until THIS rendition's job comes up — an
 	// identity-scoped assert, never "any claim succeeded".
 	var claimed *repo.ClaimedJob
-	for range 50 {
+	for range 200 {
 		cj, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
 			WorkerID: "reparent", LeaseDuration: 30 * time.Second,
 			Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),

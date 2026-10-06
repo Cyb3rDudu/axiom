@@ -1671,14 +1671,20 @@ func TestMirrorSchemaIdempotentOverCoreSchema(t *testing.T) {
 	// mask).
 	assertFKs := func(pool *pgxpool.Pool, shape string) {
 		t.Helper()
-		for _, con := range []string{"fk_zotero_documents_canonical_item", "fk_zotero_attachments_canonical_item"} {
+		// table-scoped: a same-named constraint on an unrelated table
+		// must not satisfy the check (the toothless-probe lesson).
+		for _, c := range []struct{ con, table string }{
+			{"fk_zotero_documents_canonical_item", "zotero_documents"},
+			{"fk_zotero_attachments_canonical_item", "zotero_attachments"},
+		} {
 			var has bool
 			if err := pool.QueryRow(ctx,
-				`SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname=$1)`, con).Scan(&has); err != nil {
+				`SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname=$1 AND conrelid=$2::regclass)`,
+				c.con, c.table).Scan(&has); err != nil {
 				t.Fatal(err)
 			}
 			if !has {
-				t.Fatalf("%s database lacks the canonical FK %s — parity drift", shape, con)
+				t.Fatalf("%s database lacks the canonical FK %s on %s — parity drift", shape, c.con, c.table)
 			}
 		}
 	}
