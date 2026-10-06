@@ -73,6 +73,73 @@ so verification is never skipped by an accident of history. Heavy legs
 run per cumulative PR diff — the merged result is what must verify,
 not the last commit.
 
+## The local pipeline — `make ci-local`
+
+Since #354, CI runs **only on a PR against `main`** (plus pushes to
+`main` itself): a bare branch push bills nothing. Strand verification is
+LOCAL — the whole pipeline in one command:
+
+```text
+make ci-local                          # legs (0)–(5)
+make ci-local ARGS="--with-topology --with-act"   # + optional legs
+```
+
+`scripts/ci-local.sh` chains ONLY proven parts in CI order — it invents
+no checks and touches no workflow file:
+
+0. **drift preflight** — compares the host clock with the local podman
+   VM clock and aborts with a repair hint (`chronyc makestep` inside the
+   VM) before any leg burns time. A drifted VM clock is a known relapse
+   after host sleep: timestamp-based tests then fail spuriously.
+1. **fix-convention** — `scripts/test_fix_convention.sh`.
+2. **go vet + go unit** — the DB-gated suites skip by design, exactly
+   like the CI `go-unit` job.
+3. **DB legs, natively** — every run derives its OWN scratch base
+   (`ci_local_base_<pid>_test`, pid-suffixed): no database object is
+   shared between runs, so parallel runs of different agents coexist
+   cleanly on the cluster — neither ever sees or drops the other's
+   databases, and foreign bases are never touched. The DSN comes from
+   `AXIOM_TEST_DATABASE_URL` if set (that base then belongs to the
+   operator and is never dropped), else is derived read-only from the
+   environment's database URL with the name rewritten; the source
+   variables are never exported. Reused IT databases drift (42P10 on a
+   phantom constraint) — runs never inherit database state. Every
+   DB-touching run carries `-p 1 -count=1`: parallel package binaries
+   contend on the shared DSN database. The baseline leg's admin channel
+   is `axiom_ci_test` (that exact name is on the baseline suite's frozen
+   scratch allowlist). Two suite-internal fixed database names cannot
+   be per-run (test-code constants): the legs touching them are
+   serialized across concurrent local runs, and they are only ever
+   refreshed or removed when no other session is connected. Then:
+   `go-db-it` (the whole tree), `golden-baseline` (the
+   environment-independent half via `AXIOM_BASELINE_DSN`; the live half
+   stays `make golden-baseline`), `library-engine-postgres`, and
+   `library-engine-sqlite` (DSN-free — PG-free is that leg's point).
+   The **role drill stays CI-exclusive**: `AXIOM_REQUIRE_DRILL` is
+   never set locally (a cluster with standing roles must skip the
+   drill, not fail it). Teardown — on success AND on abort (trap) —
+   removes everything the run created.
+4. **runner + fixer pytest** — the same venv-based suites `make test`
+   runs. The venvs are *checked preconditions*: a missing venv skips the
+   leg with a bootstrap hint (venv building is not the pipeline's
+   business).
+5. **docs gate** — the naming gate and `mkdocs build --strict`, as in
+   the docs workflow.
+
+The optional flags: `--with-topology` boots the split topology
+(`split-up.sh` → `split-smoke.sh`, which tears down and verifies the
+teardown itself), `--with-act` replays the service-free CI jobs
+(`go-lint`, `go-unit`, `library-engine-sqlite`, `runner-pytest`,
+`fixer-pytest`) through act against the local podman machine. The
+service-backed jobs stay GitHub-only: act publishes service ports onto
+the host, where a real PostgreSQL/OpenSearch already listens — which is
+exactly why the DB legs run natively instead. Both flags skip softly
+(with a hint) when their tooling is missing.
+
+The split of labor: **local = pre-check** — fast, unbilled, one command,
+run per review round; **GitHub CI = fidelity** — the same legs on the
+canonical runner, once, on the PR against `main`.
+
 ## Mutation-testing culture (the "probe")
 
 The suites do not just assert happy paths — the Python suite carries explicit
