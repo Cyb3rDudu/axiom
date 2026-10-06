@@ -72,12 +72,21 @@ LEG_SECS=()
 
 now() { date +%s; } # integer seconds — sub-second legs honestly show 0s
 
-run_leg() { # run_leg <name> <func>: subshell → no cd/env leaks between legs
-    local name="$1" func="$2" t0 t1 rc status
+run_leg() { # run_leg <name> <func> [lock]: subshell → no cd/env leaks
+    # The optional lock serializes the leg across CONCURRENT ci-local runs
+    # on this host: the go legs share the Go build cache (concurrent
+    # full-tree test builds race the cache trim) and two of them touch
+    # suite-internal FIXED database names. Parallel runs stay DB-isolated
+    # per run — this only takes turns, never shares state.
+    local name="$1" func="$2" lock="${3:-}" t0 t1 rc status
     echo "ci-local: ── leg $(( ${#LEG_STATUS[@]} + 1 )): $name"
     t0="$(now)"
     rc=0
-    ( "$func" ) || rc=$?
+    if [ -n "$lock" ]; then
+        ( with_runlock "$lock" "$func" ) || rc=$?
+    else
+        ( "$func" ) || rc=$?
+    fi
     t1="$(now)"
     case "$rc" in
     0) status="PASS" ;;
@@ -164,13 +173,9 @@ leg_go_unit() {
 # binaries contend on the shared DSN database — FK violations, lost rows,
 # load flakes), and AXIOM_REQUIRE_DRILL is NEVER set locally: the role
 # drill belongs to the disposable CI clusters and skips here by design.
-leg_go_db_it() {
-    with_runlock dbshared _go_db_it_locked
-}
-
-_go_db_it_locked() {
+leg_go_db_it() { # runs under the dbshared lock (call site)
     # fresh schema for the mirror IT's persistent fixed-name database
-    # (reused shape drifts into 42P10) — under the lock, idle-guarded
+    # (reused shape drifts into 42P10) — idle-guarded, under the lock
     drop_db_if_idle axiom_mirror_it_test "mirror IT refresh"
     cd "$REPO/axiom" &&
         env -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL \
@@ -178,11 +183,7 @@ _go_db_it_locked() {
             go test -p 1 -count=1 ./...
 }
 
-leg_golden_baseline() {
-    with_runlock dbshared _golden_baseline_locked
-}
-
-_golden_baseline_locked() {
+leg_golden_baseline() { # runs under the dbshared lock (call site)
     cd "$REPO/axiom" &&
         env -u AXIOM_TEST_DATABASE_URL -u AXIOM_REQUIRE_DRILL \
             AXIOM_BASELINE_DSN="$BASE_DSN" \
@@ -256,7 +257,7 @@ leg_docs() {
         echo "ci-local: legacy product name 'axiom-ng' found in site content" >&2
         return 1
     fi
-    with_runlock docs python3 -m mkdocs build --clean --strict
+    python3 -m mkdocs build --clean --strict
 }
 
 # --- (6) optional flag legs -------------------------------------------------
@@ -334,9 +335,10 @@ drop_pattern_if_idle() { # drop_pattern_if_idle <prefix> : own ephemeral <prefix
 }
 
 with_runlock() { # with_runlock <name> <cmd...>: mkdir lock, self-healing
-    # Serializes legs that touch suite-internal FIXED database names (or
-    # non-concurrent-safe build dirs) across concurrent ci-local runs on
-    # this host. Steals a lock whose holder died over 30 minutes ago.
+    # Serializes a leg across concurrent ci-local runs on this host (the
+    # go legs share the Go build cache; two legs also touch suite-internal
+    # FIXED database names; mkdocs cleans a shared site dir). Steals a
+    # lock whose holder died over 30 minutes ago.
     # ponytail: host-local mkdir lock — a Postgres advisory lock would
     # cover remote agents, add one if ci-local ever runs cross-host.
     local lock="${TMPDIR:-/tmp}/ci-local-$1.lock" rc=0
@@ -477,20 +479,20 @@ trap on_exit INT TERM HUP
 # --- the pipeline -----------------------------------------------------------
 run_leg drift-preflight leg_drift
 run_leg fix-convention leg_fix_convention
-run_leg go-vet leg_go_vet
-run_leg go-unit leg_go_unit
+run_leg go-vet leg_go_vet dbshared
+run_leg go-unit leg_go_unit dbshared
 
 SCRATCH_PHASE=1
 echo "ci-local: ── scratch setup"
 scratch_setup
-run_leg go-db-it leg_go_db_it
-run_leg golden-baseline leg_golden_baseline
-run_leg library-engine-postgres leg_library_engine_postgres
-run_leg library-engine-sqlite leg_library_engine_sqlite
+run_leg go-db-it leg_go_db_it dbshared
+run_leg golden-baseline leg_golden_baseline dbshared
+run_leg library-engine-postgres leg_library_engine_postgres dbshared
+run_leg library-engine-sqlite leg_library_engine_sqlite dbshared
 
 run_leg runner-pytest leg_runner_pytest
 run_leg fixer-pytest leg_fixer_pytest
-run_leg docs-gate leg_docs
+run_leg docs-gate leg_docs docs
 
 [ "$WITH_TOPOLOGY" = 0 ] || run_leg split-topology leg_topology
 [ "$WITH_ACT" = 0 ] || run_leg act-replay leg_act
