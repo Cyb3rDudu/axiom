@@ -213,8 +213,10 @@ func (r *Repo) DocumentJobStates(ctx context.Context, attachmentIDs, documentIDs
 // HasJobForDocumentSince answers the wave gate's post-heal question: does
 // the document hold a job enqueued at/after the given time? Unclaimed
 // revision jobs resolve their document through the projection (their FKs
-// fill only at claim). The identity join rides the store_documents
-// document index and stays a bounded scan on the jobs side — the wave
+// fill only at claim). The document FILTER rides
+// store_documents_document_idx; the identity join itself is a
+// retention-bounded scan on the jobs side (the partial identity index
+// cannot serve it — the gate counts force-rebuild jobs too). The wave
 // gate asks once per healed case inside its 1-hour window (ponytail:
 // add a dedicated identity index if the gate ever runs hot).
 func (r *Repo) HasJobForDocumentSince(ctx context.Context, documentID string, since time.Time) (bool, error) {

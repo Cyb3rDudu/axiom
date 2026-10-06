@@ -128,7 +128,20 @@ func (r *Repo) enqueueRevisionIntake(ctx context.Context, ex queryer, req Intake
 		ON CONFLICT (revision_source_id, revision_rendition_id, content_hash)
 		WHERE intake_kind='revision' AND force_rebuild=false
 		  AND status IN ('pending','claimed','processing')
-		DO UPDATE SET updated_at = ingest_jobs.updated_at
+		DO UPDATE SET
+		  -- Identity re-target (#358 review): a joined ACTIVE job whose
+		  -- record identity MOVED (reparent — same rendition + hash, new
+		  -- record) carries the fresh revision artifact, or the claim's
+		  -- record-key guard would obsolete it with no replacement minted
+		  -- (a stall until the next version bump). (key, json) stay
+		  -- consistent so replays never see a spurious key mismatch;
+		  -- updated_at stays UNTOUCHED — bookkeeping must not re-rank the
+		  -- outcome read model (#294).
+		  intake_idempotency_key = EXCLUDED.intake_idempotency_key,
+		  revision_record_id     = EXCLUDED.revision_record_id,
+		  revision_no            = EXCLUDED.revision_no,
+		  revision_json          = EXCLUDED.revision_json,
+		  updated_at             = ingest_jobs.updated_at
 		RETURNING id::text, status::text, COALESCE(content_hash,''), attempt, max_attempts, enqueued_at::text,
 		          error_code, error_message, COALESCE(revision_no,''), updated_at, (xmax <> 0) AS was_existing`,
 		req.IdempotencyKey, req.ContentHash, req.RevisionSourceID, req.RevisionRecordID,

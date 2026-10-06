@@ -121,11 +121,9 @@ func (m *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 				return fullProjections{}, err
 			}
 			out.tombstoned += n
-			ids, err := m.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey)
-			if err != nil {
+			if err := m.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey); err != nil {
 				return fullProjections{}, err
 			}
-			out.deletedAttachmentIDs = append(out.deletedAttachmentIDs, ids...)
 			continue
 		}
 		// Preferred only from ACTIVE attachment items (deleted ones are excluded),
@@ -139,11 +137,9 @@ func (m *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 				return fullProjections{}, err
 			}
 			out.tombstoned += n
-			ids, err := m.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey)
-			if err != nil {
+			if err := m.deactivateDocumentAttachments(ctx, tx, sourceID, parentKey); err != nil {
 				return fullProjections{}, err
 			}
-			out.deletedAttachmentIDs = append(out.deletedAttachmentIDs, ids...)
 			continue
 		}
 		docID, err := m.ensureDocumentProjection(ctx, tx, sourceID, parentKey, p.version, p.nm)
@@ -204,6 +200,33 @@ func (m *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 		out.renditions = append(out.renditions, rend)
 		out.flags = append(out.flags, CanonicalDocFlag{DocumentZoteroKey: parentKey, AttachmentKey: pref.Key, LocalPath: pref.LocalPath})
 	}
+
+	// LEVEL-triggered deletion report, as ONE final pass over the FINISHED
+	// derivation state (#358 review): every sync reports EVERY
+	// currently-deleted rendition, so a store phase that failed after its
+	// mirror commit gets its marks repaired by the next run (the store's
+	// mark is idempotent). Reading the final state — not incremental
+	// appends — also makes same-run reparents safe: the old parent's
+	// deactivation sweep can transiently flag a rendition whose re-upsert
+	// under the new parent lands later in the same loop.
+	drows, err := tx.Query(ctx, `
+		SELECT id::text FROM zotero_attachments
+		WHERE source_id=$1 AND deleted=true
+		ORDER BY zotero_key`, sourceID)
+	if err != nil {
+		return fullProjections{}, fmt.Errorf("report deleted renditions: %w", err)
+	}
+	defer drows.Close()
+	for drows.Next() {
+		var id string
+		if err := drows.Scan(&id); err != nil {
+			return fullProjections{}, err
+		}
+		out.deletedAttachmentIDs = append(out.deletedAttachmentIDs, id)
+	}
+	if err := drows.Err(); err != nil {
+		return fullProjections{}, err
+	}
 	return out, nil
 }
 
@@ -227,39 +250,17 @@ func preferredActive(atts []zoteroprovider.Attachment, deleted map[string]attMet
 
 // deactivateDocumentAttachments marks all attachment projections of a
 // document as deleted (used when a parent is deleted or loses its
-// processable file) and returns the ids to report to the Store —
-// LEVEL-triggered (#358 review C1): every currently-deleted attachment of
-// the parent is reported on every sync, so a store phase that failed
-// after its mirror commit gets its deletion marks repaired by the next
-// run (the store's mark is idempotent).
-func (m *Repo) deactivateDocumentAttachments(ctx context.Context, tx pgx.Tx, sourceID, parentKey string) ([]string, error) {
-	tag, err := tx.Exec(ctx, `
+// processable file).
+func (m *Repo) deactivateDocumentAttachments(ctx context.Context, tx pgx.Tx, sourceID, parentKey string) error {
+	_, err := tx.Exec(ctx, `
 		UPDATE zotero_attachments
 		SET deleted=true, preferred=false, updated_at=now()
 		WHERE source_id=$1 AND parent_zotero_key=$2 AND deleted=false
 	`, sourceID, parentKey)
 	if err != nil {
-		return nil, fmt.Errorf("deactivate document attachments %s: %w", parentKey, err)
+		return fmt.Errorf("deactivate document attachments %s: %w", parentKey, err)
 	}
-	_ = tag
-	rows, err := tx.Query(ctx, `
-		SELECT id::text FROM zotero_attachments
-		WHERE source_id=$1 AND parent_zotero_key=$2 AND deleted=true
-		ORDER BY zotero_key
-	`, sourceID, parentKey)
-	if err != nil {
-		return nil, fmt.Errorf("report document attachments %s: %w", parentKey, err)
-	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return nil
 }
 
 // ensureDocumentProjection writes a normalized, version-guarded zotero_documents

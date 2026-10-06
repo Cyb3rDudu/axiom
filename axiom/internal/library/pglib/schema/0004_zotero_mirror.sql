@@ -160,9 +160,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS repair_cases_one_open_per_attachment
   WHERE status IN ('rejected', 'queued', 'in_repair');
 CREATE INDEX IF NOT EXISTS repair_cases_status_idx ON repair_cases (status, created_at);
 
--- Canonical back-references (core 0004 shape): fresh databases get the
--- same FK integrity the cutover copy carries; on the copy these are
--- no-ops (constraints already exist).
+-- Canonical back-references (core 0004 shape). Assumption: the Library
+-- database either carries the core schema underneath (the cutover copy —
+-- core 0004 already added these FKs, making this block a no-op) or is
+-- migrated pglib-only (greenfield); the block owns the FKs in the latter
+-- case. A database recorded at 0004 BEFORE this block landed keeps
+-- whatever constraint state it had — pglib-alone greenfields from that
+-- era lack the FKs (the parity IT pins the current shape).
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_zotero_documents_canonical_item') THEN

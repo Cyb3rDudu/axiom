@@ -1663,16 +1663,54 @@ func TestMirrorSchemaIdempotentOverCoreSchema(t *testing.T) {
 		t.Fatalf("mirror readable after overlay: %v", err)
 	}
 	// Constraint parity with the core shape (#358 review): the canonical
-	// back-reference FKs must exist on fresh databases too (the cutover
-	// copy carries them from core 0004).
-	for _, con := range []string{"fk_zotero_documents_canonical_item", "fk_zotero_attachments_canonical_item"} {
-		var has bool
-		if err := core.Pool().QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname=$1)`, con).Scan(&has); err != nil {
-			t.Fatal(err)
-		}
-		if !has {
-			t.Fatalf("fresh library database lacks the canonical FK %s — parity drift against the core shape", con)
+	// back-reference FKs must exist — BOTH on the core-overlaid shape
+	// (the cutover copy carries them from core 0004) AND on a pglib-ONLY
+	// database (greenfield deployments migrate the Library DB with pglib
+	// alone — the DO block in schema/0004 owns the FKs there; this leg
+	// fails if that block is removed, which the core overlay above would
+	// mask).
+	assertFKs := func(pool *pgxpool.Pool, shape string) {
+		t.Helper()
+		for _, con := range []string{"fk_zotero_documents_canonical_item", "fk_zotero_attachments_canonical_item"} {
+			var has bool
+			if err := pool.QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname=$1)`, con).Scan(&has); err != nil {
+				t.Fatal(err)
+			}
+			if !has {
+				t.Fatalf("%s database lacks the canonical FK %s — parity drift", shape, con)
+			}
 		}
 	}
+	assertFKs(core.Pool(), "core-overlaid")
+
+	pglibOnly := strings.TrimSuffix(dbOf(dsn), "_test") + fmt.Sprintf("_pglibonly%d_test", os.Getpid())
+	padmin, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padmin.Exec(ctx, fmt.Sprintf(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='%s' AND pid<>pg_backend_pid()`, pglibOnly))
+	padmin.Exec(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, pglibOnly))
+	if _, err := padmin.Exec(ctx, fmt.Sprintf(`CREATE DATABASE %s`, pglibOnly)); err != nil {
+		padmin.Close()
+		t.Fatalf("create pglib-only scratch: %v", err)
+	}
+	padmin.Close()
+	t.Cleanup(func() {
+		c, err := pgxpool.New(context.Background(), dsn)
+		if err == nil {
+			c.Exec(context.Background(), fmt.Sprintf(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='%s' AND pid<>pg_backend_pid()`, pglibOnly))
+			c.Exec(context.Background(), fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, pglibOnly))
+			c.Close()
+		}
+	})
+	pOnly, err := axiomdb.Open(ctx, withDB(dsn, pglibOnly))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pOnly.Close)
+	if err := NewStore(pOnly.Pool()).Migrate(ctx); err != nil {
+		t.Fatalf("pglib-only migrate: %v", err)
+	}
+	assertFKs(pOnly.Pool(), "pglib-only")
 }

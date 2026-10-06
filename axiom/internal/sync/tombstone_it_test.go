@@ -260,32 +260,56 @@ func TestReparentUpdatesRenditionIdentityIT(t *testing.T) {
 		t.Fatalf("reparent sync: %v", err)
 	}
 
+	// Source-scoped asserts: the persistent test DB carries same-key rows
+	// from prior runs — identity checks must not read an arbitrary one.
+	var srcID string
+	if err := d.Pool().QueryRow(ctx,
+		`SELECT id::text FROM zotero_sources WHERE base_url=$1`, src.baseURL).Scan(&srcID); err != nil {
+		t.Fatal(err)
+	}
 	// Mirror: the attachment row points at the NEW parent.
 	var parentKey string
 	if err := d.Pool().QueryRow(ctx,
-		`SELECT parent_zotero_key FROM zotero_attachments WHERE zotero_key='RPATT'`).Scan(&parentKey); err != nil {
+		`SELECT parent_zotero_key FROM zotero_attachments WHERE zotero_key='RPATT' AND source_id=$1::uuid`, srcID).Scan(&parentKey); err != nil {
 		t.Fatal(err)
 	}
 	if parentKey != "RPNEW" {
 		t.Fatalf("mirror parent key = %q, want RPNEW (stale reparent)", parentKey)
 	}
 	// Store: the projection's record key follows the new parent.
-	var recordKey string
+	var recordKey, attID string
 	if err := d.Pool().QueryRow(ctx,
-		`SELECT record_key FROM store_documents WHERE rendition_key='RPATT'`).Scan(&recordKey); err != nil {
+		`SELECT record_key, attachment_id::text FROM store_documents WHERE rendition_key='RPATT' AND source_id=$1::uuid`, srcID).Scan(&recordKey, &attID); err != nil {
 		t.Fatal(err)
 	}
 	if recordKey != "RPNEW" {
 		t.Fatalf("projection record key = %q, want RPNEW (stale reparent — jobs would be unclaimable)", recordKey)
 	}
 
-	// The job minted under the NEW record resolves at claim (the claim's
-	// record-key guard passes).
-	cj, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
-		WorkerID: "reparent", LeaseDuration: 30 * time.Second,
-		Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
-	})
-	if err != nil || cj == nil {
-		t.Fatalf("claim after reparent: %v %v", cj, err)
+	// The reparent retargeted the still-active job's revision identity
+	// (the arbiter refresh on join) — its claim resolves through the
+	// record-key guard. ClaimNextJob is GLOBAL (FIFO over the whole
+	// queue; the shared test DB carries pending leftovers from sibling
+	// ITs), so drain until THIS rendition's job comes up — an
+	// identity-scoped assert, never "any claim succeeded".
+	var claimed *repo.ClaimedJob
+	for range 50 {
+		cj, err := rep.ClaimNextJob(ctx, repo.ClaimOptions{
+			WorkerID: "reparent", LeaseDuration: 30 * time.Second,
+			Profile: json.RawMessage(`{"profile":"full-rag-v1"}`),
+		})
+		if err != nil {
+			t.Fatalf("claim after reparent: %v", err)
+		}
+		if cj == nil {
+			break
+		}
+		if cj.AttachmentID == attID {
+			claimed = cj
+			break
+		}
+	}
+	if claimed == nil {
+		t.Fatalf("the reparented rendition's job never became claimable (stale job not retargeted? attachment %s)", attID)
 	}
 }
