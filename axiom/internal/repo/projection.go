@@ -102,6 +102,7 @@ func (r *Repo) UpsertDocumentProjectionTx(ctx context.Context, tx pgx.Tx, p Docu
 		WHERE document_id=$1::uuid AND rendition_key<>$2 AND preferred
 		  AND EXISTS (SELECT 1 FROM store_documents x
 		              WHERE x.source_id=$3::uuid AND x.rendition_key=$2
+		                AND x.document_id=$1::uuid
 		                AND x.preferred)`,
 		p.DocumentID, p.RenditionKey, p.SourceID)
 	return err

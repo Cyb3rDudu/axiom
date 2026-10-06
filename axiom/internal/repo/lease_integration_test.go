@@ -2101,3 +2101,74 @@ func TestStaleOfferKeepsPreferredSibling(t *testing.T) {
 		t.Fatalf("a stale offer's sibling-clear must not strip the document's preferred rendition; state: %v", state)
 	}
 }
+
+// TestStaleOfferReparentDoesNotStripNewDocumentPreferred — the round-4
+// residual: a stale offer carrying the rendition's OLD document id must
+// not clear the preferred sibling of the NEW document the rendition
+// reparented to. Shape: RENDX lives on DOCA (preferred there after the
+// re-offer under DOCA); a delayed stale offer for RENDX still carries
+// DOCB (its old document). The suppressed offer's sibling-clear must
+// leave DOCB's own preferred rendition (R2) alone.
+func TestStaleOfferReparentDoesNotStripNewDocumentPreferred(t *testing.T) {
+	lr := openLeaseDB(t)
+	lr.truncateFixtures(t)
+	ctx := context.Background()
+
+	_, docB, srcID := seedProjectionRow(t, lr, "DOCB", "R2")
+	// DOCA + RENDX at version 9 (the re-offer under the new document).
+	var docA string
+	if err := lr.pool.QueryRow(ctx, `
+		INSERT INTO zotero_documents (source_id, zotero_key, zotero_version, item_type, title)
+		VALUES ($1,'DOCA',1,'book','A') RETURNING id::text`, srcID).Scan(&docA); err != nil {
+		t.Fatal(err)
+	}
+	upsert := func(docID, rend string, version int64) {
+		t.Helper()
+		tx, err := lr.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if err := lr.rep.UpsertDocumentProjectionTx(ctx, tx, DocumentProjection{
+			DocumentID: docID, AttachmentID: genRandomUUID(t, lr.pool), SourceID: srcID,
+			RecordKey: "REC", RenditionKey: rend, SourceVersion: version,
+			Title: "Guard", ContentType: "application/pdf",
+		}); err != nil {
+			t.Fatalf("upsert %s v%d: %v", rend, version, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// RENDX's row lands on DOCA at v9, preferred there.
+	upsert(docA, "RENDX", 9)
+	// R2 stays DOCB's preferred (its own v9 upsert).
+	upsert(docB, "R2", 9)
+
+	// The delayed stale offer: RENDX at v3, still naming DOCB — suppressed
+	// by the guard (RENDX stored v9), and its sibling-clear must not touch
+	// DOCB's R2.
+	tx, err := lr.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err := lr.rep.UpsertDocumentProjectionTx(ctx, tx, DocumentProjection{
+		DocumentID: docB, AttachmentID: genRandomUUID(t, lr.pool), SourceID: srcID,
+		RecordKey: "REC", RenditionKey: "RENDX", SourceVersion: 3,
+		Title: "Guard", ContentType: "application/pdf",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var r2Preferred bool
+	if err := lr.pool.QueryRow(ctx,
+		`SELECT preferred FROM store_documents WHERE rendition_key='R2' AND source_id=$1::uuid`, srcID).Scan(&r2Preferred); err != nil {
+		t.Fatal(err)
+	}
+	if !r2Preferred {
+		t.Fatal("a stale offer for a reparented rendition must not strip the new document's preferred sibling")
+	}
+}
