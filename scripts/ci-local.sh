@@ -182,10 +182,24 @@ leg_go_db_it() { # runs under the dbshared lock (call site)
     for db in axiom_mirror_it_test axiom_repair_test axiom_repo_test axiom_server_test; do
         drop_db_if_idle "$db" "fixed-name IT refresh"
     done
+    # CI-fidelity: the go-db-it job's checkout has NO compute-worker venv,
+    # so engine-backed suites that auto-detect one skip there. Cloak the
+    # venv for this leg so the local leg runs the same proven set (a
+    # venv-equipped checkout currently runs the backfill engine ITs,
+    # which CI never executes). Restored even on failure; setup re-heals
+    # a cloak left by a killed run.
+    local venv="$REPO/axiom-compute-worker/.venv" rc=0
+    if [ -d "$venv" ] && mv "$venv" "$venv.cloaked-by-ci-local"; then
+        echo "ci-local: compute-worker venv cloaked for go-db-it (CI shape)"
+    fi
     cd "$REPO/axiom" &&
         env -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL \
             AXIOM_TEST_DATABASE_URL="$IT_DSN" \
-            go test -p 1 -count=1 ./...
+            go test -p 1 -count=1 ./... || rc=$?
+    if [ -d "$venv.cloaked-by-ci-local" ]; then
+        mv "$venv.cloaked-by-ci-local" "$venv"
+    fi
+    return "$rc"
 }
 
 leg_golden_baseline() { # runs under the dbshared lock (call site)
@@ -420,6 +434,12 @@ scratch_setup() { # derive DSNs, clean scratch, create the bases fresh
         return 1
     }
 
+    # self-heal a venv cloak left behind by a killed go-db-it leg
+    if [ -d "$REPO/axiom-compute-worker/.venv.cloaked-by-ci-local" ] &&
+        [ ! -d "$REPO/axiom-compute-worker/.venv" ]; then
+        mv "$REPO/axiom-compute-worker/.venv.cloaked-by-ci-local" "$REPO/axiom-compute-worker/.venv"
+        echo "ci-local: restored a cloaked compute-worker venv"
+    fi
     # own per-run base, fresh: a same-pid leftover from a crashed earlier
     # run is dropped first (idle-guarded); reused IT databases drift (42P10
     # on a phantom unique index) — runs never inherit database state
