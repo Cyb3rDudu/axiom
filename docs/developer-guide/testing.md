@@ -111,7 +111,10 @@ no checks and touches no workflow file:
    be per-run (test-code constants): the legs touching them are
    serialized across concurrent local runs, and they are only ever
    refreshed or removed when no other session is connected. Then:
-   `go-db-it` (the whole tree), `golden-baseline` (the
+   `go-db-it` (the whole tree — with the compute-worker venv cloaked
+   for this leg, so the local leg runs exactly the proven CI set;
+   engine-backed suites that auto-detect a local venv skip in CI's
+   `go-db-it` job by design), `golden-baseline` (the
    environment-independent half via `AXIOM_BASELINE_DSN`; the live half
    stays `make golden-baseline`), `library-engine-postgres`, and
    `library-engine-sqlite` (DSN-free — PG-free is that leg's point).
