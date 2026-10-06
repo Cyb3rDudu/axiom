@@ -140,6 +140,13 @@ The split of labor: **local = pre-check** — fast, unbilled, one command,
 run per review round; **GitHub CI = fidelity** — the same legs on the
 canonical runner, once, on the PR against `main`.
 
+Concurrent `ci-local` runs (two agents, two worktrees, one host)
+coexist by design — each run owns its scratch bases — but their Go
+legs take turns via a host-local lock: full-tree test builds share the
+Go build cache (racing its trim produces phantom build failures), and
+two legs touch suite-internal fixed database names. A run never waits
+for the drift preflight, the fix-convention probe, or the Python legs.
+
 ## Mutation-testing culture (the "probe")
 
 The suites do not just assert happy paths — the Python suite carries explicit
