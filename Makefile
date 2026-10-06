@@ -18,7 +18,7 @@ LDFLAGS := -X github.com/Cyb3rDudu/axiom/axiom/internal/version.Version=$(VERSIO
 
 GO_SOURCES := $(wildcard axiom/cmd/axiom/*.go) $(wildcard axiom/cmd/axiom-ng/*.go) $(wildcard axiom/internal/*/*.go) $(wildcard axiom/internal/db/schema/*.sql) axiom/go.mod axiom/go.sum
 
-.PHONY: all build rag compute-worker runner fixer clean install test checksums golden-baseline
+.PHONY: all build rag compute-worker runner fixer clean install test checksums golden-baseline ci-local
 
 all build: rag ## G1: only rag; compute-worker/fixer land in G2
 
@@ -65,3 +65,6 @@ test: ## All suites: fix-convention, Go (vet+test), compute worker, fixer isolat
 
 golden-baseline: ## Freeze-bit golden suite: needs the dev env in --release mode
 	@bash scripts/dev/golden_baseline.sh
+
+ci-local: ## Full local CI pipeline in one command (ARGS="--with-topology --with-act")
+	./scripts/ci-local.sh $(ARGS)
