@@ -439,10 +439,10 @@ scratch_teardown() { # remove EVERYTHING this run created — even on abort
     # the baseline suite's fixed scratch name (no _test suffix; normally
     # dropped by its own defer — this catches aborts mid-run)
     drop_db_if_idle axiom_baseline_scratch "baseline suite scratch"
-    # suite-internal FIXED names this run may have touched — left alone
-    # when another session (a parallel run of another agent) uses them
-    drop_db_if_idle axiom_mirror_it_test "mirror IT database"
-    drop_db_if_idle "$BASELINE_DB" "baseline admin channel"
+    # NOT dropped here, on purpose: $BASELINE_DB (a shared, never-drifting
+    # fixture — nothing writes into it, and a concurrent run's baseline
+    # leg still needs it) and the fixed-name IT databases (the go-db-it
+    # refresh owns their lifecycle; next run drops+recreates them anyway)
     # own ephemerals + own base (operator-supplied bases are never dropped)
     drop_pattern_if_idle "$OWN_PREFIX"
     [ "${OWN_BASE_MANAGED:-0}" = 1 ] && drop_db_if_idle "${OWN_PREFIX}_test" "own base"
