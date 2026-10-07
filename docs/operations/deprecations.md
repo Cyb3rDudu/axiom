@@ -71,6 +71,22 @@ contract (`AXIOM_PROCESSOR_PORT`, `AXIOM_PROCESSOR_BIND_ADDR`,
 is the worker's frozen public surface through 0.2.x; the index and state-dir
 legacy names survive only in the mapping tables above.
 
+## Retired by deletion
+
+Surfaces removed outright (no alias, no counter — the replacement is
+the successor architecture itself):
+
+- **`axiom_fixsvc/`** — the #184-era standalone repair service. Dormant
+  since the F08 repair track landed: the track's invoker spawns the
+  autarkic fixer artifact as its supervised worker, and the fixer
+  carries the #184 design principles (isolation, network-API boundary,
+  red-sondierbare Import-Audit). Deleted in the "fixer home" strand
+  (2026-10-07); no CI/Make/script reference existed at deletion time
+  (grep witness in the strand's PR). History:
+  `git log --follow -- axiom_fixsvc/`; successor: the F08 repair track
+  (`axiom/internal/library/repair/`) plus the fixer artifact
+  (`axiom-fixer/`, `scripts/build_fixer_artifact.sh`).
+
 ## Operator-side switches (no counter — your action)
 
 These are not witnessed by counters because only you can flip them:

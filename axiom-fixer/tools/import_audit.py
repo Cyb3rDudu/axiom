@@ -1,7 +1,7 @@
 """Import-Audit — die rot-sondierbare Isolations-Sonde des Pakets.
 
 Beweis-Pflicht (DoD): der Service importiert NICHTS aus dem Projekt
-(axiom, axiom-compute-worker, axiom_fixsvc, runner). Grenze = Netzwerk-APIs
+(axiom, axiom-compute-worker, runner). Grenze = Netzwerk-APIs
 + Konfiguration + stdlib. Der Audit parst jeden .py im Paket per AST und
 schlägt fehl bei:
 
@@ -85,7 +85,6 @@ FORBIDDEN = {
     "axiom",
     "axiom_compute_worker",
     "axiom_ng_runner",
-    "axiom_fixsvc",
     "runner",
     "axiom_pipeline",
     "compute_core",
