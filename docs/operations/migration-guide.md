@@ -500,6 +500,64 @@ database's cutover copy and the Store archive MUST share the zotero_*
 uuids (they do — the copy is physical); that identity continuity is the
 load-bearing invariant of the migration.
 
+## Releases with schema changes: the migrate phase (#362)
+
+Every release that ships new migration files (core `internal/db/schema`,
+store `internal/store/migrations/schema`, library
+`internal/library/pglib/schema`) runs a three-phase rollout. The v0.2.3
+rollout improvised exactly this sequence by hand — it is a documented
+phase now, and the tooling below exists so it never needs improvising
+again.
+
+**Phase 1 — apply migrations (`axiom migrate`, deployer DSN).** Runtime
+roles are DML-only (DM07); schema changes are window work. Run the
+migration command with a DSN that may apply DDL (the deployer/admin
+credential — never a component role):
+
+```bash
+AXIOM_STORE_DATABASE_URL=postgresql://<deployer>:<pass>@<host>:5432/<db> \
+  axiom migrate
+```
+
+The command applies every pending component migration (core + store on
+the store DSN; library on `AXIOM_LIBRARY_DATABASE_URL` when the
+PostgreSQL profile is selected — the split topology migrates both
+databases in one run) and prints each component's ledger before →
+after:
+
+```text
+core:     0022_figure_captions.sql -> 0023_contextual_citation_class.sql (+1: [0023_contextual_citation_class.sql])
+store:    0003_revision_identity_active_scope.sql -> 0004_store_documents.sql (+1: [0004_store_documents.sql])
+library:  up to date (0004_zotero_mirror.sql)
+```
+
+It is idempotent — the same runners, same ledgers as the boot path. A
+database with nothing pending answers `up to date` and exits 0;
+failures exit non-zero. Run it BEFORE switching any service onto the
+new binaries: the old binaries run unchanged against the
+post-migration schema (migrations are additive), so the window has no
+read-only gap.
+
+**Phase 2 — switch the services onto the new binaries.** Ordinary
+restart of the deployment; no special ordering. If Phase 1 was skipped
+and a runtime role (DML-only) boots against pending migrations, the
+boot fails FAST with the remedy instead of crash-looping on a raw
+permission error:
+
+```text
+axiom: composition: component postgres failed to start: core: 1 pending
+migration(s) [0023_contextual_citation_class.sql] for a DML-constrained
+boot (role "axiom_store" lacks CREATE on the schema — DM07 runtime
+roles are DML-only): run `axiom migrate` with the deployer DSN against
+this database, then restart
+```
+
+That message is the whole diagnosis: apply Phase 1, restart, done.
+
+**Phase 3 — verify.** `axiom doctor` (exit 0 only fully healthy — the
+schema probe reads the migration ledgers) and a `/api/v1/health` check
+per process; the release's own verification steps ride on top.
+
 ## Troubleshooting: 0.2.0 patterns
 
 Symptom→cause→fix patterns for processing and transport classes live in

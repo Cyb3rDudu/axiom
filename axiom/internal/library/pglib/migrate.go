@@ -104,6 +104,50 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return NewStore(pool).Migrate(ctx)
 }
 
+// Pending returns the embedded Library migrations not yet recorded in the
+// ledger, in apply order. READ-ONLY (catalog + ledger reads, no DDL):
+// works under a DML-only role — the #362 boot fail-fast and the
+// `axiom migrate` report both key off it. A missing ledger table reads
+// as an empty ledger (fresh database: everything pending).
+func Pending(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	var ledgerExists bool
+	if err := pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'library_schema_migrations')`,
+	).Scan(&ledgerExists); err != nil {
+		return nil, err
+	}
+	applied := map[string]bool{}
+	if ledgerExists {
+		rows, err := pool.Query(ctx, `SELECT version FROM library_schema_migrations`)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var v string
+			if err := rows.Scan(&v); err != nil {
+				return nil, err
+			}
+			applied[v] = true
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	names, err := fs.Glob(librarySchemaFS, "schema/*.sql")
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(names)
+	var pending []string
+	for _, name := range names {
+		if !applied[name] {
+			pending = append(pending, name)
+		}
+	}
+	return pending, nil
+}
+
 // ---------------------------------------------------------------------------
 // Legacy adoption (read-only check — F12 #306)
 

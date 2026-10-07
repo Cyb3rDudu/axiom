@@ -83,6 +83,14 @@ func Run(name string, args []string) int {
 		return cmdConfig(name, rest, flags)
 	case "data":
 		return cmdData(name, args[2:])
+	case "migrate":
+		// #362: the deployer-side migration entry — pending component
+		// migrations + ledger report, same runners/idempotency as boot.
+		flags, rest, code := splitSetFlags(name, args[2:])
+		if code != exitOK {
+			return code
+		}
+		return cmdMigrate(name, rest, flags)
 	case "--version":
 		return cmdVersion(false)
 	case "-help", "--help", "help":
@@ -426,6 +434,11 @@ Commands:
                                 internal Store edge on
                                 AXIOM_INTERNAL_STORE_ADDR when set
   version [--json]              version banner (agrees with /api/health)
+  migrate [--set KEY=VALUE]...  apply pending component migrations
+                                (core + store + library; deployer DSN —
+                                runtime roles are DML-only per DM07) and
+                                report each ledger before -> after;
+                                idempotent, "up to date" exit 0
   doctor [--json]               config/DB/OpenSearch/artifact-root health;
                                 exit 0 only when fully healthy; never prints
                                 secret values

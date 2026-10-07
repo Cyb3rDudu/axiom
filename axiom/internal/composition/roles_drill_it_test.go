@@ -282,6 +282,29 @@ func TestIT_Dm07RoleDrill(t *testing.T) {
 	if err := ok.Ping(ctx); err != nil {
 		t.Fatalf("axiom_store connects to the tightened database: %v", err)
 	}
+
+	// (7) the #362 fail-fast sonde: a DML-only role (axiom_store) over a
+	// database with PENDING migrations must fail the boot guard FAST with
+	// the handlungsanweisende remedy — not a raw permission error, not a
+	// crash-loop. scratch2 carries NO migrations: everything is pending.
+	// The current-schema counter-witness runs on scratch1: no pending →
+	// the guard stays silent (the steady-state DML-only boot).
+	if err := failFastPendingMigrations(ctx, ok, "core", db.Pending); err == nil {
+		t.Fatal("the #362 guard must fire: axiom_store boots a database with pending core migrations")
+	} else {
+		msg := err.Error()
+		for _, want := range []string{"axiom migrate", "deployer DSN", `role "axiom_store"`} {
+			if !strings.Contains(msg, want) {
+				t.Fatalf("the #362 remedy message must carry %q, got %q", want, msg)
+			}
+		}
+		if isPermissionDenied(t, err) {
+			t.Fatalf("the #362 guard must name the remedy, not surface a raw permission error: %v", err)
+		}
+	}
+	if err := failFastPendingMigrations(ctx, storePool, "core", db.Pending); err != nil {
+		t.Fatalf("current schema + DML-only role must pass the guard silently (steady-state boot), got %v", err)
+	}
 }
 
 // libRoundtrip proves DML (not just SELECT) works as the role: insert
