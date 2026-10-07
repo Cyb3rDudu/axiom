@@ -36,11 +36,19 @@ func cmdMigrate(name string, args []string, flags map[string]string) int {
 		fmt.Fprintf(os.Stderr, "%s migrate: no database DSN configured (AXIOM_STORE_DATABASE_URL / AXIOM_DATABASE_URL)\n", name)
 		return exitFailure
 	}
+	// Same refusal as the composition root (unknown driver = loud exit,
+	// never a silently skipped Library component).
+	switch cfg.StorageLibraryDriver {
+	case "", "postgres", "sqlite":
+	default:
+		fmt.Fprintf(os.Stderr, "%s migrate: library: unknown AXIOM_STORAGE_LIBRARY_DRIVER %q (known: postgres, sqlite)\n", name, cfg.StorageLibraryDriver)
+		return exitFailure
+	}
 	ctx := context.Background()
 
 	database, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s migrate: %v\n", name, err)
+		fmt.Fprintf(os.Stderr, "%s migrate: %s\n", name, config.RedactQueryCredentials(err.Error()))
 		return exitFailure
 	}
 	defer database.Close()
@@ -75,7 +83,7 @@ func cmdMigrate(name string, args []string, flags map[string]string) int {
 		}
 		libDB, err := db.Open(ctx, libDSN)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s migrate: %v\n", name, err)
+			fmt.Fprintf(os.Stderr, "%s migrate: %s\n", name, config.RedactQueryCredentials(err.Error()))
 			return exitFailure
 		}
 		defer libDB.Close()
@@ -92,7 +100,7 @@ func cmdMigrate(name string, args []string, flags map[string]string) int {
 	}
 
 	if total == 0 {
-		fmt.Println("up to date")
+		fmt.Println("all components up to date")
 	}
 	return exitOK
 }

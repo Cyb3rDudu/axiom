@@ -523,12 +523,14 @@ The command applies every pending component migration (core + store on
 the store DSN; library on `AXIOM_LIBRARY_DATABASE_URL` when the
 PostgreSQL profile is selected — the split topology migrates both
 databases in one run) and prints each component's ledger before →
-after:
+after (verbatim ledger spellings: core and library record the
+`schema/`-prefixed migration path, the store ledger records the bare
+file name):
 
 ```text
-core:     0022_figure_captions.sql -> 0023_contextual_citation_class.sql (+1: [0023_contextual_citation_class.sql])
-store:    0003_revision_identity_active_scope.sql -> 0004_store_documents.sql (+1: [0004_store_documents.sql])
-library:  up to date (0004_zotero_mirror.sql)
+core:     schema/0022_figure_captions.sql -> schema/0023_contextual_citation_class.sql (+1: [schema/0023_contextual_citation_class.sql])
+store:    0003_drop_cross_component_fks.sql -> 0004_store_documents.sql (+1: [0004_store_documents.sql])
+library:  up to date (schema/0004_zotero_mirror.sql)
 ```
 
 It is idempotent — the same runners, same ledgers as the boot path. A
@@ -546,13 +548,18 @@ permission error:
 
 ```text
 axiom: composition: component postgres failed to start: core: 1 pending
-migration(s) [0023_contextual_citation_class.sql] for a DML-constrained
-boot (role "axiom_store" lacks CREATE on the schema — DM07 runtime
-roles are DML-only): run `axiom migrate` with the deployer DSN against
-this database, then restart
+migration(s) [schema/0023_contextual_citation_class.sql] for a
+DML-constrained boot (role "axiom_store" lacks CREATE on the schema —
+DM07 runtime roles are DML-only): run `axiom migrate` with the deployer
+DSN against this database, then restart
 ```
 
-That message is the whole diagnosis: apply Phase 1, restart, done.
+That message is the whole diagnosis: apply Phase 1, restart, done. It
+also names the escape from the one dead end — a role that cannot even
+READ the ledgers (missing table grants) sees a current schema as
+"pending": then the message's continuation applies — run
+deploy/postgres/roles.sql, whose DML grants cover the migration
+ledgers, and restart.
 
 **Phase 3 — verify.** `axiom doctor` (exit 0 only fully healthy — the
 schema probe reads the migration ledgers) and a `/api/v1/health` check
