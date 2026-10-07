@@ -72,18 +72,6 @@ BIN="$STATE/bin/axiom-split"
 note "building axiom (working tree)…"
 (cd "$REPO/axiom" && go build -o "$BIN" ./cmd/axiom)
 
-# dev DSN/index derivation (the dev-up boundary: never prod)
-dev_dsn() {
-    set -a
-    # shellcheck disable=SC1090
-    . "$RAG_ENV"
-    set +a
-    # the operator env's component split renamed the store DSN — accept
-    # both spellings (pre-split AXIOM_DATABASE_URL, store-plane successor)
-    printf '%s' "${AXIOM_DATABASE_URL:-${AXIOM_STORE_DATABASE_URL:-}}" |
-        sed -E 's#/axiom_db([?]|$)#/'"$DEV_DB"'\1#'
-}
-
 # start_proc <name> <port> — one split process: own session (killable by
 # PGID), dev-isolated env, role + internal edge per the topology table.
 start_proc() {
@@ -96,6 +84,16 @@ start_proc() {
         . "$RAG_API_ENV"
         set +a
         AXIOM_DATABASE_URL="$(printf '%s' "${AXIOM_DATABASE_URL:-${AXIOM_STORE_DATABASE_URL:-}}" | sed -E 's#/axiom_db([?]|$)#/'"$DEV_DB"'\1#')"
+        # same hard assert as env.sh/dev-up: refuse to point the split at
+        # anything but the dev database (leak-safe: print after the @)
+        case "$AXIOM_DATABASE_URL" in
+        *"/$DEV_DB" | *"/$DEV_DB"[?]*)
+            ;;
+        *)
+            echo "split-up: DATABASE_URL derivation failed (got: ${AXIOM_DATABASE_URL##*@})" >&2
+            exit 1
+            ;;
+        esac
         # #358: the sourced operator env may carry the PRODUCTION library
         # DSN — never let the dev split reach it. Unset = single-database
         # topology (both planes on the dev store DB, the supported shape).

@@ -27,14 +27,16 @@
 # built for). Foreign bases (e.g. a scratch_base_test of another agent)
 # are NEVER used and NEVER dropped. axiom_ci_test is the baseline leg's
 # admin channel: that exact name is on the baseline suite's frozen
-# scratchableDSNs allowlist (name-based by design — no other name works
-# without test changes); the suite writes nothing into it.
-# Two suite-internal FIXED names cannot be per-run (test-code consts):
-# axiom_mirror_it_test (persistent mirror IT database) and
-# axiom_baseline_scratch. ci-local serializes the legs touching them
-# across its own concurrent runs (mkdir lock) and refreshes/leaves them
-# only when no other session is connected — in-use databases are never
-# touched. The DSN is derived read-only from the environment's database
+# scratchableDSNs allowlist (name-based by design — the other allowlisted
+# names lack the _test suffix the suites' guard requires, so renaming
+# would take test changes); the suite writes nothing into it.
+# Suite-internal FIXED names cannot be per-run (test-code consts):
+# go-db-it refreshes axiom_mirror_it_test, axiom_repair_test,
+# axiom_repo_test and axiom_server_test every run; teardown additionally
+# idle-drops axiom_baseline_scratch (the baseline suite's scratch).
+# ci-local serializes the legs touching them across its own concurrent
+# runs (mkdir lock) and refreshes/drops them only when no other session
+# is connected — in-use databases are never touched. The DSN is derived read-only from the environment's database
 # URL with the name REWRITTEN; the source variables are never exported.
 # The role drill (AXIOM_REQUIRE_DRILL) stays CI-exclusive: a cluster
 # with standing production roles must skip it, never fail it.
@@ -107,12 +109,28 @@ masked_dsn() { # never print credentials: strip userinfo
     printf '%s' "$1" | sed -E 's#(//)[^@/]+@#\1***@#'
 }
 
+go_env() { # go_env [VAR=val ...] <cmd...>: CI-fidelity env scrub
+    # Every go leg runs through this: the operator's shell may export
+    # AXIOM_TEST_DATABASE_URL / AXIOM_BASELINE_DSN / AXIOM_REQUIRE_DRILL
+    # — unset all three; callers re-add exactly the one they mean (env
+    # applies -u flags and assignments left to right). The role drill
+    # stays CI-exclusive: never set locally, not even by inheritance.
+    env -u AXIOM_TEST_DATABASE_URL -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL "$@"
+}
+
+running_machine() { # name of the running podman machine, "" if none
+    podman machine list --format '{{.Name}}|{{.LastUp}}' 2>/dev/null |
+        awk -F'|' '/Currently running/{print $1; exit}' || true
+}
+
 dsn_dbname() { # database path component of a URL DSN ("" if none)
     printf '%s' "$1" | sed -nE 's#^[a-zA-Z0-9+]+://[^/]+/([^/?]+).*$#\1#p'
 }
 
-dsn_user() {
-    printf '%s' "$1" | sed -nE 's#^[a-zA-Z0-9+]+://([^:/?@]+).*$#\1#p'
+dsn_user() { # userinfo user; "" when the DSN carries no userinfo part
+    # (without the @ anchor a userinfo-less DSN would yield its HOST as
+    # the user — the caller's "cannot parse user" abort must fire)
+    printf '%s' "$1" | sed -nE 's#^[a-zA-Z0-9+]+://([^:@/?]+)[^@]*@.*$#\1#p'
 }
 
 dsn_with_db() { # dsn_with_db <dsn> <dbname>: rewrite the database component
@@ -140,8 +158,7 @@ leg_drift() {
     diff=$((host_now - vm_now))
     [ "$diff" -lt 0 ] && diff=$((-diff))
     if [ "$diff" -gt "$DRIFT_TOLERANCE" ]; then
-        machine="$(podman machine list --format '{{.Name}}|{{.LastUp}}' 2>/dev/null |
-            awk -F'|' '/Currently running/{print $1; exit}')"
+        machine="$(running_machine)"
         hint="sudo chronyc -a makestep"
         [ -n "$machine" ] && hint="podman machine ssh $machine \"$hint\""
         echo "ci-local: VM clock drift ${diff}s > ${DRIFT_TOLERANCE}s — timestamp-based tests would fail spuriously (known relapse after host sleep)." >&2
@@ -163,8 +180,7 @@ leg_go_vet() {
 
 leg_go_unit() {
     cd "$REPO/axiom" &&
-        env -u AXIOM_TEST_DATABASE_URL -u AXIOM_BASELINE_DSN \
-            go test -count=1 ./...
+        go_env go test -count=1 ./...
 }
 
 # --- (3) DB legs, natively --------------------------------------------------
@@ -189,49 +205,71 @@ leg_go_db_it() { # runs under the dbshared lock (call site)
     # which CI never executes). Restored even on failure; setup re-heals
     # a cloak left by a killed run.
     local venv="$REPO/axiom-compute-worker/.venv" rc=0
-    if [ -d "$venv" ] && mv "$venv" "$venv.cloaked-by-ci-local"; then
-        echo "ci-local: compute-worker venv cloaked for go-db-it (CI shape)"
+    if [ -d "$venv" ] && [ -d "$venv.cloaked-by-ci-local" ]; then
+        # a live venv makes the stale cloak obsolete; plain mv would fold
+        # the live venv INTO the stale dir (POSIX dir-into-dir)
+        echo "ci-local: removing a stale venv cloak (live venv present)"
+        rm -rf "$venv.cloaked-by-ci-local"
+    fi
+    if [ -d "$venv" ]; then
+        if mv "$venv" "$venv.cloaked-by-ci-local"; then
+            echo "ci-local: compute-worker venv cloaked for go-db-it (CI shape)"
+        else
+            echo "ci-local: WARNING: venv cloak failed — running UNcloaked (engine ITs may run; CI parity lost for this leg)" >&2
+        fi
     fi
     cd "$REPO/axiom" &&
-        env -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL \
-            AXIOM_TEST_DATABASE_URL="$IT_DSN" \
+        go_env AXIOM_TEST_DATABASE_URL="$IT_DSN" \
             go test -p 1 -count=1 ./... || rc=$?
     if [ -d "$venv.cloaked-by-ci-local" ]; then
-        mv "$venv.cloaked-by-ci-local" "$venv"
+        if mv "$venv.cloaked-by-ci-local" "$venv"; then
+            echo "ci-local: compute-worker venv restored"
+        else
+            echo "ci-local: WARNING: venv restore failed — cloak left in place; next run's setup re-heals it" >&2
+        fi
     fi
     return "$rc"
 }
 
 leg_golden_baseline() { # runs under the dbshared lock (call site)
     cd "$REPO/axiom" &&
-        env -u AXIOM_TEST_DATABASE_URL -u AXIOM_REQUIRE_DRILL \
-            AXIOM_BASELINE_DSN="$BASE_DSN" \
+        go_env AXIOM_BASELINE_DSN="$BASE_DSN" \
             go test -p 1 -count=1 -v ./internal/baseline
 }
 
 leg_library_engine_postgres() {
+    # errexit is OFF inside leg subshells (run_leg's `||` idiom): chain
+    # the invocations explicitly so an early failure is never masked by
+    # a later one passing
+    local rc=0
     cd "$REPO/axiom" || return 1
-    env -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL \
-        AXIOM_TEST_DATABASE_URL="$IT_DSN" \
+    go_env AXIOM_TEST_DATABASE_URL="$IT_DSN" \
         go test -p 1 -count=1 -v ./internal/library/reposuite ./internal/library/sqlite ./internal/library/pglib \
-        -run 'TestRepositoryContractSuite|TestSkipGuardProbes'
-    env -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL \
-        AXIOM_TEST_DATABASE_URL="$IT_DSN" \
-        go test -p 1 -count=1 -v ./internal/databundle
-    env -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL \
-        AXIOM_TEST_DATABASE_URL="$IT_DSN" \
-        go test -p 1 -count=1 -v ./internal/cutover
+        -run 'TestRepositoryContractSuite|TestSkipGuardProbes' || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        go_env AXIOM_TEST_DATABASE_URL="$IT_DSN" \
+            go test -p 1 -count=1 -v ./internal/databundle || rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
+        go_env AXIOM_TEST_DATABASE_URL="$IT_DSN" \
+            go test -p 1 -count=1 -v ./internal/cutover || rc=$?
+    fi
+    return "$rc"
 }
 
 leg_library_engine_sqlite() { # PG-free is the point: no DSN anywhere
+    # same explicit chaining as the postgres leg (see its comment)
+    local rc=0
     cd "$REPO/axiom" || return 1
-    env -u AXIOM_TEST_DATABASE_URL -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL \
-        go test -p 1 -count=1 -v ./internal/library/reposuite ./internal/library/sqlite \
-        -run 'TestRepositoryContractSuite|TestSkipGuardProbes'
-    env -u AXIOM_TEST_DATABASE_URL -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL \
-        go test -p 1 -count=1 ./internal/databundle
-    env -u AXIOM_TEST_DATABASE_URL -u AXIOM_BASELINE_DSN -u AXIOM_REQUIRE_DRILL \
-        go test -p 1 -count=1 ./internal/cutover
+    go_env go test -p 1 -count=1 -v ./internal/library/reposuite ./internal/library/sqlite \
+        -run 'TestRepositoryContractSuite|TestSkipGuardProbes' || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        go_env go test -p 1 -count=1 ./internal/databundle || rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
+        go_env go test -p 1 -count=1 ./internal/cutover || rc=$?
+    fi
+    return "$rc"
 }
 
 # --- (4) Python suites (same invocations as `make test`) --------------------
@@ -288,8 +326,10 @@ leg_topology() { # boots the split topology; split-smoke tears it down
             return "$LEG_SKIP"
         }
     done
-    "$REPO/scripts/dev/split-up.sh"
-    "$REPO/scripts/dev/split-smoke.sh" # runs split-down itself + verifies teardown
+    # chained with &&: a failed split-up must abort before split-smoke
+    # (errexit is off in leg subshells — see the library legs' comment)
+    "$REPO/scripts/dev/split-up.sh" &&
+        "$REPO/scripts/dev/split-smoke.sh" # runs split-down itself + verifies teardown
 }
 
 leg_act() { # service-free CI jobs through act against the local machine
@@ -303,8 +343,7 @@ leg_act() { # service-free CI jobs through act against the local machine
         echo "ci-local: runner image axiom-act-runner:latest not found — SKIP (build it first)" >&2
         return "$LEG_SKIP"
     fi
-    machine="$(podman machine list --format '{{.Name}}|{{.LastUp}}' 2>/dev/null |
-        awk -F'|' '/Currently running/{print $1; exit}')"
+    machine="$(running_machine)"
     if [ -z "$machine" ]; then
         echo "ci-local: no running podman machine — SKIP the act replay" >&2
         return "$LEG_SKIP"
@@ -340,8 +379,11 @@ drop_db_if_idle() { # drop_db_if_idle <name> [why]: NEVER touches in-use databas
         return 0
     }
     psql_admin -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$1' AND pid<>pg_backend_pid()" >/dev/null 2>&1 || true
-    psql_admin -c "DROP DATABASE IF EXISTS $1" >/dev/null 2>&1 || true
-    echo "ci-local: dropped $1${2:+ ($2)}"
+    if psql_admin -c "DROP DATABASE IF EXISTS $1" >/dev/null 2>&1; then
+        echo "ci-local: dropped $1${2:+ ($2)}"
+    else
+        echo "ci-local: could not drop $1 (in use again?) — left in place" >&2
+    fi
 }
 
 drop_pattern_if_idle() { # drop_pattern_if_idle <prefix> : own ephemeral <prefix>_..._test
@@ -356,21 +398,39 @@ drop_pattern_if_idle() { # drop_pattern_if_idle <prefix> : own ephemeral <prefix
 with_runlock() { # with_runlock <name> <cmd...>: mkdir lock, self-healing
     # Serializes a leg across concurrent ci-local runs on this host (the
     # go legs share the Go build cache; two legs also touch suite-internal
-    # FIXED database names; mkdocs cleans a shared site dir). Steals a
-    # lock whose holder died over 30 minutes ago.
+    # FIXED database names; mkdocs cleans a shared site dir).
+    #
+    # Liveness: the lock dir records the holder's root pid — $$ is stable
+    # across the leg subshells, so it names the holding RUN however deep
+    # the call sits. A waiter steals only once that pid is gone (a live
+    # holder, however slow, is never stolen from); the 30-minute mtime
+    # rule stays as the fallback for pid-less lock dirs. Release is
+    # pid-guarded: a holder that was stolen from cannot delete the new
+    # holder's lock. No EXIT-trap cleanup on purpose: with_runlock also
+    # runs in the main shell (scratch_setup), where replacing the on_exit
+    # trap would lose abort-time teardown — an interrupted run dies with
+    # its pid, and the next run steals immediately.
     # ponytail: host-local mkdir lock — a Postgres advisory lock would
     # cover remote agents, add one if ci-local ever runs cross-host.
-    local lock="${TMPDIR:-/tmp}/ci-local-$1.lock" rc=0
+    local name="$1" lock="${TMPDIR:-/tmp}/ci-local-$1.lock" holder rc=0
     shift
     while ! mkdir "$lock" 2>/dev/null; do
-        if [ -n "$(find "$lock" -maxdepth 0 -mmin +30 2>/dev/null)" ]; then
+        holder="$(cat "$lock/pid" 2>/dev/null || true)"
+        if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+            echo "ci-local: stealing run lock '$name' — holder $holder is gone" >&2
+            rm -rf "$lock"
+        elif [ -z "$holder" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +30 2>/dev/null)" ]; then
+            echo "ci-local: stealing pid-less run lock '$name' (older than 30 min)" >&2
             rm -rf "$lock"
         else
             sleep 5
         fi
     done
+    echo $$ >"$lock/pid"
     "$@" || rc=$?
-    rm -rf "$lock"
+    if [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$$" ]; then
+        rm -rf "$lock"
+    fi
     return "$rc"
 }
 
@@ -379,6 +439,18 @@ ensure_db() { # ensure_db <name>: create if missing (fresh and empty)
         return 0
     fi
     podman exec "$DB_CONTAINER" createdb -U "$PGUSER" "$1"
+}
+
+scratch_heal_venv() { # under dbshared: restore a cloak orphaned by a killed leg
+    if [ -d "$REPO/axiom-compute-worker/.venv.cloaked-by-ci-local" ] &&
+        [ ! -d "$REPO/axiom-compute-worker/.venv" ]; then
+        mv "$REPO/axiom-compute-worker/.venv.cloaked-by-ci-local" "$REPO/axiom-compute-worker/.venv"
+        echo "ci-local: restored a cloaked compute-worker venv"
+    fi
+}
+
+scratch_ensure_baseline_db() { # under dbshared: the shared baseline fixture
+    ensure_db "$BASELINE_DB"
 }
 
 scratch_setup() { # derive DSNs, clean scratch, create the bases fresh
@@ -395,21 +467,22 @@ scratch_setup() { # derive DSNs, clean scratch, create the bases fresh
         }
         # subshell: the source DSN (and its variables) must never leak
         # into the environment. Precedence inside the env file:
-        # AXIOM_DATABASE_URL (pre-split name), else AXIOM_STORE_DATABASE_URL
-        # (same cluster, component-split successor).
+        # AXIOM_STORE_DATABASE_URL (component-split store plane — the
+        # binary's canonical spelling), else the legacy pre-split
+        # AXIOM_DATABASE_URL (same cluster).
         base_dsn="$(
             set -a
             # shellcheck disable=SC1090
             . "$RAG_ENV"
             set +a
-            if [ -n "${AXIOM_DATABASE_URL:-}" ]; then
-                printf '%s' "$AXIOM_DATABASE_URL"
+            if [ -n "${AXIOM_STORE_DATABASE_URL:-}" ]; then
+                printf '%s' "$AXIOM_STORE_DATABASE_URL"
             else
-                printf '%s' "${AXIOM_STORE_DATABASE_URL:-}"
+                printf '%s' "${AXIOM_DATABASE_URL:-}"
             fi
         )"
         [ -n "$base_dsn" ] || {
-            echo "ci-local: $RAG_ENV defines neither AXIOM_DATABASE_URL nor AXIOM_STORE_DATABASE_URL" >&2
+            echo "ci-local: $RAG_ENV defines neither AXIOM_STORE_DATABASE_URL nor AXIOM_DATABASE_URL" >&2
             return 1
         }
         IT_DSN="$(dsn_with_db "$base_dsn" "$RUN_BASE")" || {
@@ -434,12 +507,11 @@ scratch_setup() { # derive DSNs, clean scratch, create the bases fresh
         return 1
     }
 
-    # self-heal a venv cloak left behind by a killed go-db-it leg
-    if [ -d "$REPO/axiom-compute-worker/.venv.cloaked-by-ci-local" ] &&
-        [ ! -d "$REPO/axiom-compute-worker/.venv" ]; then
-        mv "$REPO/axiom-compute-worker/.venv.cloaked-by-ci-local" "$REPO/axiom-compute-worker/.venv"
-        echo "ci-local: restored a cloaked compute-worker venv"
-    fi
+    # shared-state work under the dbshared lock: the venv heal races a
+    # concurrent run's cloak dance, and ensure_db on the shared baseline
+    # fixture races that run's baseline leg (both hold the same lock).
+    # The own per-run base below is pid-unique and needs no lock.
+    with_runlock dbshared scratch_heal_venv
     # own per-run base, fresh: a same-pid leftover from a crashed earlier
     # run is dropped first (idle-guarded); reused IT databases drift (42P10
     # on a phantom unique index) — runs never inherit database state
@@ -448,7 +520,7 @@ scratch_setup() { # derive DSNs, clean scratch, create the bases fresh
         drop_db_if_idle "$base_name" "stale same-run base"
     fi
     ensure_db "$base_name"
-    ensure_db "$BASELINE_DB"
+    with_runlock dbshared scratch_ensure_baseline_db
     echo "ci-local: own scratch base fresh: '$base_name' (IT legs) + '$BASELINE_DB' ensured (baseline leg)"
     echo "ci-local: DB legs DSN: $(masked_dsn "$IT_DSN")  [$IT_DSN_SRC]"
 }
@@ -463,9 +535,13 @@ scratch_teardown() { # remove EVERYTHING this run created — even on abort
     # fixture — nothing writes into it, and a concurrent run's baseline
     # leg still needs it) and the fixed-name IT databases (the go-db-it
     # refresh owns their lifecycle; next run drops+recreates them anyway)
-    # own ephemerals + own base (operator-supplied bases are never dropped)
-    drop_pattern_if_idle "$OWN_PREFIX"
-    [ "${OWN_BASE_MANAGED:-0}" = 1 ] && drop_db_if_idle "${OWN_PREFIX}_test" "own base"
+    # own ephemerals + own base (operator-supplied bases are never
+    # dropped; in operator mode even the derived prefix belongs to the
+    # operator — another session's ephemerals under it stay theirs)
+    if [ "${OWN_BASE_MANAGED:-0}" = 1 ]; then
+        drop_pattern_if_idle "$OWN_PREFIX"
+        drop_db_if_idle "${OWN_PREFIX}_test" "own base"
+    fi
     echo "ci-local: teardown complete — own databases removed"
 }
 
@@ -500,7 +576,7 @@ on_exit() {
     exit "$rc"
 }
 trap on_exit EXIT
-trap on_exit INT TERM HUP
+trap 'trap - INT TERM HUP; on_exit' INT TERM HUP
 
 # --- the pipeline -----------------------------------------------------------
 run_leg drift-preflight leg_drift

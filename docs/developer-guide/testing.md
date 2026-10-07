@@ -106,11 +106,16 @@ no checks and touches no workflow file:
    phantom constraint) — runs never inherit database state. Every
    DB-touching run carries `-p 1 -count=1`: parallel package binaries
    contend on the shared DSN database. The baseline leg's admin channel
-   is `axiom_ci_test` (that exact name is on the baseline suite's frozen
-   scratch allowlist). Two suite-internal fixed database names cannot
-   be per-run (test-code constants): the legs touching them are
-   serialized across concurrent local runs, and they are only ever
-   refreshed or removed when no other session is connected. Then:
+   is `axiom_ci_test` — a name on the baseline suite's scratch allowlist
+   that also satisfies the suites' `_test` guard (the other allowlisted
+   names lack the suffix, so renaming would take test-code changes).
+   Four suite-internal fixed IT database names
+   (`axiom_mirror_it_test`, `axiom_repair_test`, `axiom_repo_test`,
+   `axiom_server_test`) plus the baseline suite's
+   `axiom_baseline_scratch` cannot be per-run (test-code constants):
+   the legs touching them are serialized across concurrent local runs,
+   and they are only ever refreshed or removed when no other session is
+   connected. Then:
    `go-db-it` (the whole tree — with the compute-worker venv cloaked
    for this leg, so the local leg runs exactly the proven CI set;
    engine-backed suites that auto-detect a local venv skip in CI's
@@ -121,7 +126,10 @@ no checks and touches no workflow file:
    The **role drill stays CI-exclusive**: `AXIOM_REQUIRE_DRILL` is
    never set locally (a cluster with standing roles must skip the
    drill, not fail it). Teardown — on success AND on abort (trap) —
-   removes everything the run created.
+   removes everything the run created, except the shared baseline
+   fixture `axiom_ci_test` and the fixed-name IT databases: nothing
+   writes into the former, and the next run's refresh owns the
+   latter's lifecycle.
 4. **runner + fixer pytest** — the same venv-based suites `make test`
    runs. The venvs are *checked preconditions*: a missing venv skips the
    leg with a bootstrap hint (venv building is not the pipeline's
@@ -147,8 +155,10 @@ Concurrent `ci-local` runs (two agents, two worktrees, one host)
 coexist by design — each run owns its scratch bases — but their Go
 legs take turns via a host-local lock: full-tree test builds share the
 Go build cache (racing its trim produces phantom build failures), and
-two legs touch suite-internal fixed database names. A run never waits
-for the drift preflight, the fix-convention probe, or the Python legs.
+two legs touch suite-internal fixed database names; the docs gate
+takes its own lock the same way (`mkdocs build --clean` wipes a shared
+site dir). A run never waits for the drift preflight, the
+fix-convention probe, or the Python legs.
 
 ## Mutation-testing culture (the "probe")
 
