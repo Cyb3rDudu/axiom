@@ -316,17 +316,20 @@ func TestOCRTimeoutBudgetIndependent(t *testing.T) {
 
 // TestRunFixerOCRBudgetEnv (#284 review fix): the OCR-class budget
 // selection is OBSERVED, not just configured — the wrapper receives
-// AXIOM_FIX_SH_TIMEOUT = OCRTimeout−5m for OCR-class items and no value
-// for normal items (mutation probe: delete the ocrCase branch in runFixer
-// and the FIXSH=[5100] assertion goes red).
+// AXIOM_FIXER_SH_TIMEOUT (canonical, fixer-home strand) = OCRTimeout−5m
+// for OCR-class items and no value for normal items; the legacy
+// AXIOM_FIX_SH_TIMEOUT rides along through the transition (mutation
+// probe: delete the ocrCase branch in runFixer and the FIXSH=[5100]
+// assertion goes red).
 func TestRunFixerOCRBudgetEnv(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "echo-env.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"FIXSH=[$AXIOM_FIX_SH_TIMEOUT] DB=[$AXIOM_DATABASE_URL]\"\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"FIXSH=[$AXIOM_FIX_SH_TIMEOUT] FIXER_SH=[$AXIOM_FIXER_SH_TIMEOUT] DB=[$AXIOM_DATABASE_URL]\"\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// keep the ambient env from faking either direction
 	t.Setenv("AXIOM_FIX_SH_TIMEOUT", "")
+	t.Setenv("AXIOM_FIXER_SH_TIMEOUT", "")
 	// DM07 #316 wiring sonde: a credential planted in the PARENT env must
 	// not reach the child — runWorker constructs the minimal environment
 	// for BOTH classes (deleting req.Env = workerEnv() turns this red).
@@ -343,8 +346,8 @@ func TestRunFixerOCRBudgetEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ocr run: %v", err)
 	}
-	if !strings.Contains(out, "FIXSH=[5100]") {
-		t.Fatalf("OCR-class item must receive AXIOM_FIX_SH_TIMEOUT=5100 (90m-5m), got %q", strings.TrimSpace(out))
+	if !strings.Contains(out, "FIXSH=[5100]") || !strings.Contains(out, "FIXER_SH=[5100]") {
+		t.Fatalf("OCR-class item must receive AXIOM_FIXER_SH_TIMEOUT (canonical) and AXIOM_FIX_SH_TIMEOUT (legacy transition), both 5100 (90m-5m), got %q", strings.TrimSpace(out))
 	}
 	if strings.Contains(out, "fixture-do-not-leak") || !strings.Contains(out, "DB=[]") {
 		t.Fatalf("the worker child must not inherit parent credentials (OCR class), got %q", strings.TrimSpace(out))
@@ -354,8 +357,8 @@ func TestRunFixerOCRBudgetEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plain run: %v", err)
 	}
-	if !strings.Contains(out, "FIXSH=[]") {
-		t.Fatalf("non-OCR item must NOT carry the OCR budget, got %q", strings.TrimSpace(out))
+	if !strings.Contains(out, "FIXSH=[]") || !strings.Contains(out, "FIXER_SH=[]") {
+		t.Fatalf("non-OCR item must NOT carry the OCR budget (neither spelling), got %q", strings.TrimSpace(out))
 	}
 	if strings.Contains(out, "fixture-do-not-leak") || !strings.Contains(out, "DB=[]") {
 		t.Fatalf("the worker child must not inherit parent credentials (normal class), got %q", strings.TrimSpace(out))

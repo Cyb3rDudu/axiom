@@ -61,6 +61,7 @@ how often it has been read since process start.
 | `AXIOM_PROCESSOR_URL`, `AXIOM_PROCESSOR_URLS`, `AXIOM_PROCESSOR_RUNNER_NAME`, `AXIOM_PROCESSOR_TIMEOUT`, `AXIOM_PROCESSOR_SOURCE_SECRET`, `AXIOM_PROCESSOR_SOURCE_BASE_URL` | dispatcher-side env | counter | same criteria |
 | `AXIOM_RUNNER_HEALTH_INTERVAL` | dispatcher-side env | counter | same criteria |
 | `AXIOM_FIXER_CMD` | repair env | counter | same criteria |
+| `AXIOM_FIX_SH_TIMEOUT` | repair env | fix.sh warns once per run (shell-side; no Go counter — the invoker deliberately emits both spellings through the transition) | same criteria |
 | `make runner` | Make target | warns, still builds | same criteria |
 
 **Not legacy** (do not migrate these): the compute worker's own env
@@ -86,6 +87,14 @@ the successor architecture itself):
   `git log --follow -- axiom_fixsvc/`; successor: the F08 repair track
   (`axiom/internal/library/repair/`) plus the fixer artifact
   (`axiom-fixer/`, `scripts/build_fixer_artifact.sh`).
+- **`AXIOM_FIXSVC_*` env namespace** — retired WITH the service: the
+  only readers ever were `axiom_fixsvc/service.py` (`NO_SYNC`,
+  `DUMP_HEALED`; `git log -S` across the fixer trees finds no other
+  consumer, no fixer artifact ever read the names). The worker env
+  does not pass the prefix through and synthesizes no canonical
+  spelling — an operator env still carrying the switches changes
+  nothing. The W7 runbook documents the real wave mechanism (§2.1a's
+  mandatory post-W7 sync) in their place.
 
 ## Operator-side switches (no counter — your action)
 

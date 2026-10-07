@@ -46,7 +46,7 @@ type RepairRequest struct {
 	// caller, the orchestrator, always sets a positive budget).
 	Budget time.Duration
 	// Env is the OPTIONAL full child environment (os.Environ() plus the
-	// class-coupled wrapper vars, e.g. AXIOM_FIX_SH_TIMEOUT for OCR-class
+	// class-coupled wrapper vars, e.g. AXIOM_FIXER_SH_TIMEOUT for OCR-class
 	// wedge-guards). nil = inherit the parent environment — the exact
 	// pre-F08 layering contract: normal-class runs pass nothing, the
 	// wrapper's internal 30-min default applies.
