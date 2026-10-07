@@ -255,6 +255,29 @@ func TestUnknownCommandIsUsageError(t *testing.T) {
 	}
 }
 
+// TestMigrateSurface — the #362 DB-free half: usage shape (stray args
+// are exit 2), the no-DSN diagnosis (exit 1, names the DSN keys — never
+// a silent default), and the help block documents the command.
+func TestMigrateSurface(t *testing.T) {
+	var buf strings.Builder
+	if exit := serveTo(&buf, []string{"migrate", "extra"}); exit != exitUsage {
+		t.Fatalf("migrate with stray args exit = %d, want 2", exit)
+	}
+	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "")
+	buf.Reset()
+	if exit := serveTo(&buf, []string{"migrate"}); exit != exitFailure {
+		t.Fatalf("migrate without a DSN exit = %d, want 1", exit)
+	}
+	if msg := buf.String(); !strings.Contains(msg, "AXIOM_STORE_DATABASE_URL") {
+		t.Fatalf("the no-DSN diagnosis must name the DSN keys, got %q", msg)
+	}
+	_, out := runTo(&strings.Builder{}, []string{"help"})
+	if !strings.Contains(out, "migrate [") {
+		t.Fatalf("help must document the migrate command")
+	}
+}
+
 func TestConfigGetEffectiveRedactsSecrets(t *testing.T) {
 	t.Setenv("AXIOM_DATABASE_URL", "postgresql://u:secretpw@127.0.0.1:5432/axiom_dev?sslmode=disable")
 	t.Setenv("AXIOM_OPENSEARCH_PASSWORD", "hunter2")

@@ -332,6 +332,38 @@ func checkPoolRole(ctx context.Context, pool *pgxpool.Pool, component, wrongRole
 	return nil
 }
 
+// failFastPendingMigrations is the #362 boot guard: a DML-only role
+// (the DM07 runtime roles, or any role without CREATE on the schema)
+// that finds PENDING migrations fails the start FAST with the remedy
+// instead of dying mid-migrate on a raw permission error and
+// crash-looping through the supervisor restart (the v0.2.3 rollout
+// shape). A role that CAN apply DDL proceeds — the privileged boot
+// keeps its auto-migrate compat (local dev, deployer). READ-ONLY when
+// nothing is pending (catalog + ledger reads; the steady-state boot of
+// a DML-only role performs no DDL here, per DM07 #316).
+func failFastPendingMigrations(ctx context.Context, pool *pgxpool.Pool, component string,
+	pending func(context.Context, *pgxpool.Pool) ([]string, error)) error {
+
+	pend, err := pending(ctx, pool)
+	if err != nil {
+		return fmt.Errorf("%s: reading pending migrations: %w", component, err)
+	}
+	if len(pend) == 0 {
+		return nil
+	}
+	var role string
+	var canDDL bool
+	if err := pool.QueryRow(ctx,
+		`SELECT current_user, has_schema_privilege(current_user, current_schema(), 'CREATE')`).Scan(&role, &canDDL); err != nil {
+		return fmt.Errorf("%s: reading role privileges: %w", component, err)
+	}
+	if canDDL {
+		return nil
+	}
+	return fmt.Errorf("%s: %d pending migration(s) %v for a DML-constrained boot (role %q lacks CREATE on the schema — DM07 runtime roles are DML-only): run `axiom migrate` with the deployer DSN against this database, then restart",
+		component, len(pend), pend, role)
+}
+
 // Start starts every selected component in the documented order. A failing
 // component aborts the whole start: everything already started is stopped
 // (bounded) and the error is returned — the caller exits non-zero on it, and
@@ -624,6 +656,12 @@ func (r *Root) componentsFor() []Component {
 				return err
 			}
 			r.database = database
+			// #362: fail fast (with the remedy) when this boot's role
+			// cannot apply what is pending — never crash-loop on the
+			// permission error.
+			if err := failFastPendingMigrations(ctx, database.Pool(), "core", db.Pending); err != nil {
+				return err
+			}
 			if err := database.Migrate(ctx); err != nil {
 				return fmt.Errorf("postgres migrate: %w", err)
 			}
@@ -637,6 +675,9 @@ func (r *Root) componentsFor() []Component {
 			// F09 #303: the Store component's ledger — the revision-intake
 			// columns on ingest_jobs (additive; same fingerprint rule as
 			// the library ledger below).
+			if err := failFastPendingMigrations(ctx, database.Pool(), "store", storemigrations.Pending); err != nil {
+				return err
+			}
 			if err := storemigrations.Migrate(ctx, database.Pool()); err != nil {
 				return fmt.Errorf("store migrate: %w", err)
 			}
@@ -687,6 +728,11 @@ func (r *Root) componentsFor() []Component {
 				// the set also carries the Zotero mirror schema (idempotent
 				// against the cutover-copied production database) — the
 				// mirror's home IS the Library database.
+				// #362: same fail-fast as core/store (the Library DSN's role
+				// is DML-only in the split topology).
+				if err := failFastPendingMigrations(ctx, libDB.Pool(), "library", pglib.Pending); err != nil {
+					return err
+				}
 				if err := pglib.Migrate(ctx, libDB.Pool()); err != nil {
 					return fmt.Errorf("library migrate: %w", err)
 				}
