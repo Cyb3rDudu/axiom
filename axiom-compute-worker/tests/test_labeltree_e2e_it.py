@@ -19,7 +19,7 @@ import pymupdf
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # repo root
-FIXER_ROOT = REPO_ROOT / "axiom" / "tools" / "pdf_repair_agent"
+FIXER_ROOT = REPO_ROOT / "axiom-fixer"
 AXIOM_ROOT = REPO_ROOT / "axiom"
 sys.path.insert(0, str(FIXER_ROOT))  # fixer tools (pymupdf-only imports)
 

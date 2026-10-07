@@ -278,7 +278,7 @@ def test_bundled_env_drift_zwischen_den_baeumen():
     zusätzlich vor dem Staging."""
     from pathlib import Path
 
-    repo = Path(__file__).resolve().parents[4]
+    repo = Path(__file__).resolve().parents[2]
     canonical = (
         repo
         / "axiom-compute-worker"
@@ -287,7 +287,7 @@ def test_bundled_env_drift_zwischen_den_baeumen():
         / "bundled_env.py"
     )
     mirror = (
-        repo / "axiom" / "tools" / "pdf_repair_agent" / "tools" / "bundled_env.py"
+        repo / "axiom-fixer" / "tools" / "bundled_env.py"
     )
     assert canonical.exists() and mirror.exists(), "beide Bäume müssen die Datei tragen"
     assert canonical.read_text() == mirror.read_text(), (

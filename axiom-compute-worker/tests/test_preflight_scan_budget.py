@@ -265,9 +265,7 @@ def test_small_scan_fixture_still_fully_measured(tmp_path):
     path — details carry all pages, no sampled short-circuit."""
     fixture = (
         Path(__file__).resolve().parents[2]
-        / "axiom"
-        / "tools"
-        / "pdf_repair_agent"
+        / "axiom-fixer"
         / "fixtures"
         / "ohne_textschicht.pdf"
     )
@@ -285,9 +283,7 @@ def test_precheck_dict_key_parity_with_full_analyze(tmp_path):
     that reads a now-missing key from a sampled report."""
     fixture = (
         Path(__file__).resolve().parents[2]
-        / "axiom"
-        / "tools"
-        / "pdf_repair_agent"
+        / "axiom-fixer"
         / "fixtures"
         / "ohne_textschicht.pdf"
     )

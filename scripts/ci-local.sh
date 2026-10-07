@@ -284,11 +284,11 @@ leg_runner_pytest() {
 }
 
 leg_fixer_pytest() {
-    [ -x "$REPO/axiom/tools/pdf_repair_agent/.venv/bin/python" ] || {
-        echo "ci-local: fixer venv missing — SKIP (run axiom/tools/pdf_repair_agent/bootstrap.sh, then re-run)" >&2
+    [ -x "$REPO/axiom-fixer/.venv/bin/python" ] || {
+        echo "ci-local: fixer venv missing — SKIP (run axiom-fixer/bootstrap.sh, then re-run)" >&2
         return "$LEG_SKIP"
     }
-    cd "$REPO/axiom/tools/pdf_repair_agent" && .venv/bin/python -m pytest -q
+    cd "$REPO/axiom-fixer" && .venv/bin/python -m pytest -q
 }
 
 # --- (5) docs gate, natively (docs.yml shapes) ------------------------------

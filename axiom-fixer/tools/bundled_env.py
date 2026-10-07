@@ -1,7 +1,7 @@
 """bundled_env — env-relative resolution of bundled binaries (#286).
 
 Canonical file: axiom_compute_worker/compute_core/bundled_env.py
-Vendored mirror: axiom/tools/pdf_repair_agent/tools/bundled_env.py
+Vendored mirror: axiom-fixer/tools/bundled_env.py
 
 Both files are CODE-IDENTICAL on purpose (the folio_harvest vendoring
 pattern): the fixer package is standalone by design (no project imports —
