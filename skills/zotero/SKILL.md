@@ -169,12 +169,44 @@ POST /api/users/0/items
 - **UI delete = trash.** Items land in `/items/trash` and are restorable (also after Zotero restarts).
 - **Restore from (UI) trash:** `PATCH /items/<key>` with the full item JSON plus `"deleted": 0` (and optionally a new `parentItem`), with `If-Unmodified-Since-Version`. Verified pulling an attachment out of the trash and re-parenting it in one PATCH.
 
-## Tags & organization
+## Tags & organization (post-migration v3, 2026-10-08)
 
-- Quality tags: `peer-reviewed` (journalArticle), `secondary source` (book/proceedings/preprint), `grey literature` (report/webpage/blogPost), `primary source` (statute)
-- Stance tags: `neutral` (default) / `kritisch` / `pro` / `opinionated`
-- Usage tags: `<MODUL>_<TYP>` (e.g. `ORG_HA`, `VWL_PRÄ`) — from the working folder the source came from
-- Subject-Areas collections: **books only**; non-book sources never go there (they live in module folders)
+**Prinzip:** Collections = Arbeitskontext (Wozu brauche ich es?), Tags = Klassifikation (Was ist es?). Bücher hängen in **keiner** Collection — sie sind nur über Tags auffindbar. Jedes Item ist in **höchstens einer** Collection.
+
+### Collections (Arbeitskontext, max. 1 pro Item)
+- `MBA/<Modul>/Lectures` — Vorlesungsmaterial (nur hier)
+- `MBA/<Modul>/HA/Sources` — Hausarbeitsquellen
+- `MBA/<Modul>/PRÄ/Sources` — Präsenationsquellen
+- `Research/Shardr/Sources` — Forschungsprojekt
+- `VWL/Articles` — Test-Collection (RAG-Lösch-Test)
+- **Bücher: KEINE Collection** (target state)
+
+### Tag-Ebenen
+1. **`mba:<MODUL>`** — Studienmodul (`mba:BIDA`, `mba:DIBU`, `mba:DIM`, `mba:DINN`, `mba:FIN`, `mba:KIIN`, `mba:ORG`, `mba:PER`, `mba:VWL`). 0–2 Tags. Nicht für Lectures (Collection reicht).
+2. **`sa:<domain>`** — Fachgebiet nach **BISAC-Oberkategorien**: `sa:bus`, `sa:com`, `sa:tec`, `sa:law`, `sa:soc`, `sa:pol`, `sa:sci`. 1–3 Tags. Sublevels optional: `sa:bus.finance`, `sa:bus.org`, `sa:bus.personal`, `sa:bus.marketing`, `sa:bus.csr`, `sa:bus.vwl`, `sa:bus.logistics`, `sa:com.ai`, `sa:com.data`, `sa:com.security`, `sa:com.software`, `sa:com.platform`. **BISAC-Code des Verlags hat Vorrang** (aus ONIX/Metadaten).
+3. **`q:<quality>`** — genau EIN: `q:peer-reviewed` (Journal/Conference), `q:secondary` (Monographie/Lehrbuch), `q:grey` (Report/Working Paper/Tutorial/Zertifikatskurs), `q:primary` (Gesetz/Norm). Lectures bekommen kein `q:`.
+4. **`cite:<yes|no>`** — genau EIN. `cite:yes` = hat **DOI oder ISBN** (formal publiziert, darf in Hausarbeiten zitiert werden). `cite:no` = kein DOI/ISBN (Lectures, Kursmaterial, Tutorials, Security-Schulungen). **`cite:` steuert NICHT die RAG-Aufnahme** — alles kommt in den RAG. Der Agent sieht `citation_class: citable/uncitable` im Retrieval.
+
+### Beim Import neuer Items
+- Buch → keine Collection, Tags: `mba:<MODUL>` (falls eindeutig) + `sa:*` + `q:secondary` + `cite:yes/no` (nach ISBN/DOI)
+- Vorlesung → `MBA/<Modul>/Lectures`, Tags: `sa:*` aus Modul-Mapping + `cite:no`
+- HA/PRÄ-Quelle → jeweilige Sources-Collection, Tags: `sa:*` + `q:*` + `cite:*`
+- Security-/Pentesting-Material → keine Collection, keine `mba:`, Tags: `sa:com`, `sa:com.security`, `q:grey`, `cite:no`
+
+### Modul→sa-Mapping (für Lectures/HA/PRÄ)
+- BIDA → `sa:com.data` · DIBU → `sa:com.platform` · DIM → `sa:bus.org` · DINN → `sa:com`
+- FIN → `sa:bus.finance` · KIIN → `sa:com.ai` · ORG → `sa:bus.org` · PER → `sa:bus.personal` · VWL → `sa:bus.vwl`
+
+### Gelöschte Konventionen (nicht mehr verwenden!)
+- ~~`peer-reviewed`, `secondary source`, `grey literature`, `primary source`~~ → ersetzt durch `q:*`
+- ~~`<MODUL>_<TYP>` (z.B. `ORG_HA`, `VWL_PRÄ`, `DIM_VL`)~~ → ersetzt durch `mba:*` + Collections
+- ~~Subject-Areas-Collections~~ → gelöscht, ersetzt durch `sa:*`-Tags
+- ~~`MBA/<Modul>/Literature`-Collections~~ → geleert/gelöscht, Bücher ohne Collection
+
+### Verbleibende optionale Tags
+- Stance: `neutral` (Default) / `kritisch` / `pro` / `opinionated`
+- Projekt: `shardr`
+- Import-Marker: `axiom-imp:*` (nicht anfassen)
 
 ## Hard rules
 
