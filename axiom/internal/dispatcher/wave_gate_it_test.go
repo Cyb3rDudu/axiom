@@ -8,6 +8,8 @@ package dispatcher
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -205,6 +207,28 @@ func TestPreflightAutoQueueDocLevelLoopGuard(t *testing.T) {
 		if _, err := h.pool.Exec(context.Background(), `
 			INSERT INTO repair_cases (attachment_id, document_id, status, suspicion_class, analysis, updated_at)
 			VALUES ($1::uuid, $2::uuid, 'healed', '🔴 reparierbar', '{}', now() - interval '2 hours')`, attID, docID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A local file the preflight gate can read — any readable bytes
+	// suffice, the fake processor's preflight verdict below is scripted.
+	// The claim freezes local_path from the STORE PROJECTION (#358): point
+	// the projection (and the zotero row with it) at this test's own temp
+	// file, else the gate reads the seed's hardcoded /tmp/x.pdf — a file
+	// only other tests of this package happen to write, absent on a fresh
+	// machine, where the gate takes its unreadable-source branch and the
+	// job never reaches the preflight reject this test pins.
+	dir := t.TempDir()
+	pdf := filepath.Join(dir, "source.pdf")
+	if err := os.WriteFile(pdf, []byte("%PDF-1.4 wave-gate readable source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, upd := range []string{
+		`UPDATE zotero_attachments SET local_path=$2, content_type='application/pdf' WHERE id=$1`,
+		`UPDATE store_documents SET local_path=$2 WHERE attachment_id=$1`,
+	} {
+		if _, err := h.pool.Exec(context.Background(), upd, attID, pdf); err != nil {
 			t.Fatal(err)
 		}
 	}

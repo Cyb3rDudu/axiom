@@ -482,15 +482,17 @@ func TestRepairBlindPreflightSkipsWithoutCase(t *testing.T) {
 	// the quality gate RED (no Tier-1 text layer — textless scan class).
 	dir := t.TempDir()
 	pdf := filepath.Join(dir, "scan.pdf")
-	os.WriteFile(pdf, []byte("%PDF-1.4 scanned-no-textlayer-bytes"), 0o644)
-	// The claim freezes local_path from the STORE PROJECTION (#358), not
-	// from the zotero row — update both so the preflight gate reads
-	// exactly this test's scan-shaped bytes. Updating only the zotero row
-	// left the gate on the seed's hardcoded /tmp/x.pdf: on dev hosts a
-	// file other tests of this package write made the IT pass anyway,
-	// while a fresh CI runner has no such file — the gate takes its
-	// unreadable-source branch, the skip never runs, and the assertion
-	// meets a job that never left pending.
+	if err := os.WriteFile(pdf, []byte("%PDF-1.4 scanned-no-textlayer-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The claim freezes local_path from the STORE PROJECTION (#358) — the
+	// preflight gate reads ONLY that row, never the zotero mirror. Point
+	// the projection at this test's scan-shaped bytes (and the zotero row
+	// with it, so both rows carry the same file); the seed hardcodes
+	// /tmp/x.pdf, which on dev hosts a file other tests of this package
+	// write makes present, while a fresh CI runner has none — the gate
+	// takes its unreadable-source branch, the skip never runs, and the
+	// assertion meets a job that never left pending.
 	for _, upd := range []string{
 		`UPDATE zotero_attachments SET local_path=$2, content_type='application/pdf' WHERE id=$1`,
 		`UPDATE store_documents SET local_path=$2 WHERE attachment_id=$1`,
@@ -500,8 +502,12 @@ func TestRepairBlindPreflightSkipsWithoutCase(t *testing.T) {
 		}
 	}
 	// Leak-closing witness: the claim-visible path must BE the test's own
-	// scan file — if the claim seam ever reads a different table again,
-	// fail right here instead of 3 s later with an unrelated "pending".
+	// scan file, or fail right here instead of 3 s later with an
+	// unrelated "pending". This catches a no-op/0-row UPDATE above (and
+	// keying drift, via ErrNoRows); on a fresh machine without the ambient
+	// /tmp/x.pdf it also catches a flip of the claim seam to any THIRD
+	// table. A flip between the two tables updated above stays green by
+	// construction — both point at the same file.
 	var claimPath string
 	if err := h.pool.QueryRow(context.Background(),
 		`SELECT local_path FROM store_documents WHERE attachment_id=$1`, attID).Scan(&claimPath); err != nil {
