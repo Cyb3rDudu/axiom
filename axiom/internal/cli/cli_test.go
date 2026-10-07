@@ -257,7 +257,10 @@ func TestUnknownCommandIsUsageError(t *testing.T) {
 
 // TestMigrateSurface — the #362 DB-free half: usage shape (stray args
 // are exit 2), the no-DSN diagnosis (exit 1, names the DSN keys — never
-// a silent default), and the help block documents the command.
+// a silent default), the unknown-driver refusal (composition parity —
+// never a silently skipped Library component), DSN parse errors redacted
+// (the doctor's probeDatabase rule), and the help block documents the
+// command.
 func TestMigrateSurface(t *testing.T) {
 	var buf strings.Builder
 	if exit := serveTo(&buf, []string{"migrate", "extra"}); exit != exitUsage {
@@ -271,6 +274,28 @@ func TestMigrateSurface(t *testing.T) {
 	}
 	if msg := buf.String(); !strings.Contains(msg, "AXIOM_STORE_DATABASE_URL") {
 		t.Fatalf("the no-DSN diagnosis must name the DSN keys, got %q", msg)
+	}
+	// unknown driver: the same loud refusal as the composition root,
+	// BEFORE any pool opens.
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "postgresql://u:pw@127.0.0.1:5432/none")
+	t.Setenv("AXIOM_STORAGE_LIBRARY_DRIVER", "bogus")
+	buf.Reset()
+	if exit := serveTo(&buf, []string{"migrate"}); exit != exitFailure {
+		t.Fatalf("migrate with an unknown library driver exit = %d, want 1", exit)
+	}
+	if msg := buf.String(); !strings.Contains(msg, `unknown AXIOM_STORAGE_LIBRARY_DRIVER "bogus"`) {
+		t.Fatalf("the unknown-driver diagnosis must mirror the composition refusal, got %q", msg)
+	}
+	// DSN parse errors never echo a smuggled query-parameter password
+	// (the doctor's probeDatabase threat model — pgx echoes it verbatim).
+	t.Setenv("AXIOM_STORAGE_LIBRARY_DRIVER", "")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "postgresql://u:pw@127.0.0.1:5432/none?password=REVIEWSECRET123&connect_timeout=abc")
+	buf.Reset()
+	if exit := serveTo(&buf, []string{"migrate"}); exit != exitFailure {
+		t.Fatalf("migrate with an unparseable DSN exit = %d, want 1", exit)
+	}
+	if msg := buf.String(); strings.Contains(msg, "REVIEWSECRET123") {
+		t.Fatalf("a DSN query-parameter password must never reach the diagnosis, got %q", msg)
 	}
 	_, out := runTo(&strings.Builder{}, []string{"help"})
 	if !strings.Contains(out, "migrate [") {

@@ -360,7 +360,14 @@ func failFastPendingMigrations(ctx context.Context, pool *pgxpool.Pool, componen
 	if canDDL {
 		return nil
 	}
-	return fmt.Errorf("%s: %d pending migration(s) %v for a DML-constrained boot (role %q lacks CREATE on the schema — DM07 runtime roles are DML-only): run `axiom migrate` with the deployer DSN against this database, then restart",
+	// The grants hint covers the privilege-filtered-catalog edge
+	// (review #363): information_schema.tables hides a ledger the role
+	// has no SELECT on, so a mis-granted role reads a CURRENT ledger as
+	// "everything pending" — `axiom migrate` then says "up to date"
+	// and the remedy alone cannot break the loop. roles.sql grants the
+	// runtime roles DML on the ledgers; a role without that grant is
+	// mis-configured, and the message names it.
+	return fmt.Errorf("%s: %d pending migration(s) %v for a DML-constrained boot (role %q lacks CREATE on the schema — DM07 runtime roles are DML-only): run `axiom migrate` with the deployer DSN against this database, then restart; if `axiom migrate` already reports up to date and this persists, the role cannot READ the ledgers — apply deploy/postgres/roles.sql (its DML grants cover the migration ledgers)",
 		component, len(pend), pend, role)
 }
 
