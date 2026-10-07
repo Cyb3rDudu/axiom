@@ -59,7 +59,7 @@ NONE = "none"
 # class of mid-page running heads (folio row at ~75-76%). See
 # harvest_folio_candidates.
 # #258: a code-identical vendored mirror of this harvest lives in the
-# standalone fixer artifact at axiom/tools/pdf_repair_agent/tools/
+# standalone fixer artifact at axiom-fixer/tools/
 # folio_harvest.py — keep both in sync (drift re-opens the heal-loop).
 _BOT_BAND = 0.75
 

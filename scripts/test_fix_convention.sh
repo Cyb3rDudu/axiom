@@ -60,9 +60,9 @@ AXIOM_FIXER="$TMP/nonexistent" scripts/fix.sh XYZ >/dev/null 2>&1 && {
     fail=1
 } || echo "ok: missing install rejected"
 # 7) the REAL agent CLI keeps the contract shape: --key and --apply exist
-AGENT_PY="axiom/tools/pdf_repair_agent/.venv/bin/python"
+AGENT_PY="axiom-fixer/.venv/bin/python"
 [ -x "$AGENT_PY" ] || AGENT_PY="python3"
-if help=$($AGENT_PY axiom/tools/pdf_repair_agent/repair_agent.py --help 2>&1); then
+if help=$($AGENT_PY axiom-fixer/repair_agent.py --help 2>&1); then
     case "$help" in *--key*--apply* | *--apply*--key*) echo "ok: agent CLI shape (--key/--apply)" ;; *)
         echo "FAIL: agent help lost --key/--apply"
         fail=1

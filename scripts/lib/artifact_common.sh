@@ -50,7 +50,7 @@ artifact_pack_env() {
 # in BOTH trees (folio_harvest vendoring pattern); drift must never ship.
 artifact_assert_bundled_env_identical() {
     _canonical="$ROOT/axiom-compute-worker/axiom_compute_worker/compute_core/bundled_env.py"
-    _mirror="$ROOT/axiom/tools/pdf_repair_agent/tools/bundled_env.py"
+    _mirror="$ROOT/axiom-fixer/tools/bundled_env.py"
     cmp -s "$_canonical" "$_mirror" || {
         echo "artifact: bundled_env drift — runner canonical and fixer mirror differ:" >&2
         echo "  diff $_canonical $_mirror" >&2

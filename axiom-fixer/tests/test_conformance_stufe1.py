@@ -49,7 +49,7 @@ from tools import (  # noqa: E402
 )
 
 FIX = PKG / "fixtures"
-REPO = PKG.parents[2]
+REPO = PKG.parents[0]
 STUFE1 = REPO / "scripts" / "pdf_label_surgery.py"
 RUNNER_PY = REPO / "axiom-compute-worker" / ".venv" / "bin" / "python"
 DIFFICULT = FIX / "difficult"

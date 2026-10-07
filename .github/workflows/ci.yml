@@ -72,6 +72,11 @@ jobs:
               # verification (#354)). axiom/docs prose over-triggers by
               # design: fail-open side.
               axiom/*) go_sql=true; topology=true ;;
+              # the fixer's own top-level home: the ALWAYS-ON fixer-pytest
+              # job owns this surface — a fixer-only change must not pay
+              # the Go heavy legs (the pre-move axiom/ blanket did). Own
+              # arm so a future blanket cannot silently re-cover it.
+              axiom-fixer/*) ;;
               deploy/postgres/roles.sql) go_sql=true; topology=true ;;
               axiom-compute-worker/*|deploy/*) topology=true ;;
               .github/workflows/ci.yml) go_sql=true; topology=true ;;
@@ -462,7 +467,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: axiom/tools/pdf_repair_agent
+        working-directory: axiom-fixer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -58,8 +58,8 @@ test: ## All suites: fix-convention, Go (vet+test), compute worker, fixer isolat
 	cd axiom && go vet ./... && go test ./...
 	@[ -x axiom-compute-worker/.venv/bin/python ] || { echo "compute-worker: venv missing — bootstrap first (axiom-compute-worker/.venv)"; exit 1; }
 	cd axiom-compute-worker && .venv/bin/python -m pytest -q
-	@[ -x axiom/tools/pdf_repair_agent/.venv/bin/python ] || { echo "fixer: venv missing — bootstrap first (axiom/tools/pdf_repair_agent: ./bootstrap.sh)"; exit 1; }
-	cd axiom/tools/pdf_repair_agent && .venv/bin/python -m pytest -q
+	@[ -x axiom-fixer/.venv/bin/python ] || { echo "fixer: venv missing — bootstrap first (axiom-fixer: ./bootstrap.sh)"; exit 1; }
+	cd axiom-fixer && .venv/bin/python -m pytest -q
 
 # --- 0.1.18 frozen compatibility baseline (#295) --------------------------
 

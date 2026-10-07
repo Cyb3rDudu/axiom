@@ -21,7 +21,7 @@ from axiom_compute_worker.app import app
 from axiom_compute_worker.config import Settings, settings
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-FIXTURES = REPO_ROOT / "axiom" / "tools" / "pdf_repair_agent" / "fixtures"
+FIXTURES = REPO_ROOT / "axiom-fixer" / "fixtures"
 
 
 @pytest.fixture()
