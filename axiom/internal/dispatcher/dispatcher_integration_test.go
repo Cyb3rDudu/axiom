@@ -483,9 +483,32 @@ func TestRepairBlindPreflightSkipsWithoutCase(t *testing.T) {
 	dir := t.TempDir()
 	pdf := filepath.Join(dir, "scan.pdf")
 	os.WriteFile(pdf, []byte("%PDF-1.4 scanned-no-textlayer-bytes"), 0o644)
-	if _, err := h.pool.Exec(context.Background(),
-		`UPDATE zotero_attachments SET local_path=$2, content_type='application/pdf' WHERE id=$1`, attID, pdf); err != nil {
+	// The claim freezes local_path from the STORE PROJECTION (#358), not
+	// from the zotero row — update both so the preflight gate reads
+	// exactly this test's scan-shaped bytes. Updating only the zotero row
+	// left the gate on the seed's hardcoded /tmp/x.pdf: on dev hosts a
+	// file other tests of this package write made the IT pass anyway,
+	// while a fresh CI runner has no such file — the gate takes its
+	// unreadable-source branch, the skip never runs, and the assertion
+	// meets a job that never left pending.
+	for _, upd := range []string{
+		`UPDATE zotero_attachments SET local_path=$2, content_type='application/pdf' WHERE id=$1`,
+		`UPDATE store_documents SET local_path=$2 WHERE attachment_id=$1`,
+	} {
+		if _, err := h.pool.Exec(context.Background(), upd, attID, pdf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Leak-closing witness: the claim-visible path must BE the test's own
+	// scan file — if the claim seam ever reads a different table again,
+	// fail right here instead of 3 s later with an unrelated "pending".
+	var claimPath string
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT local_path FROM store_documents WHERE attachment_id=$1`, attID).Scan(&claimPath); err != nil {
 		t.Fatal(err)
+	}
+	if claimPath != pdf {
+		t.Fatalf("claim-visible local_path is %q, want the test's scan file %q", claimPath, pdf)
 	}
 
 	fp := newFakeProcessor(t)
