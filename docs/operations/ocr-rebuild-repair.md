@@ -40,7 +40,7 @@ broken text layer is rasterized before any folio harvest reads it.
 - **Manual full rebuilds of large books** (outside the invoker): fix.sh
   defaults to its own 30-min cap — for a hand-run Bartscher-class
   rebuild raise it explicitly:
-  `AXIOM_FIX_SH_TIMEOUT=86100 scripts/fix.sh <KEY> --apply` (23h55m,
+  `AXIOM_FIXER_SH_TIMEOUT=86100 scripts/fix.sh <KEY> --apply` (23h55m,
   matching the invoker's wedge-guard minus slack).
 - **Concurrency note**: `--jobs` uses ALL cores per rebuild and
   `AXIOM_FIXER_CONCURRENCY` allows up to 2 parallel fixer runs per host —
@@ -65,7 +65,7 @@ broken text layer is rasterized before any folio harvest reads it.
   timeout kill. `AXIOM_FIXER_OCR_TIMEOUT` (default **24h**) bounds the
   invoker's backstop as a pure **wedge-guard** (a wedged process vs. a
   working one — orphan prevention, never tempo limitation); fix.sh
-  receives the budget minus slack via `AXIOM_FIX_SH_TIMEOUT` so its
+  receives the budget minus slack via `AXIOM_FIXER_SH_TIMEOUT` so its
   `timeout` binary stays the primary killer. The stale-claim reaper
   honors the class bound — a live, merely slow rebuild is never requeued
   under a second claim.
@@ -168,7 +168,7 @@ PATH contribution); the build proves it with a staged `--list-langs`
 check and a sanitized-PATH rebuild smoke. Only pre-#286 fixer builds
 rely on host binaries. **#293:** there is NO internal per-run bound
 anymore — the rebuild runs as long as it runs; the only ceilings are the
-outer wedge-guards (fix.sh's `AXIOM_FIX_SH_TIMEOUT`, the invoker's
+outer wedge-guards (fix.sh's `AXIOM_FIXER_SH_TIMEOUT`, the invoker's
 `AXIOM_FIXER_OCR_TIMEOUT`, default 24h).
 
 ## Acceptance reference

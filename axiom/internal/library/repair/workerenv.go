@@ -19,7 +19,7 @@ import (
 // them), outbound-HTTP configuration (proxy + CA bundle names — the
 // repair track's DeepSeek/RAG calls legitimately carry them), plus the
 // repair track's OWN knobs (wrapper overrides, the RAG edge URL, the
-// fixsvc's DeepSeek credentials — the worker's own, not the parent's
+// fixer's DeepSeek credentials — the worker's own, not the parent's
 // database credentials).
 var workerEnvAllow = map[string]bool{
 	"PATH":                true,
@@ -45,9 +45,14 @@ var workerEnvAllow = map[string]bool{
 	"DEEPSEEK_MODEL":      true,
 }
 
-// workerEnvAllowPrefix covers name-scoped families (LC_* locale vars,
-// AXIOM_FIXSVC_* fixsvc switches).
-var workerEnvAllowPrefix = []string{"LC_", "AXIOM_FIXSVC_"}
+// workerEnvAllowPrefix covers name-scoped families: the LC_* locale
+// vars and the fixer's OWN AXIOM_FIXER_* namespace (canonical since the
+// fixer-home strand; the prefix also carries AXIOM_FIXER_CONFIG and the
+// OCR budget knobs to the child). NOTE the side effect: an ambient
+// AXIOM_FIXER_SH_TIMEOUT in the SERVICE environment now rides into
+// every worker child (normal class included) — the invoker's explicit
+// OCR-class extra wins by env-append order (later entries last).
+var workerEnvAllowPrefix = []string{"LC_", "AXIOM_FIXER_"}
 
 // workerEnvDeniedNames is the denylist WITNESS vocabulary — the known
 // credential variable names that must never reach the worker. Used by
@@ -72,8 +77,10 @@ var workerEnvDeniedNames = []string{
 // workerEnv constructs the worker child environment from the parent
 // process: only allowlisted names copy over (sorted for determinism —
 // the child env is asserted, not eyeballed), plus the caller's extras
-// (e.g. AXIOM_FIX_SH_TIMEOUT). Everything else — including every
-// credential the parent holds — stays behind.
+// (e.g. AXIOM_FIXER_SH_TIMEOUT). Everything else — including every
+// credential the parent holds and the RETIRED AXIOM_FIXSVC_* namespace
+// (its only readers ever lived in the deleted axiom_fixsvc; no mirror,
+// no witness — nothing to transition) — stays behind.
 func workerEnv(extras ...string) []string {
 	var out []string
 	for _, kv := range os.Environ() {

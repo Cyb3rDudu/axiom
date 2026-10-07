@@ -24,9 +24,11 @@
 # Lock: lockdir under ~/.local/state/axiom/runs (mkdir is atomic).
 # Timeout: hard cap per invocation (timeout binary on PATH, e.g.
 #   nix coreutils; without it the run is unbounded — logged).
-#   AXIOM_FIX_SH_TIMEOUT (seconds) overrides the 1800s default (#284:
+#   AXIOM_FIXER_SH_TIMEOUT (seconds) overrides the 1800s default (#284:
 #   OCR-class rebuilds get their own budget — a 658-page rebuild does
 #   not fit 30 minutes; the invoker sets this per invocation class).
+#   The legacy spelling AXIOM_FIX_SH_TIMEOUT keeps working through the
+#   transition (ADR 0001 pattern; warns once per run).
 set -eu
 
 KEY="${1:?usage: fix.sh <zotero-key> [--apply] [--format pdf|epub] [--source PATH]}"
@@ -109,7 +111,12 @@ fi
 
 # #284: per-class time budget — OCR rebuilds default to their own,
 # larger cap (the invoker passes it explicitly; manual runs may set it).
-FIX_TIMEOUT="${AXIOM_FIX_SH_TIMEOUT:-1800}"
+# Canonical AXIOM_FIXER_SH_TIMEOUT leads; the legacy AXIOM_FIX_SH_TIMEOUT
+# still overrides the default when alone (ADR 0001 transition, warn once).
+FIX_TIMEOUT="${AXIOM_FIXER_SH_TIMEOUT:-${AXIOM_FIX_SH_TIMEOUT:-1800}}"
+if [ -z "${AXIOM_FIXER_SH_TIMEOUT:-}" ] && [ -n "${AXIOM_FIX_SH_TIMEOUT:-}" ]; then
+    echo "fix: deprecated AXIOM_FIX_SH_TIMEOUT used — rename to AXIOM_FIXER_SH_TIMEOUT" >&2
+fi
 if command -v timeout >/dev/null 2>&1; then
     timeout "$FIX_TIMEOUT" "$FIXER" "$APP" --key "$KEY" "$@" || rc=$?
 else

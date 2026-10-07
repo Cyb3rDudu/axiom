@@ -67,7 +67,7 @@ type Config struct {
 	// wedged process that stopped working), NEVER to limit tempo; it is
 	// therefore configured generously. Default 24h. fix.sh's timeout
 	// binary stays the primary killer (budget minus 5m slack via
-	// AXIOM_FIX_SH_TIMEOUT) — same layering as Timeout.
+	// AXIOM_FIXER_SH_TIMEOUT) — same layering as Timeout.
 	OCRTimeout time.Duration
 	// Concurrency caps parallel worker executions per host (owner nail 3:
 	// max 1-2). Values below 1 clamp to 1, above 2 clamp to 2.
@@ -413,7 +413,7 @@ func repairArtifactName(item *RepairItem) string {
 // (the rebuild takes as long as it takes — 10m or 10h; the backstop
 // only catches a WEDGED process). The worker wrapper's own timeout
 // binary stays the primary killer — the Go backstop sits ABOVE it with
-// slack (AXIOM_FIX_SH_TIMEOUT, set by the local executor; same layering
+// slack (AXIOM_FIXER_SH_TIMEOUT, set by the local executor; same layering
 // as the normal Timeout over the wrapper's 30m default).
 func (inv *Invoker) runWorker(ctx context.Context, item *RepairItem) (int, string, error) {
 	req := buildRequest(item)
@@ -428,13 +428,20 @@ func (inv *Invoker) runWorker(ctx context.Context, item *RepairItem) (int, strin
 		// (the rebuild takes as long as it takes — 10m or 10h; the
 		// backstop only catches a WEDGED process). The wrapper's timeout
 		// binary stays the primary killer — the Go backstop sits ABOVE it
-		// with 5m slack, handed down via AXIOM_FIX_SH_TIMEOUT (the
+		// with 5m slack, handed down via AXIOM_FIXER_SH_TIMEOUT (the
 		// class-coupled env: normal-class runs pass NOTHING and the
 		// wrapper's internal default applies — the pre-F08 layering
 		// contract, pinned by TestRunFixerOCRBudgetEnv).
 		req.Budget = inv.cfg.OCRTimeout
 		inv.logger.Printf("case: key %s: OCR-class wedge-guard %s (wrapper kills at %s) — no tempo limit, orphan prevention only", item.AttachmentKey, req.Budget, fixShBudget(req.Budget))
-		req.Env = append(req.Env, fmt.Sprintf("AXIOM_FIX_SH_TIMEOUT=%d", int(fixShBudget(req.Budget).Seconds())))
+		// ADR 0001 pattern (fixer-home strand): the canonical
+		// AXIOM_FIXER_SH_TIMEOUT leads; the legacy AXIOM_FIX_SH_TIMEOUT
+		// keeps riding along through the transition so an installed
+		// artifact from before the rename still reads its budget.
+		secs := int(fixShBudget(req.Budget).Seconds())
+		req.Env = append(req.Env,
+			fmt.Sprintf("AXIOM_FIXER_SH_TIMEOUT=%d", secs),
+			fmt.Sprintf("AXIOM_FIX_SH_TIMEOUT=%d", secs))
 	}
 	res, err := inv.executor().Execute(ctx, req)
 	return res.ExitCode, res.Output, err

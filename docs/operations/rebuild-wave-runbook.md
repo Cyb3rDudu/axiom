@@ -137,10 +137,17 @@ job) or `podman stop` them until firing. If stopped, re-run §1.3 at firing.
 
 ### 2.1a MANDATORY post-W7 projection sync **[MUTATES]**
 
-W7 heals with `AXIOM_FIXSVC_NO_SYNC=1` (wave mode): the heal writes Zotero
-(delete + create/upload) but skips the RAG sync. Until one sync runs, the
-RAG DB still shows the OLD attachments as live with their ACTIVE old
-snapshots — and the NEW healed attachments do not exist in the DB at all.
+W7 heals via the repair track: the worker heals the artifact, the
+custody chain writes Zotero (delete + create/upload) — and the RAG
+sync is NOT part of the per-heal path (the fixsvc-era
+`AXIOM_FIXSVC_NO_SYNC` wave switch retired with that service; nothing
+under F08 reads it, and no per-heal sync exists to skip). Each heal
+still fires the revision hook (apply.go — the Library's Mits-Schrieb
+on the new attachment key), so a LIVE sync lane would sync per heal:
+the lane stays quiesced per §4.6 for the whole wave. Until one
+full sync runs, the RAG DB still shows the OLD attachments as live
+with their ACTIVE old snapshots — and the NEW healed attachments do
+not exist in the DB at all.
 The §2.3 wave INSERT reads those RAG rows: fired without this sync it
 would enqueue force_rebuild for the OLD, broken attachments (their
 quarantined local_path files survive — quarantine copies, never moves)
@@ -382,7 +389,7 @@ ride the #171 teardown plan.
 | 4.2 | New-chunker proof in image | §1.5 container feature probe | both W2+W12 assertions pass |
 | 4.3 | Runners healthy | `curl :<port> /v1/health` ×3 (one per wave runner) | `{"status":"ok"}` |
 | 4.4 | Queue state | `SELECT status, count(*) FROM ingest_jobs WHERE status IN ('pending','processing') GROUP BY 1` | EITHER `0`, OR exactly the known heal-projections (8 pending on new content hashes, live-verified 2026-08-18: 0 leases, held since 09:15) — held for the wave; anything `processing` = a dispatcher is draining on OLD code: STOP it before cutover. The §2.3 wave INSERT force-rows make the 8 pendings redundant (same attachments, force generation) — resolve them via the wave, not a pre-wave drain |
-| 4.5 | W7 terminal | `SELECT status, count(*) FROM repair_cases GROUP BY 1` | no `queued`/`in_repair`; healed+blocked+closed only. W7 ran with `AXIOM_FIXSVC_NO_SYNC` set (truthy check — any non-empty value incl. `0` enables, same pattern as `AXIOM_FIXSVC_DUMP_HEALED`) |
+| 4.5 | W7 terminal | `SELECT status, count(*) FROM repair_cases GROUP BY 1` | no `queued`/`in_repair`; healed+blocked+closed only. (The fixsvc-era wave switch `AXIOM_FIXSVC_NO_SYNC`/truthy pattern retired with the service — W7 needs no env switch, the per-heal sync it once skipped no longer exists) |
 | 4.6 | Zotero quiesce | no sync scheduled; sync API idle | no new `zotero_*` writes during wave (manual discipline + checklist at firing) |
 | 4.7 | OS cluster health | `curl localhost:9200/_cluster/health` | `green`, no unassigned shards |
 | 4.8 | Full-feature profile | staged `AXIOM_DISPATCHER_PROFILE` env resolves to dense+entities+relations; after first book: `SELECT profile_hash FROM processing_snapshots ORDER BY created_at DESC LIMIT 1` + dense-embeddings row count > 0 | full-feature hash; embeddings grow |

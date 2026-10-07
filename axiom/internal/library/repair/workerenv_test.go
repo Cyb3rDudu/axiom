@@ -30,14 +30,16 @@ func TestWorkerEnvAllowlistPresentDenylistAbsent(t *testing.T) {
 	// none of the worker's business
 	t.Setenv("SOME_UNRELATED_VAR", "x")
 
-	env := workerEnv("AXIOM_FIX_SH_TIMEOUT=900")
+	env := workerEnv("AXIOM_FIXER_SH_TIMEOUT=900")
 	have := map[string]string{}
 	for _, kv := range env {
 		name, val, _ := strings.Cut(kv, "=")
 		have[name] = val
 	}
-	// allowlist check: the minimal required variables are present
-	for _, name := range []string{"PATH", "HOME", "TMPDIR", "LANG", "LC_CTYPE", "AXIOM_RAG_URL", "DEEPSEEK_API_KEY", "AXIOM_FIXSVC_NO_SYNC", "AXIOM_FIX_SH_TIMEOUT"} {
+	// allowlist check: the minimal required variables are present. The
+	// RETIRED AXIOM_FIXSVC_* namespace does NOT pass (its only readers
+	// ever lived in the deleted axiom_fixsvc) — pinned below.
+	for _, name := range []string{"PATH", "HOME", "TMPDIR", "LANG", "LC_CTYPE", "AXIOM_RAG_URL", "DEEPSEEK_API_KEY", "AXIOM_FIXER_SH_TIMEOUT"} {
 		if have[name] == "" {
 			t.Errorf("required worker var %s missing from the constructed env (names only: %v)", name, keysOf(env))
 		}
@@ -50,6 +52,14 @@ func TestWorkerEnvAllowlistPresentDenylistAbsent(t *testing.T) {
 	}
 	if _, present := have["SOME_UNRELATED_VAR"]; present {
 		t.Error("non-allowlisted var copied — the env must be constructed, not inherited")
+	}
+	// retired namespace stays behind entirely (no pass-through, no
+	// canonical synthesis — nothing ever read it under F08)
+	if _, present := have["AXIOM_FIXSVC_NO_SYNC"]; present {
+		t.Error("retired AXIOM_FIXSVC_* var crossed into the worker env — the namespace died with axiom_fixsvc")
+	}
+	if _, present := have["AXIOM_FIXER_NO_SYNC"]; present {
+		t.Error("no canonical AXIOM_FIXER_NO_SYNC may be synthesized — the switch has no reader")
 	}
 	// sorted determinism: assertions stay stable across OS env orderings
 	if n := len(env) - 1; n > 1 && !sortedAsc(env[:n]) {
@@ -85,6 +95,25 @@ func TestWorkerEnvNeverEchoesValues(t *testing.T) {
 	for _, kv := range env {
 		if strings.Contains(kv, "fixture-secret") {
 			t.Fatal("a credential VALUE crossed into the worker env")
+		}
+	}
+}
+
+// TestWorkerEnvFixsvcRetired — the review witness for the namespace
+// retirement: an operator env still carrying the old fixsvc switches
+// changes NOTHING for the worker child (neither the legacy spelling nor
+// a synthesized canonical one crosses; the F08 track never read them).
+func TestWorkerEnvFixsvcRetired(t *testing.T) {
+	t.Setenv("AXIOM_FIXSVC_NO_SYNC", "1")
+	t.Setenv("AXIOM_FIXSVC_DUMP_HEALED", "1")
+	have := map[string]bool{}
+	for _, kv := range workerEnv() {
+		name, _, _ := strings.Cut(kv, "=")
+		have[name] = true
+	}
+	for _, name := range []string{"AXIOM_FIXSVC_NO_SYNC", "AXIOM_FIXSVC_DUMP_HEALED", "AXIOM_FIXER_NO_SYNC", "AXIOM_FIXER_DUMP_HEALED"} {
+		if have[name] {
+			t.Errorf("%s must not reach the worker env — the fixsvc switches retired with their only reader", name)
 		}
 	}
 }

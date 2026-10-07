@@ -277,7 +277,7 @@ must be wired — the orchestrator uploads through it).
   `AXIOM_FIXER_OCR_TIMEOUT` (default **24h**, #293: pure orphan prevention,
   never tempo — the rebuild takes as long as it takes and the tool itself
   carries no internal kill) for the backstop, the wrapper budget passed
-  via `AXIOM_FIX_SH_TIMEOUT`; see the
+  via `AXIOM_FIXER_SH_TIMEOUT`; see the
   [OCR-Rebuild Repair runbook](ocr-rebuild-repair.md).
 - **Concurrency:** `AXIOM_FIXER_CONCURRENCY` (default 1, clamped to 1–2)
   parallel worker runs per host — the per-key lockdir additionally

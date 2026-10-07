@@ -64,6 +64,8 @@ through the deprecation witness below — mapping table row 1).
 | `axiom-fixer` (`pdf_repair_agent`) | `axiom-repair-worker` | `axiom-fixer` shim | same rule; alias wired with F08 |
 | — | `axiom-research-worker` | — | reserved |
 | — | components Library / Store / Research | — | extraction is F04/F06/F09 scope |
+| `AXIOM_FIXSVC_*` env namespace | retired with `axiom_fixsvc` (no consumer ever existed outside the deleted service) | none — the worker env does not pass the prefix; see the deprecation schedule's "Retired by deletion" | n/a (dead since the F08 cutover) |
+| `AXIOM_FIX_SH_TIMEOUT` | `AXIOM_FIXER_SH_TIMEOUT` | fix.sh reads canonical with legacy fallback (warns once); the invoker hands down both through the transition | same rule |
 
 ### 5. Identity fields (additive, ADR-consistent)
 
