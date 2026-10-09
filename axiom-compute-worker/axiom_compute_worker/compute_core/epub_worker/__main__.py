@@ -512,12 +512,14 @@ def _md_rewrite(md: str, resolve) -> str:
     #366 hardening, pinned on the live doubling (chunk ref
     ``image_12.jpgimage_12.jpg``, "Art of Exploitation"): pandoc ≥3.11
     escapes sample-code ``<img>`` tags inside terminal transcripts as
-    ``\\![](image.jpg)`` — a literal-text marker, not an image. Three
+    ``\\![](image.jpg)`` — a literal-text marker, not an image. Four
     guards keep the scanner honest: escaped openers are skipped (odd
     number of backslashes before ``!``), candidates never cross a line
     boundary (a markdown ref path is single-line; without the cap the
     scanner swallowed ~1KB of transcript and resolved via the basename
-    fallback of an UNRELATED later ref), and an opener already inside a
+    fallback of an UNRELATED later ref), candidates that swallow a
+    later image opener abort (``![`` is never part of a path — the
+    same-line variant of the swallow), and an opener already inside a
     previous hit's swallowed region is never rewritten again (the
     shared-')' double-append that produced the doubled ref).
     """

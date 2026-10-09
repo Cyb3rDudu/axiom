@@ -98,12 +98,15 @@ type execQueryer interface {
 }
 
 // reopenFailedIntake (#365) re-arms a TERMINAL-FAILED intake row when the
-// same offer comes back. The gate is the lifetime attempt budget: attempt
-// is NOT reset — every reopen keeps its history, claims keep incrementing,
-// and the ceiling (`attempt >= max_attempts`) ends the cycle for good, so
-// permanently failing content cannot retry forever (one wasted attempt per
-// sync at most, and the sweep's exhausted guard stops offering entirely).
-// Content already served (the #294 predicate, mirrored) never reopens.
+// same offer comes back. attempt is NOT reset — the lifetime budget bounds
+// CLAIM-driven failures: every claim increments attempt, and the ceiling
+// (`attempt >= max_attempts`) plus the sweep's exhausted guard end the
+// cycle for good, so permanently failing content cannot burn compute
+// forever. A pure queue-kill loop (the production shape: an external
+// reaper terminalizes rows that were never claimed, attempt stays 0)
+// reopens on every sync without consuming budget — deliberately tolerated:
+// its cost is one pending queue entry per sync, never compute. Content
+// already served (the #294 predicate, mirrored) never reopens.
 // Returns true when the row was reopened to pending.
 func (r *Repo) reopenFailedIntake(ctx context.Context, ex execQueryer, existing *Job, req IntakeRequest) (bool, error) {
 	if existing.Status != "failed" || existing.Attempt >= existing.MaxAttempts {
