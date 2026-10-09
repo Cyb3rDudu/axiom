@@ -44,6 +44,16 @@ type Config struct {
 	// RenewalInterval is how often a running job's lease is renewed while the
 	// processor works.
 	RenewalInterval time.Duration
+	// NoProgressLimit (#369) is the progress-coupled liveness bound: a job
+	// whose observed progress signature (stage change or position advance)
+	// is older than this stops being renewed — the lease then expires and
+	// the claim scan's existing expired-recovery evicts it (retry per
+	// attempt policy, LEASE_EXHAUSTED at the ceiling) and frees the lane.
+	// Legitimate heavy phases must never trip it: the heaviest observed
+	// signal-less stage (whole-book convert inside an 821-page reference
+	// run) completed in ≤65 min, so the default carries ~2× margin.
+	// Zero disables the watchdog (renewal becomes unconditional again).
+	NoProgressLimit time.Duration
 	// MaxRetryBackoff caps the exponential backoff scheduled on retryable
 	// processor failure.
 	MaxRetryBackoff time.Duration
@@ -214,6 +224,9 @@ func NewWithPersister(rep *repo.Repo, client processorClient, persist ResultPers
 		if cfg.RenewalInterval < time.Second {
 			cfg.RenewalInterval = time.Second
 		}
+	}
+	if cfg.NoProgressLimit < 0 {
+		cfg.NoProgressLimit = 0
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 5 * time.Second
@@ -628,9 +641,12 @@ func (d *Dispatcher) driveJob(ctx context.Context, claimed *repo.ClaimedJob) (ac
 	// original lease; under model-thrash warmup that window exceeded the
 	// lease before the runner ever pulled the source. One renewal loop now
 	// spans claim → submit; pollAndFinish starts its own for the poll phase.
+	// #369: the submit-phase renewal spans claim → submit; it is externally
+	// bounded (preflight budget + request timeout), so its watch seeds at
+	// claim time and cannot false-fire the no-progress watchdog.
 	submitRenewCtx, stopSubmitRenew := context.WithCancel(ctx)
 	defer stopSubmitRenew()
-	go d.renewLoop(submitRenewCtx, ref, fields, make(chan struct{}))
+	go d.renewLoop(submitRenewCtx, ref, fields, make(chan struct{}), newProgressWatch(time.Now()), claimed.Attempt)
 	// #235/#264: mint the source URL exp with one extra lease window of
 	// slack beyond LeaseUntil (belt-and-braces for older endpoints that still
 	// enforce a wall-clock exp). Since #264 the endpoint trusts the renewed

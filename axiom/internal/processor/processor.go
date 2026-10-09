@@ -107,11 +107,23 @@ type ProcessAccepted struct {
 
 // JobStatus is the advisory status object from GET /v1/jobs/{id}.
 type JobStatus struct {
-	ContractVersion string    `json:"contract_version"`
-	JobID           string    `json:"job_id"`
-	Status          string    `json:"status"`
-	Stage           string    `json:"stage"`
-	Error           *JobError `json:"error,omitempty"`
+	ContractVersion string       `json:"contract_version"`
+	JobID           string       `json:"job_id"`
+	Status          string       `json:"status"`
+	Stage           string       `json:"stage"`
+	// Progress (#369): coarse in-stage position the runner already
+	// reports (#225 §9) — completed/total units for the current stage.
+	// Nil on runners that never set it; zero units mean "no signal yet".
+	Progress *JobProgress `json:"progress,omitempty"`
+	Error    *JobError    `json:"error,omitempty"`
+}
+
+// JobProgress is the runner's coarse in-stage position (#369 decodes
+// the #225 payload; the field names are the wire contract's).
+type JobProgress struct {
+	CompletedUnits int    `json:"completed_units"`
+	TotalUnits     int    `json:"total_units"`
+	Unit           string `json:"unit"`
 }
 
 // JobError is a stable machine-readable process failure.

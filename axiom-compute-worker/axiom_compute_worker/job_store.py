@@ -238,6 +238,22 @@ class JobStore:
             job.stage = stage
             job.save()
 
+    def reset_for_relaunch(self, job: Job) -> None:
+        """#369: re-arm a CANCELLED entry for recompute.
+
+        Only the resubmit (dedup) path may call this: a POST /v1/process
+        under the entry's idempotency key is the dispatcher's explicit
+        re-request after a watchdog eviction cancelled the runner job (the
+        claim scan's retry). Ordinary transitions keep the
+        cancellation-wins guard in set_status — this is the one deliberate,
+        documented exception."""
+        with self._lock:
+            job.status = "accepted"
+            job.stage = ""
+            job.error = None
+            job.progress = None  # stale position from the cancelled run
+            job.save()
+
     def set_result(self, job: Job, result: dict[str, Any]) -> None:
         with self._lock:
             # A cancelled (or otherwise settled) job must not be resurrected to

@@ -1156,6 +1156,7 @@ func (r *Root) componentsFor() []Component {
 				APIPort:                r.cfg.APIPort,
 				Profile:                json.RawMessage(r.cfg.DispatcherProfile),
 				LeaseDuration:          r.cfg.DispatcherLeaseDuration,
+				NoProgressLimit:        r.cfg.DispatcherNoProgressLimit, // #369 watchdog
 				ArtifactRoot:           r.cfg.ArtifactRoot,
 				OpenSearchURL:          r.cfg.OpenSearchURL,
 				OpenSearchUsername:     r.cfg.OpenSearchUsername,

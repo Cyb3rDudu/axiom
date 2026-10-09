@@ -128,6 +128,9 @@ type Config struct {
 	DispatcherProfile string
 	// DispatcherLeaseDuration is the per-claim lease length.
 	DispatcherLeaseDuration time.Duration
+	// DispatcherNoProgressLimit (#369) is the progress-coupled liveness
+	// bound for running jobs (0 disables the watchdog).
+	DispatcherNoProgressLimit time.Duration
 	// DispatcherPreflightEnabled (#175): when set, the dispatcher sends a
 	// claimed job's source PDF to the runner's /v1/pdf/preflight before full
 	// processing; a quality-red gate skips the job and marks the attachment
@@ -291,6 +294,10 @@ func Load() Config {
 		DispatcherConcurrency:      envInt("AXIOM_DISPATCHER_CONCURRENCY", 0), // 0 = derive from Σ live runner capacities (#248)
 		DispatcherProfile:          env("AXIOM_DISPATCHER_PROFILE", defaultProfile),
 		DispatcherLeaseDuration:    envDur("AXIOM_DISPATCHER_LEASE", 5*time.Minute),
+		// #369: progress-coupled liveness bound (0 disables). Default 2h —
+		// ~2× margin over the heaviest observed signal-less legit stage
+		// (whole-book convert inside the 821-page reference run, ≤65 min).
+		DispatcherNoProgressLimit:  envDur("AXIOM_DISPATCHER_NO_PROGRESS_LIMIT", 2*time.Hour),
 		DispatcherPreflightEnabled: envBool("AXIOM_DISPATCHER_PREFLIGHT"),
 		FixerInvokerEnabled:        envBool("AXIOM_FIXER_INVOKER_ENABLED"),
 		FixerCommand:               repairWorkerCmd(),
