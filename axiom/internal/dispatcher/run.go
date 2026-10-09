@@ -609,7 +609,10 @@ func (d *Dispatcher) renewLoop(ctx context.Context, ref repo.LeaseRef, fields []
 					// Cancel can only hit OUR (stalled) runner job. Cancelling after
 					// the retry would race a concurrent claimer's fresh execution —
 					// the late Cancel would kill it and degrade the promised retry
-					// to a cancel.
+					// to a cancel. The fence argument needs the lease to outlive
+					// the 15s cancel budget (20× margin at the 5m default); a
+					// sub-15s lease config must raise the lease or shorten the
+					// cancel, or a sister lane can reclaim mid-cancel.
 					d.cancelRunner(ref.JobID, fields)
 					// Self-evict through the EXISTING retry path (pending + backoff,
 					// RETRY_EXHAUSTED at the ceiling): the lane moves on to healthy
