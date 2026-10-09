@@ -473,12 +473,27 @@ class TestMdRewriteDoublingGuards:
 
     def test_no_double_append_on_shared_paren_same_line(self):
         # two unescaped refs on ONE line, first path unresolvable directly:
-        # candidate two ends at the second ref's ')' and its basename
-        # resolves — the second rewrite then appended saved+saved
+        # the candidate up to the second ref's ')' contains the second
+        # opener — binding it would swallow "tail" AND mis-bind ![a] to the
+        # later ref's image (the same-line swallow the #366 review pinned).
+        # Both markers must survive, each bound to its own resolution.
         md = "![a](zz.png) tail ![b](/tmp/med/real_2.png)"
         out = _md_rewrite(md, self._resolve)
-        assert "image_2.pngimage_2.png" not in out
-        assert "![b]" in out or "![a]" in out
+        assert "image_2.pngimage_2.png" not in out  # no double append
+        assert "tail" in out                        # no content loss
+        assert "![b](image_2.png)" in out           # later ref rewrites
+        assert "![a](zz.png)" in out                # unresolvable stays verbatim
+
+    def test_unescaped_opener_never_swallows_across_lines(self):
+        # Guard 2 (line cap) pinned WITHOUT the escape crutch: an
+        # unresolvable UNESCAPED opener must not swallow text across the
+        # line boundary onto a later resolvable ref — removing only the
+        # line cap (keeping the escape guard) must go red here.
+        md = "![a](zz.png) end of line\ntranscript tail\n\n![b](/tmp/med/real_1.png)\n\nafter"
+        out = _md_rewrite(md, self._resolve)
+        assert "end of line" in out and "transcript tail" in out
+        assert "![a](zz.png)" in out     # unresolvable ref stays verbatim
+        assert "![b](image_1.png)" in out
 
     def test_real_refs_still_rewrite_across_lines(self):
         md = "pre\n\n![a](/tmp/med/real_0.png) mid ![b](real_2.png)\n\npost"

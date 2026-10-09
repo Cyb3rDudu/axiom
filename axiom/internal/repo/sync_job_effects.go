@@ -155,18 +155,18 @@ func (r *Repo) AttachmentProjectionDeleted(ctx context.Context, attachmentID str
 // nothing and has no work in flight — the sync's self-heal offer set
 // (#365: the changed-set alone can never re-offer these).
 type UnservedRendition struct {
-	DocumentID  string
-	SourceID    string
-	RecordKey   string
-	RenditionKey string
-	Version     int64
-	Hash        string
-	Title       string
-	Creators    []byte // JSON string array (the projection's flattened form)
-	Year        *int
-	Publisher   string
-	Language    string
-	Tags        []byte // JSON string array
+	DocumentID    string
+	SourceID      string
+	RecordKey     string
+	RenditionKey  string
+	Version       int64
+	Hash          string
+	Title         string
+	Creators      []byte // JSON string array (the projection's flattened form)
+	Year          *int
+	Publisher     string
+	Language      string
+	Tags          []byte // JSON string array
 	CitationClass string
 	ContentType   string
 }

@@ -105,3 +105,57 @@ def test_resubmit_after_watchdog_cancel_relaunches(tmp_path, monkeypatch):
     finally:
         release.set()
         settings.set(old)
+
+
+def test_startup_recovery_does_not_relaunch_cancelled(tmp_path, monkeypatch):
+    """#369 review major: startup recovery must NEVER relaunch a cancelled
+    entry — an operator cancel is terminal by intent and its DB row is
+    never claimed again; recomputing it after every runner restart would
+    burn GPU with no consumer (the exact class the watchdog closes). Only
+    a resubmit under the same idempotency key (the reclaim after a
+    watchdog eviction) relaunches."""
+    src = tmp_path / "doc.pdf"
+    src.write_bytes(b"%PDF-1.4 smoke")
+
+    started = threading.Event()
+    release = threading.Event()
+    runs = []
+
+    def _blocked(rt: JobRuntime) -> None:
+        runs.append(rt.job_id)
+        started.set()
+        release.wait(10)
+
+    monkeypatch.setattr(appmod, "_run_compute", _blocked)
+    old = settings.get()
+    settings.set(Settings(work_root=tmp_path / "work",
+                          allowed_source_roots=(str(tmp_path),),
+                          compute_backend="reference", warmup=False,
+                          max_concurrent_jobs=1, admission_queue_capacity=9))
+    try:
+        with TestClient(appmod.app) as client:
+            r1 = client.post("/v1/process", json=_payload(src, "k-startup"))
+            assert r1.status_code == 202, r1.text
+            assert started.wait(5), "compute never started"
+            assert client.post("/v1/jobs/job-evicted/cancel").json()["status"] == "cancelled"
+            release.set()
+            deadline = __import__("time").monotonic() + 5
+            while appmod._scheduler().is_relevant("job-evicted"):
+                assert __import__("time").monotonic() < deadline
+                __import__("time").sleep(0.02)
+
+        # Restart shape: rebuild the store over the same work root — the
+        # cancelled entry must stay cancelled, no compute spawned.
+        appmod._store = None
+        started.clear()
+        with TestClient(appmod.app):
+            store = appmod._store_impl()
+            job = store.get("job-evicted")
+            assert job is not None and job.status == "cancelled", (
+                f"startup recovery resurrected the cancelled entry: {job.status!r}"
+            )
+        assert not started.is_set(), "startup recovery spawned compute for a cancelled job"
+        assert len(runs) == 1, f"expected exactly 1 compute run, got {runs}"
+    finally:
+        release.set()
+        settings.set(old)

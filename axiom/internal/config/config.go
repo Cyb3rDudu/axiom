@@ -294,9 +294,12 @@ func Load() Config {
 		DispatcherConcurrency:   envInt("AXIOM_DISPATCHER_CONCURRENCY", 0), // 0 = derive from Σ live runner capacities (#248)
 		DispatcherProfile:       env("AXIOM_DISPATCHER_PROFILE", defaultProfile),
 		DispatcherLeaseDuration: envDur("AXIOM_DISPATCHER_LEASE", 5*time.Minute),
-		// #369: progress-coupled liveness bound (0 disables). Default 2h —
-		// ~2× margin over the heaviest observed signal-less legit stage
-		// (whole-book convert inside the 821-page reference run, ≤65 min).
+		// #369: progress-coupled liveness bound (0 disables): a running
+		// job without progress evidence past the bound evicts through the
+		// standard retry path (RETRY_EXHAUSTED at the ceiling) and its
+		// runner job is cancelled. Default 2h — ~2× margin over the
+		// heaviest observed signal-less legit stage (whole-book convert
+		// inside the 821-page reference run, ≤65 min).
 		DispatcherNoProgressLimit:  envDur("AXIOM_DISPATCHER_NO_PROGRESS_LIMIT", 2*time.Hour),
 		DispatcherPreflightEnabled: envBool("AXIOM_DISPATCHER_PREFLIGHT"),
 		FixerInvokerEnabled:        envBool("AXIOM_FIXER_INVOKER_ENABLED"),

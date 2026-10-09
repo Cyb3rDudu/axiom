@@ -544,6 +544,13 @@ def _md_rewrite(md: str, resolve) -> str:
             if k < 0 or k >= scan_end:
                 break
             cand = md[start:k]
+            if "![" in cand:
+                # A path never contains an image opener — the candidate
+                # swallowed a LATER marker on the same line. Binding here
+                # would delete the text between and mis-bind this opener to
+                # the later ref's image (#366 review: same-line swallow).
+                # Longer candidates only grow — stop scanning.
+                break
             path = _MD_TITLE_RE.sub("", cand)
             saved = resolve(path) if path else None
             if saved:

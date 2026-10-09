@@ -46,13 +46,15 @@ type Config struct {
 	RenewalInterval time.Duration
 	// NoProgressLimit (#369) is the progress-coupled liveness bound: a job
 	// whose observed progress signature (stage change or position advance)
-	// is older than this stops being renewed — the lease then expires and
-	// the claim scan's existing expired-recovery evicts it (retry per
-	// attempt policy, LEASE_EXHAUSTED at the ceiling) and frees the lane.
-	// Legitimate heavy phases must never trip it: the heaviest observed
-	// signal-less stage (whole-book convert inside an 821-page reference
-	// run) completed in ≤65 min, so the default carries ~2× margin.
-	// Zero disables the watchdog (renewal becomes unconditional again).
+	// is older than this is evicted directly through the standard retry
+	// path (ScheduleRetry: pending + backoff, RETRY_EXHAUSTED at the
+	// attempt ceiling) and its runner job gets a best-effort cancel —
+	// the same retry semantics as every retryable failure, with the lane
+	// freed at once. Legitimate heavy phases must never trip it: the
+	// heaviest observed signal-less stage (whole-book convert inside an
+	// 821-page reference run) completed in ≤65 min, so the default
+	// carries ~2× margin. Zero disables the watchdog (renewal becomes
+	// unconditional again).
 	NoProgressLimit time.Duration
 	// MaxRetryBackoff caps the exponential backoff scheduled on retryable
 	// processor failure.
