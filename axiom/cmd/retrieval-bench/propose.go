@@ -86,10 +86,3 @@ func materializeTrace(ctx context.Context, database *db.DB, suiteDir string) err
 	fmt.Printf("gold_suite_v21.json: %d trace-verified Eintraege (re-anchored)\n", len(out.Queries))
 	return nil
 }
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
