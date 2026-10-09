@@ -26,6 +26,7 @@ and fix the cause (not the symptom).
 | **A running job holds the ingest lane for hours and nobody can tell "slow" from "stuck"** | The holder heartbeats without progress (live stall), or a legitimate heavy phase runs silently | Check the job's `progress_phase`/`progress_done` (jobs endpoint) — an advancing position is live work; a frozen position past `AXIOM_DISPATCHER_NO_PROGRESS_LIMIT` is watchdog-evicted automatically (retry per attempt policy, runner job cancelled) | Keep the bound generous (default 2h; floor evidence: the 821-page reference run completed end-to-end in 65 min); force-rebuild is for known-bad jobs, not for silence |
 | **Persist rejects `CHUNK_IMAGE_REF_UNRESOLVED` for an external URL** | Markdown link syntax was misread as an image reference | Check whether the unresolved ref starts with `http://` or `https://` | Rerun on a runner that drops external URL refs before artifact validation; local image refs must still resolve strictly. |
 | **A re-run of a document produces different bytes** (nondeterminism) | A temp-path leak wobbles the output (e.g. EPUB extraction tempdir suffix lands in chunk text), or a Marker layout edge case | Compare two independent runs; diff to classify (path leak vs. heading/table-classification flip) | Normalize temp/media paths before chunking; for pure Marker classification variance, decide whether deterministic output is a requirement (it is not for retrieval). |
+| **A replaced file's document stays unserved (no job for the new attachment)** | The new rendition's job died terminally while queued behind a busy lane, and no-change syncs re-offered nothing (pre-#365) | List jobs by the document; unserved-but-preferred renditions are re-offered by every sync now (progress columns show the live attempt) | An attempt-exhausted row keeps its verdict — use the force-rebuild API for a fresh key |
 | **The search index shows stale or duplicated content after a rebuild** | The index served a superseded generation (no tombstone/obsolete handling), or a force-rebuild double-activated a snapshot | Compare OpenSearch doc count to the active snapshot count; look for orphaned/duplicated chunks | Ensure outbox delete/obsolete operations run in the same persist transaction; rely on latest-persist-wins per attachment. |
 | **Parallel workers clash on a fresh database (one crashes at startup)** | Concurrent schema migration racing (a `pg_type`-style conflict among same-kind objects) | See which instance failed and whether a restart succeeds | On a clean slate, bring up **one** instance to migrate first, then the others (fail-fast + restart is safe; no corruption). |
 | **A processing job resumes but the runner rejects it after a restart** | The runner was acknowledged already (its artifacts are gone); a re-submit hits a wall | Check the job's error for a terminal "artifacts expired" code | Recompute via the force-rebuild API (below) — a new job with a fresh idempotency key; never retry the same key against an acknowledged job. |
@@ -71,6 +72,17 @@ document's preferred attachment; the claim freezes a fresh snapshot and a
 fresh `…:force-<jobID>` idempotency key, so the runner processes from scratch.
 Responses: `202` enqueued (job JSON), `409` a job for the attachment is
 already active, `404` no preferred attachment, `422` no content hash.
+
+### Replaced file never processed (single document)
+
+When a book's file was replaced mid-flow (old attachment deleted, new
+attachment preferred), the document can end up unserved: the new rendition's
+job died terminally while queued and no-change syncs re-offered nothing
+(#365, observed 2026-10-08). The sync now self-heals — every sync re-offers
+live preferred renditions that serve nothing and have no work in flight
+(attempt-exhausted rows stay dead by design). Before that fix, or when a
+row sits at its attempt ceiling, the operator escape hatch is the same
+force-rebuild API as above (a fresh job with a fresh idempotency key).
 
 Plain DB requeue resets (`status='pending'`) on an acknowledged job are
 ineffective — the runner's dedup replays the cached outcome (#267). Bulk
