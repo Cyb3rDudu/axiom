@@ -727,7 +727,7 @@ def process(body: ProcessRequest) -> dict[str, Any]:
         if job.acked:
             raise _artifacts_expired()
         previous = _adopt_requested_job_id(job, body.job_id)
-        _relaunch_if_needed(job)
+        _relaunch_if_needed(job, on_resubmit=True)
         return ProcessAccept(
             contract_version=CONTRACT_VERSION,
             job_id=body.job_id,
@@ -776,7 +776,7 @@ def process(body: ProcessRequest) -> dict[str, Any]:
         # Dedup (W1 liveness): if the matched job recovered to `accepted`
         # after a restart and has no live compute thread, relaunch it so a
         # restart does not permanently strand accepted work (invariant #10).
-        _relaunch_if_needed(job)
+        _relaunch_if_needed(job, on_resubmit=True)
         return ProcessAccept(
             contract_version=CONTRACT_VERSION,
             job_id=body.job_id,
@@ -815,33 +815,37 @@ def _launch_compute(job: Job) -> bool:
     return sch.submit(rt)
 
 
-def _relaunch_if_needed(job: Job) -> None:
+def _relaunch_if_needed(job: Job, *, on_resubmit: bool = False) -> None:
     """Re-enqueue compute for a recovered non-terminal job with no live owner.
 
     A job recovered from disk after a restart is `accepted` with no compute
-    owner; without relaunch it would strand forever (W1). Dedup callers and
-    startup both route through here so the work is picked up exactly once.
+    owner; without relaunch it would strand forever (W1). Startup recovery
+    and dedup resubmits route through here so the work is picked up exactly
+    once.
 
-    #369: a `cancelled` entry relaunches too. The dispatcher cancels a job
+    #369: a `cancelled` entry relaunches ONLY from a resubmit
+    (``on_resubmit=True`` — the dedup path). The dispatcher cancels a job
     when its no-progress watchdog walks away (orphan compute stop); the
     claim scan then evicts and the reclaim resubmits under the SAME
     idempotency key. Without the relaunch that resubmit would dedup onto
     the dead cancelled entry and the poll loop would see a terminal
     "cancelled" — the retry the eviction policy promised would silently
-    degrade to a cancel. Operator cancels are unaffected: their rows are
-    terminal `cancelled` in the DB and never claimed again, so nothing
-    resubmits them.
+    degrade to a cancel. Startup recovery NEVER relaunches cancelled
+    entries: an operator-cancelled job is terminal by intent, and the DB
+    row never gets claimed again — recomputing it after every restart
+    would burn GPU with no consumer (the exact class #369 closes).
     """
-    if job.status not in ("accepted", "running", "cancelled"):
+    statuses = ("accepted", "running", "cancelled") if on_resubmit else ("accepted", "running")
+    if job.status not in statuses:
         return
     if _scheduler().is_relevant(job.job_id):
         return  # already queued/running
-    if job.status in ("running", "cancelled"):
-        # A prior owner died mid-run (or was cancelled by the dispatcher's
-        # watchdog); demote to accepted before relaunch so we do not
-        # double-count and set_status transitions stay valid. Cancelled
-        # needs the explicit reset — set_status's cancellation-wins guard
-        # blocks resurrection by design.
+    if job.status == "running" or (on_resubmit and job.status == "cancelled"):
+        # A prior owner died mid-run (or, on resubmit, the dispatcher's
+        # watchdog cancelled the job); demote to accepted before relaunch
+        # so we do not double-count and set_status transitions stay valid.
+        # Cancelled needs the explicit reset — set_status's
+        # cancellation-wins guard blocks resurrection by design.
         if job.status == "running":
             _store_impl().set_status(job, "accepted", stage="")
         else:

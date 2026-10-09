@@ -174,6 +174,18 @@ leg_fix_convention() {
 }
 
 # --- (2) Go unit legs (DB suites skip by design, like CI go-unit) -----------
+leg_go_fmt() { # the CI go-lint leg's core: gofmt-clean tree (cheap, mandatory)
+    cd "$REPO/axiom" || return 1
+    local bad
+    bad="$(gofmt -l .)" || return 1
+    if [ -n "$bad" ]; then
+        echo "ci-local: [FAIL] go-fmt — not gofmt-clean:" >&2
+        printf '%s\n' "$bad" >&2
+        return 1
+    fi
+    echo "ci-local: go-fmt clean"
+}
+
 leg_go_vet() {
     cd "$REPO/axiom" && go vet ./...
 }
@@ -539,6 +551,7 @@ trap 'trap - INT TERM HUP; on_exit' INT TERM HUP
 # --- the pipeline -----------------------------------------------------------
 run_leg drift-preflight leg_drift
 run_leg fix-convention leg_fix_convention
+run_leg go-fmt leg_go_fmt
 run_leg go-vet leg_go_vet dbshared
 run_leg go-unit leg_go_unit dbshared
 

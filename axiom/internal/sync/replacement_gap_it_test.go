@@ -149,32 +149,56 @@ func TestReplacementEnqueuesNewRenditionExactlyOnce(t *testing.T) {
 // rendition's job is terminally failed while merely queued (the external
 // stall-reaper shape: attempt 0, no claim ever happened). Both subsequent
 // syncs replayed the dead intake key and enqueued nothing; the document
-// needed a force-rebuild. A plain sync must re-offer: the failed row
-// reopens (attempts remain, content unserved) and exactly one live job
-// exists again.
+// needed a force-rebuild. A plain sync must re-offer, and — the pinned
+// facet — the SAME row must reopen (row count stable across repeated
+// kill/heal cycles; the lifetime attempt budget, not a reset, bounds the
+// cycle: after max terminal failures at climbing attempts the row stays
+// dead and the sweep stops offering).
 func TestSyncReoffersTerminallyFailedIntake(t *testing.T) {
 	w := newReplacementWorld(t, 0)
-
-	// The stall-reaper's terminal write on the queued new-rendition job
-	// (verbatim shape from production: attempt 0, infra-flavored error).
-	if _, err := w.d.Pool().Exec(context.Background(), `
-		UPDATE ingest_jobs SET status='failed', error_code='ingest_stalled',
-			error_message='ingest worker stalled', attempt=0
-		WHERE revision_source_id = ANY($1::text[]) AND revision_rendition_id='A-NEW'`,
-		w.sourceIDs); err != nil {
-		t.Fatal(err)
+	kill := func(attempt int) {
+		t.Helper()
+		if _, err := w.d.Pool().Exec(context.Background(), `
+			UPDATE ingest_jobs SET status='failed', error_code='ingest_stalled',
+				error_message='ingest worker stalled', attempt=$2
+			WHERE revision_source_id = ANY($1::text[]) AND revision_rendition_id='A-NEW'`,
+			w.sourceIDs, attempt); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	// The two production no-op syncs: each must re-offer the dead row.
+	// Cycle 1: the reaper kills the queued sync-key job at attempt 0 (the
+	// verbatim production shape). The sweep mints the heal row.
+	kill(0)
 	w.noopSync(t)
-	w.noopSync(t)
-
-	// The dead sync-key row stays as history; the sweep mints the heal row.
-	// Exactly ONE live job after two no-op syncs (idempotent sweep — the
-	// second sync replays the heal key, no second row).
 	if live := w.live(t, "A-NEW"); live != 1 {
+		t.Fatalf("cycle 1: %d live jobs, want 1 (sweep must re-offer)", live)
+	}
+
+	// Cycles 2..n: the same failure strikes the HEAL row — the replay must
+	// reopen THAT row (no second mint), and the row count stays stable.
+	for cycle, attempt := range []int{0, 1, 2} {
+		kill(attempt)
+		rowsBefore := len(w.jobs(t, "A-NEW"))
+		w.noopSync(t)
 		jobs := w.jobs(t, "A-NEW")
-		t.Fatalf("new rendition after terminal failure + 2 syncs: %d live jobs (total rows %d), want exactly 1 — the sweep must re-offer exactly once", live, len(jobs))
+		if len(jobs) != rowsBefore {
+			t.Fatalf("cycle %d: row count %d -> %d — replay must reopen the SAME row, not mint", cycle+2, rowsBefore, len(jobs))
+		}
+		if attempt >= 3 {
+			continue // ceiling shape handled by the exhausted test
+		}
+		if live := w.live(t, "A-NEW"); live != 1 {
+			t.Fatalf("cycle %d (attempt=%d): %d live jobs, want 1 — the failed heal row must reopen", cycle+2, attempt, live)
+		}
+	}
+
+	// The lifetime ceiling: at attempt >= max the row keeps its verdict and
+	// the sweep stops offering (no infinite retry for failing content).
+	kill(3)
+	w.noopSync(t)
+	if live := w.live(t, "A-NEW"); live != 0 {
+		t.Fatalf("exhausted row reopened (%d live) — the attempt ceiling must end the cycle", live)
 	}
 }
 

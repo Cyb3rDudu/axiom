@@ -8,7 +8,6 @@ package dispatcher
 
 import (
 	"context"
-	"io"
 	"log"
 	"os"
 	"testing"
@@ -192,4 +191,3 @@ func TestJobProgressMirroredToJobsRow(t *testing.T) {
 }
 
 // jobAttempt already exists in dispatcher_integration_test.go.
-var _ = log.New(io.Discard, "", 0) // keep imports honest if probes shrink

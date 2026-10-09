@@ -663,6 +663,18 @@ func jobPayload(j repo.Job) map[string]any {
 		"source_id":    j.SourceID,
 		"document_id":  j.DocumentID,
 	}
+	// #369: coarse progress — the live jobs topic carries the same
+	// phase/position view the REST endpoint serves (stille Arbeit vs
+	// Hänger at a glance).
+	if j.ProgressPhase != nil && *j.ProgressPhase != "" {
+		p["progress_phase"] = *j.ProgressPhase
+		if j.ProgressDone != nil {
+			p["progress_done"] = *j.ProgressDone
+		}
+		if j.ProgressTotal != nil {
+			p["progress_total"] = *j.ProgressTotal
+		}
+	}
 	if j.ErrorCode != nil && *j.ErrorCode != "" {
 		p["error_code"] = *j.ErrorCode
 	}

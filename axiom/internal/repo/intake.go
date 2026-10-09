@@ -90,25 +90,28 @@ func (r *Repo) EnqueueRevisionIntakeTx(ctx context.Context, tx pgx.Tx, req Intak
 	return r.enqueueRevisionIntake(ctx, tx, req)
 }
 
-// reopenFailedIntake (#365) re-arms a TERMINAL-FAILED intake row when the
-// same offer comes back: attempts must remain (an exhausted row keeps its
-// verdict — force-rebuild stays the escape for genuinely poison content)
-// and the content must not be served (the #294 suppression predicate,
-// mirrored). Returns true when the row was reopened to pending.
-// execQueryer is the union the reopen path needs: pool or caller-owned
-// transaction (same shape as the mint's queryer plus Exec).
+// execQueryer is the union the enqueue path needs: pool or caller-owned
+// transaction (the mint's queryer plus Exec for the reopen).
 type execQueryer interface {
 	queryer
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+// reopenFailedIntake (#365) re-arms a TERMINAL-FAILED intake row when the
+// same offer comes back. The gate is the lifetime attempt budget: attempt
+// is NOT reset — every reopen keeps its history, claims keep incrementing,
+// and the ceiling (`attempt >= max_attempts`) ends the cycle for good, so
+// permanently failing content cannot retry forever (one wasted attempt per
+// sync at most, and the sweep's exhausted guard stops offering entirely).
+// Content already served (the #294 predicate, mirrored) never reopens.
+// Returns true when the row was reopened to pending.
 func (r *Repo) reopenFailedIntake(ctx context.Context, ex execQueryer, existing *Job, req IntakeRequest) (bool, error) {
 	if existing.Status != "failed" || existing.Attempt >= existing.MaxAttempts {
 		return false, nil
 	}
 	tag, err := ex.Exec(ctx, `
 		UPDATE ingest_jobs SET
-			status='pending', attempt=0,
+			status='pending',
 			error_code=NULL, error_message=NULL, resolved_at=NULL,
 			next_attempt_at=NULL, claimed_by=NULL, lease_token=NULL, lease_until=NULL,
 			enqueued_at=now(), updated_at=now()
@@ -126,11 +129,25 @@ func (r *Repo) reopenFailedIntake(ctx context.Context, ex execQueryer, existing 
 	return tag.RowsAffected() > 0, nil
 }
 
-func (r *Repo) enqueueRevisionIntake(ctx context.Context, ex queryer, req IntakeRequest) (*Job, bool, error) {
+func (r *Repo) enqueueRevisionIntake(ctx context.Context, ex execQueryer, req IntakeRequest) (*Job, bool, error) {
 	// Intake-key idempotency precedes everything (the contract's
 	// precedence rule; validation happened in the service layer already).
 	existing, err := resolveIntakeKey(ctx, ex, req)
 	if err == nil {
+		// #365 self-heal: a TERMINAL-FAILED row under the same key must not
+		// block the re-offer forever (the production gap: a job terminally
+		// failed while merely queued replayed dead on every later sync).
+		// Re-open failed rows whose lifetime attempt budget remains and
+		// whose content is not served; exhausted, skipped (document
+		// verdicts) and completed rows replay unchanged.
+		if reopened, rerr := r.reopenFailedIntake(ctx, ex, existing, req); rerr != nil {
+			return nil, false, rerr
+		} else if reopened {
+			existing.Status = "pending"
+			existing.ErrorCode = nil
+			existing.ErrorMessage = nil
+			return existing, true, nil
+		}
 		return existing, false, nil // replay: the SAME job, no side effects
 	}
 	if errors.Is(err, ErrIntakeKeyMismatch) {

@@ -336,8 +336,10 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 		// #369: feed the liveness watch AND mirror coarse phase + position to
 		// the jobs row on every change — the operator-visible "stille Arbeit
 		// vs Hänger" distinction the wave incident lacked. Only observations
-		// that CARRY a signal count: the terminal poll (no stage, no progress)
-		// must neither reset the watch nor wipe the mirrored columns.
+		// that CARRY a signal count, so a signal-less poll (a runner that
+		// never reports stage/progress) can never reset the watch or wipe
+		// the mirrored columns — for the real runner the terminal poll is
+		// signal-less and the signature stays unchanged either way.
 		if st.Stage != "" || st.Progress != nil {
 			units := 0
 			total := 0
@@ -378,7 +380,7 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 				lastStage = st.Stage
 				if st.Stage != "" {
 					hint := st.Stage
-				if st.Progress != nil && st.Progress.TotalUnits > 0 {
+					if st.Progress != nil && st.Progress.TotalUnits > 0 {
 						hint = fmt.Sprintf("%s %d/%d %s", st.Stage,
 							st.Progress.CompletedUnits, st.Progress.TotalUnits,
 							st.Progress.Unit)
@@ -602,19 +604,21 @@ func (d *Dispatcher) renewLoop(ctx context.Context, ref repo.LeaseRef, fields []
 					d.logger.Printf(
 						"%v: no progress for %s (stage %q frozen) — watchdog eviction (no-progress bound #369)",
 						fields, stall.Round(time.Second), watch.lastStage())
+					// Orphan compute stop FIRST, while the row is still fenced to
+					// this claim: no sister lane can have reclaimed it yet, so the
+					// Cancel can only hit OUR (stalled) runner job. Cancelling after
+					// the retry would race a concurrent claimer's fresh execution —
+					// the late Cancel would kill it and degrade the promised retry
+					// to a cancel.
+					d.cancelRunner(ref.JobID, fields)
 					// Self-evict through the EXISTING retry path (pending + backoff,
-					// RETRY_EXHAUSTED at the ceiling): frees the lane immediately. A
-					// bare stopped renewal would leave the row 'processing' until
-					// lease expiry AND the expired-first claim order would re-claim
-					// the same stalled row at once — thrashing the lane instead of
-					// moving on to healthy work.
+					// RETRY_EXHAUSTED at the ceiling): the lane moves on to healthy
+					// work. A bare stopped renewal would leave the row 'processing'
+					// until lease expiry AND the expired-first claim order would
+					// re-claim the same stalled row at once — thrashing the lane
+					// instead of moving on.
 					d.scheduleRetry(ctx, ref, attempt, "NO_PROGRESS_STALLED",
 						fmt.Sprintf("no progress for %s (stage %q frozen)", stall.Round(time.Second), watch.lastStage()))
-					// Orphan compute stop (#369): the runner may still grind on the
-					// evicted job — terminate its process tree best-effort so no GPU
-					// burns without a consumer. A reclaim resubmit under the same
-					// idempotency key relaunches a cancelled runner entry.
-					d.cancelRunner(ref.JobID, fields)
 					close(lost) // exactly once: this is the only close site
 					return
 				}
