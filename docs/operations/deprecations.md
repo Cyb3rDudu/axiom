@@ -4,6 +4,19 @@ Policy and removal criteria for legacy names — the data basis is usage
 counters, not gut feeling. Companion page: [Operator Guide: Migrating to
 0.2.0](migration-guide.md) · binding decision: [ADR 0001](../adr/0001-canonical-naming.md).
 
+## Tool removals outside the alias schedule
+
+The one-shot migration machinery left through a different door than the
+env-alias policy above — it was never a legacy *name*, it was a finished
+*job* (#367): `axiom data cutover`/`rollback`, `axiom data shadow`, the
+cutover runbook, the five corpus retrofit backfill binaries, and the
+model-feasibility experiment scaffolding (`cmd/feasibility`) were shipped
+through the last 0.2x release and are removed since; the Git history
+conserves them. Retained as living tools: `axiom data export/import/verify`
+(backup, restore, portability — digest-verified), the SQLite engine and
+single-DB storage profile, and the `quarantine` custody CLI (the same
+repair.Quarantine path the fixer integration tests exercise).
+
 ## The policy
 
 - Legacy names are **functional through all of 0.2.x**. Nothing breaks, no

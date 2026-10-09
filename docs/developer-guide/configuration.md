@@ -24,7 +24,7 @@ The Go orchestrator's RUNTIME SURFACES — `serve` (every role and the compat bo
 ```
 
 - Each stage overrides only what it sets; unset stages fall through.
-- Scope: mode-specific knobs outside the shared vocabulary (e.g. `AXIOM_RETENTION_*`) and the debug-bind opt-out stay direct environment reads; the standalone backfill tool binaries under `cmd/` read the environment directly.
+- Scope: mode-specific knobs outside the shared vocabulary (e.g. `AXIOM_RETENTION_*`) and the debug-bind opt-out stay direct environment reads.
 - **Dual-fed pairs resolve per field.** The legacy/canonical spelling
   pairs (`AXIOM_COMPUTE_WORKER_*` vs `AXIOM_PROCESSOR_*`,
   `AXIOM_REPAIR_WORKER_CMD` vs `AXIOM_FIXER_CMD`) are ONE knob each: the

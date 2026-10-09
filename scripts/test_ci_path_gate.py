@@ -81,7 +81,7 @@ CASES = [
     # it — a fixer-only change must not fire the Go heavy legs
     ("fixer-only", ["axiom-fixer/repair_agent.py"], ("false", "false")),
     ("fixer tests", ["axiom-fixer/tests/test_ocr_tool.py"], ("false", "false")),
-    ("db test fixture", ["axiom/internal/backfill/testdata/poisoned.epub"], ("true", "true")),
+    ("db test fixture", ["axiom/internal/contracts/library/testdata/import_operation.json"], ("true", "true")),
     ("axiom docs prose (fail-open over-trigger)", ["axiom/docs/CITATION_GRANULARITY_MEMO.md"], ("true", "true")),
     ("workflow self", [".github/workflows/ci.yml"], ("true", "true")),
     ("mixed docs+go", ["docs/index.md", "axiom/cmd/axiom-ng/main.go"], ("true", "true")),

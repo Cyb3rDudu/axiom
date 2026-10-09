@@ -273,7 +273,7 @@ note "starting dev RAG on :$RAG_PORT …"
     # (deterministic fixtures; F07 replaces them with the Zotero ports).
     # Staging lives under the dev artifact root, isolated from prod.
     AXIOM_LIBRARY_IMPORT_PROVIDERS=fake
-    # runner-checkout discovery for the *-backfill cmd tools when run against dev
+    # runner-checkout discovery for engine-backed tools run against dev
     AXIOM_RUNNER_DIR="$REPO/axiom-compute-worker"
     AXIOM_FIXER_INVOKER_ENABLED=0
     # never inherit prod's Zotero write credentials: point the key file at a
