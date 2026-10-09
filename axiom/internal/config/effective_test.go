@@ -203,10 +203,11 @@ func TestValidateEnvFlagsSilentFallbacks(t *testing.T) {
 		t.Fatalf("clean env must validate, got %v", problems)
 	}
 	for env, val := range map[string]string{
-		"AXIOM_API_PORT":          "eighty",
-		"AXIOM_DISPATCHER_LEASE":  "5 minutes",
-		"AXIOM_SEARCH_RERANK":     "maybe",
-		"AXIOM_FIXER_CONCURRENCY": "1.5",
+		"AXIOM_API_PORT":                     "eighty",
+		"AXIOM_DISPATCHER_LEASE":             "5 minutes",
+		"AXIOM_DISPATCHER_NO_PROGRESS_LIMIT": "2 hours",
+		"AXIOM_SEARCH_RERANK":                "maybe",
+		"AXIOM_FIXER_CONCURRENCY":            "1.5",
 		// strconv-only spellings ("t", "y") are NOT loader grammar —
 		// validate must flag them instead of blessing a silent fallback
 		// to the default.
