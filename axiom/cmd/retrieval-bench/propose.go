@@ -110,8 +110,9 @@ func materializeTrace(ctx context.Context, database *db.DB, suiteDir string) err
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(r[:n]) + "…"
 }
