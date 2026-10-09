@@ -587,6 +587,33 @@ func (r *Repo) RenewLease(ctx context.Context, ref LeaseRef, duration time.Durat
 	return nil
 }
 
+// UpdateJobProgress (#369) mirrors the runner's coarse phase + position
+// onto the jobs row (fenced like every claim-owner mutation). Called by the
+// dispatcher whenever the observed progress signature CHANGES; the write
+// itself is the operator-visible trail (last_progress_at), not a liveness
+// mechanism — the no-progress watchdog keys off the dispatcher's in-memory
+// signature, not off this column.
+func (r *Repo) UpdateJobProgress(ctx context.Context, ref LeaseRef, phase string, done, total int) error {
+	ok, err := r.fencedUpdate(ctx, r.pool, `
+		UPDATE ingest_jobs SET
+			progress_phase   = NULLIF($4, ''),
+			progress_done    = $5,
+			progress_total   = $6,
+			last_progress_at = now(),
+			updated_at       = now()
+		WHERE id=$1 AND claimed_by=$2 AND lease_token=$3
+		  AND status IN ('claimed','processing')
+		  AND lease_until IS NOT NULL AND lease_until > clock_timestamp()
+	`, ref, phase, done, total)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("update job progress: %w", ErrLostLease)
+	}
+	return nil
+}
+
 // MarkProcessing advances a claimed job to processing after processor acceptance.
 func (r *Repo) MarkProcessing(ctx context.Context, ref LeaseRef) error {
 	ok, err := r.fencedUpdate(ctx, r.pool, `

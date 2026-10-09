@@ -44,6 +44,11 @@ type Job struct {
 	RevisionNo string
 	// UpdatedAt is the row's updated_at (the DM03-compatible replay time).
 	UpdatedAt time.Time
+	// Progress (#369): coarse phase + position the dispatcher mirrors from
+	// the runner's live status. Nil while a job never reported progress.
+	ProgressPhase *string
+	ProgressDone  *int
+	ProgressTotal *int
 }
 
 // FailedJob describes a file-resolution failure that should be persisted as a
@@ -195,7 +200,8 @@ func (r *Repo) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 		SELECT id::text, source_id, document_id, attachment_id,
 		       status::text, content_hash, attempt, max_attempts, error_code,
 		       error_message, resolved_at::text, enqueued_at::text, quality_state,
-		       force_rebuild
+		       force_rebuild,
+		       progress_phase, progress_done, progress_total
 		FROM ingest_jobs
 		ORDER BY enqueued_at DESC
 		LIMIT $1
@@ -211,7 +217,8 @@ func (r *Repo) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 		if err := rows.Scan(&j.ID, &j.SourceID, &j.DocumentID, &j.AttachmentID,
 			&j.Status, &j.ContentHash, &j.Attempt, &j.MaxAttempts,
 			&j.ErrorCode, &j.ErrorMessage, &j.ResolvedAt, &j.EnqueuedAt,
-			&j.QualityState, &j.ForceRebuild); err != nil {
+			&j.QualityState, &j.ForceRebuild,
+			&j.ProgressPhase, &j.ProgressDone, &j.ProgressTotal); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}
 		jobs = append(jobs, j)
@@ -228,7 +235,8 @@ func (r *Repo) ActiveJobs(ctx context.Context) ([]Job, error) {
 		SELECT id::text, source_id, document_id, attachment_id,
 		       status::text, content_hash, attempt, max_attempts, error_code,
 		       error_message, resolved_at::text, enqueued_at::text, quality_state,
-		       force_rebuild
+		       force_rebuild,
+		       progress_phase, progress_done, progress_total
 		FROM ingest_jobs
 		WHERE status IN ('pending','claimed','processing')
 		ORDER BY enqueued_at DESC
@@ -244,7 +252,8 @@ func (r *Repo) ActiveJobs(ctx context.Context) ([]Job, error) {
 		if err := rows.Scan(&j.ID, &j.SourceID, &j.DocumentID, &j.AttachmentID,
 			&j.Status, &j.ContentHash, &j.Attempt, &j.MaxAttempts,
 			&j.ErrorCode, &j.ErrorMessage, &j.ResolvedAt, &j.EnqueuedAt,
-			&j.QualityState, &j.ForceRebuild); err != nil {
+			&j.QualityState, &j.ForceRebuild,
+			&j.ProgressPhase, &j.ProgressDone, &j.ProgressTotal); err != nil {
 			return nil, fmt.Errorf("scan active job: %w", err)
 		}
 		jobs = append(jobs, j)
@@ -258,7 +267,8 @@ func (r *Repo) ListJobsByAttachment(ctx context.Context, attachmentID string) ([
 		SELECT id::text, source_id, document_id, attachment_id,
 		       status::text, content_hash, attempt, max_attempts, error_code,
 		       error_message, resolved_at::text, enqueued_at::text, quality_state,
-		       force_rebuild
+		       force_rebuild,
+		       progress_phase, progress_done, progress_total
 		FROM ingest_jobs
 		WHERE attachment_id = $1
 		ORDER BY enqueued_at DESC
@@ -273,7 +283,8 @@ func (r *Repo) ListJobsByAttachment(ctx context.Context, attachmentID string) ([
 		if err := rows.Scan(&j.ID, &j.SourceID, &j.DocumentID, &j.AttachmentID,
 			&j.Status, &j.ContentHash, &j.Attempt, &j.MaxAttempts,
 			&j.ErrorCode, &j.ErrorMessage, &j.ResolvedAt, &j.EnqueuedAt,
-			&j.QualityState, &j.ForceRebuild); err != nil {
+			&j.QualityState, &j.ForceRebuild,
+			&j.ProgressPhase, &j.ProgressDone, &j.ProgressTotal); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}
 		jobs = append(jobs, j)

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/events"
@@ -123,6 +125,64 @@ func (d *Dispatcher) markTerminal(ctx context.Context, ref repo.LeaseRef, code, 
 // forever against a dead/unsupported processor).
 const maxConsecutiveStatusErrors = 5
 
+// progressWatch (#369) is the progress-coupled liveness state shared by the
+// poll loop (writer) and the renewal loop (watchdog reader). The signature
+// is "stage|completed_units": a stage change OR a position advance is
+// progress evidence; anything else (heartbeats included) is not.
+type progressWatch struct {
+	mu        sync.Mutex
+	last      time.Time
+	signature string
+	stage     string
+}
+
+func newProgressWatch(origin time.Time) *progressWatch {
+	return &progressWatch{last: origin}
+}
+
+// observe records a status observation; returns true when the signature
+// changed (progress evidence).
+func (w *progressWatch) observe(stage string, done int) bool {
+	sig := stage + "|" + strconv.Itoa(done)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if sig == w.signature {
+		return false
+	}
+	w.signature = sig
+	w.stage = stage
+	w.last = time.Now()
+	return true
+}
+
+// stalledFor reports how long the signature has been unchanged.
+func (w *progressWatch) stalledFor() time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return time.Since(w.last)
+}
+
+// lastStage returns the most recently observed stage name (for logs).
+func (w *progressWatch) lastStage() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.stage
+}
+
+// cancelRunner is the best-effort orphan-compute stop (#369 facet 3): when
+// the dispatcher walks away from a job the runner may still be computing —
+// Cancel tells the runner to terminate the job's process tree (#242). A
+// wedged runner ignores it; a live one stops burning GPU with no consumer.
+func (d *Dispatcher) cancelRunner(jobID string, fields []any) {
+	cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := d.client.Cancel(cctx, jobID); err != nil {
+		d.logger.Printf("%v: best-effort cancel after walk-away: %v", fields, err)
+	} else {
+		d.logger.Printf("%v: runner job cancelled (dispatcher walked away — orphan compute stop)", fields)
+	}
+}
+
 // jobPhases records per-phase timestamps for the one-line phase log (L8 fix:
 // the next anomaly should be readable from the dispatcher log alone).
 type jobPhases struct {
@@ -176,6 +236,14 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 	// lastStage tracks the most recently observed poll stage; a change to it
 	// publishes JobStageChanged (#167, poll-delta). Observer-only.
 	lastStage := ""
+	// #369: progress-coupled liveness. The watch is seeded at claim time so
+	// the submit window (bounded by the request timeout) cannot false-fire;
+	// the poll loop feeds it every observed status, the renewal loop's
+	// watchdog consults it.
+	watch := newProgressWatch(ph.claim)
+	if watch.last.IsZero() {
+		watch.last = time.Now()
+	}
 	// Renewal decoupled from the poll cadence (L8 fix): one goroutine renews
 	// for the WHOLE job lifetime — poll loop, result fetch, artifact staging
 	// and persist. It stops on ctx or a lost lease; the fenced mutations plus
@@ -183,7 +251,7 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 	renewCtx, stopRenew := context.WithCancel(ctx)
 	defer stopRenew()
 	lost := make(chan struct{})
-	go d.renewLoop(renewCtx, ref, fields, lost)
+	go d.renewLoop(renewCtx, ref, fields, lost, watch, claimed.Attempt)
 	for {
 		if ctx.Err() != nil {
 			return
@@ -209,6 +277,9 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 		// from here on must mark (retry/terminal) or hand the row to recovery.
 		cancelRequested, cerr := d.rep.JobCancelRequested(ctx, ref.JobID)
 		if cerr != nil {
+			// The dispatcher walks away from a possibly-computing runner:
+			// stop the orphan (#369), then retry.
+			d.cancelRunner(ref.JobID, fields)
 			d.scheduleRetry(ctx, ref, claimed.Attempt, "CANCEL_READ_FAILED", cerr.Error())
 			return
 		}
@@ -236,6 +307,10 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 			// processor dedupes (F6 recovery without rerunning duplicate work).
 			consecutive++
 			if consecutive >= maxConsecutiveStatusErrors {
+				// The dispatcher walks away from a possibly-computing runner:
+				// stop the orphan (#369), then retry (a reclaimed resubmit
+				// dedups onto a surviving runner entry).
+				d.cancelRunner(ref.JobID, fields)
 				d.scheduleRetry(ctx, ref, claimed.Attempt, "PROCESS_STATUS_FAILED", err.Error())
 				return
 			}
@@ -248,6 +323,38 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 			continue
 		}
 		consecutive = 0
+		// #369: the poll response may race the watchdog (it can arrive after
+		// renewal stopped) — never act on a status once the lease is lost,
+		// especially not a watchdog-triggered runner "cancelled" (that would
+		// terminalize CANCELLED instead of the expiry path's retry policy).
+		select {
+		case <-lost:
+			d.logger.Printf("%v: lease lost while processing; not acknowledging", fields)
+			return
+		default:
+		}
+		// #369: feed the liveness watch AND mirror coarse phase + position to
+		// the jobs row on every change — the operator-visible "stille Arbeit
+		// vs Hänger" distinction the wave incident lacked. Only observations
+		// that CARRY a signal count: the terminal poll (no stage, no progress)
+		// must neither reset the watch nor wipe the mirrored columns.
+		if st.Stage != "" || st.Progress != nil {
+			units := 0
+			total := 0
+			if st.Progress != nil {
+				units = st.Progress.CompletedUnits
+				total = st.Progress.TotalUnits
+			}
+			if watch.observe(st.Stage, units) {
+				if err := d.rep.UpdateJobProgress(ctx, ref, st.Stage, units, total); err != nil {
+					if isLost(err) {
+						d.logger.Printf("%v: progress mirror lost lease; not acknowledging", fields)
+						return
+					}
+					d.logger.Printf("%v: progress mirror: %v", fields, err)
+				}
+			}
+		}
 		switch st.Status {
 		case "completed":
 			ph.complete = time.Now()
@@ -265,15 +372,21 @@ func (d *Dispatcher) pollAndFinish(ctx context.Context, claimed *repo.ClaimedJob
 			return
 		default: // accepted, running, advisory in-progress states
 			// #167: observe a stage transition across polls (poll-delta). The
-			// stage name doubles as a light progress hint; a full progress
-			// contract is the runner's (x236).
+			// stage name doubles as a light progress hint; #369 appends the
+			// position when the runner reports one (page N of M style).
 			if st.Stage != lastStage {
 				lastStage = st.Stage
 				if st.Stage != "" {
+					hint := st.Stage
+				if st.Progress != nil && st.Progress.TotalUnits > 0 {
+						hint = fmt.Sprintf("%s %d/%d %s", st.Stage,
+							st.Progress.CompletedUnits, st.Progress.TotalUnits,
+							st.Progress.Unit)
+					}
 					d.publish(events.JobStageChanged{
 						JobID:        ref.JobID,
 						Stage:        st.Stage,
-						ProgressHint: st.Stage,
+						ProgressHint: hint,
 					})
 				}
 			}
@@ -467,7 +580,16 @@ func (d *Dispatcher) onCompleted(ctx context.Context, claimed *repo.ClaimedJob, 
 // renewal window. Transient renew failures are logged and retried (the lease
 // may still be alive); a lost lease closes `lost` once so the poll loop stops
 // early — the claim scan's expired-recovery then owns the row.
-func (d *Dispatcher) renewLoop(ctx context.Context, ref repo.LeaseRef, fields []any, lost chan struct{}) {
+//
+// #369 progress coupling: renewal requires progress EVIDENCE, not mere
+// holder existence. When the observed signature (stage change or position
+// advance) is older than NoProgressLimit, renewal stops and the runner job
+// gets a best-effort Cancel (orphan compute stop). The row keeps its true
+// 'processing' state; the claim scan's EXISTING expired-recovery then evicts
+// (retry while attempts remain, LEASE_EXHAUSTED at the ceiling) and the lane
+// frees — identical semantics to a crashed worker, by construction. A zero
+// NoProgressLimit disables the watchdog (unconditional renewal).
+func (d *Dispatcher) renewLoop(ctx context.Context, ref repo.LeaseRef, fields []any, lost chan struct{}, watch *progressWatch, attempt int) {
 	ticker := time.NewTicker(jitter(d.cfg.RenewalInterval))
 	defer ticker.Stop()
 	for {
@@ -475,6 +597,28 @@ func (d *Dispatcher) renewLoop(ctx context.Context, ref repo.LeaseRef, fields []
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if d.cfg.NoProgressLimit > 0 {
+				if stall := watch.stalledFor(); stall > d.cfg.NoProgressLimit {
+					d.logger.Printf(
+						"%v: no progress for %s (stage %q frozen) — watchdog eviction (no-progress bound #369)",
+						fields, stall.Round(time.Second), watch.lastStage())
+					// Self-evict through the EXISTING retry path (pending + backoff,
+					// RETRY_EXHAUSTED at the ceiling): frees the lane immediately. A
+					// bare stopped renewal would leave the row 'processing' until
+					// lease expiry AND the expired-first claim order would re-claim
+					// the same stalled row at once — thrashing the lane instead of
+					// moving on to healthy work.
+					d.scheduleRetry(ctx, ref, attempt, "NO_PROGRESS_STALLED",
+						fmt.Sprintf("no progress for %s (stage %q frozen)", stall.Round(time.Second), watch.lastStage()))
+					// Orphan compute stop (#369): the runner may still grind on the
+					// evicted job — terminate its process tree best-effort so no GPU
+					// burns without a consumer. A reclaim resubmit under the same
+					// idempotency key relaunches a cancelled runner entry.
+					d.cancelRunner(ref.JobID, fields)
+					close(lost) // exactly once: this is the only close site
+					return
+				}
+			}
 			if err := d.rep.RenewLease(ctx, ref, d.cfg.LeaseDuration); err != nil {
 				if isLost(err) {
 					d.logger.Printf("%v: renewal: lease lost", fields)

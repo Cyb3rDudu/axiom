@@ -821,15 +821,31 @@ def _relaunch_if_needed(job: Job) -> None:
     A job recovered from disk after a restart is `accepted` with no compute
     owner; without relaunch it would strand forever (W1). Dedup callers and
     startup both route through here so the work is picked up exactly once.
+
+    #369: a `cancelled` entry relaunches too. The dispatcher cancels a job
+    when its no-progress watchdog walks away (orphan compute stop); the
+    claim scan then evicts and the reclaim resubmits under the SAME
+    idempotency key. Without the relaunch that resubmit would dedup onto
+    the dead cancelled entry and the poll loop would see a terminal
+    "cancelled" — the retry the eviction policy promised would silently
+    degrade to a cancel. Operator cancels are unaffected: their rows are
+    terminal `cancelled` in the DB and never claimed again, so nothing
+    resubmits them.
     """
-    if job.status not in ("accepted", "running"):
+    if job.status not in ("accepted", "running", "cancelled"):
         return
     if _scheduler().is_relevant(job.job_id):
         return  # already queued/running
-    if job.status == "running":
-        # A prior owner died mid-run; demote to accepted before relaunch so we
-        # do not double-count and so set_status transitions stay valid.
-        _store_impl().set_status(job, "accepted", stage="")
+    if job.status in ("running", "cancelled"):
+        # A prior owner died mid-run (or was cancelled by the dispatcher's
+        # watchdog); demote to accepted before relaunch so we do not
+        # double-count and set_status transitions stay valid. Cancelled
+        # needs the explicit reset — set_status's cancellation-wins guard
+        # blocks resurrection by design.
+        if job.status == "running":
+            _store_impl().set_status(job, "accepted", stage="")
+        else:
+            _store_impl().reset_for_relaunch(job)
     _launch_compute(job)
 
 

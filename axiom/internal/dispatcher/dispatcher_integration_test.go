@@ -258,6 +258,18 @@ type fakeProcessor struct {
 	ackHits       int
 	ackFailures   int // remaining /v1/ack calls that should return 500
 	cancelHits    int
+	// #369 progress shapes for in-progress statuses: progressStep makes
+	// the position advance by N per poll (legit slow work in ONE stage);
+	// frozenProgress pins it (the stalled holder). pollCount feeds both.
+	progressStep   int
+	frozenProgress int
+	pollCount      atomic.Int32
+	// stallJobID, when non-empty, forces THAT job's status to running with
+	// a frozen position forever (the hung-job shape for lane-fairness probes);
+	// every OTHER job completes after two polls.
+	stallJobID string
+	// healthyPolls counts per-job in-progress polls for the stallJobID mode.
+	healthyPolls map[string]int
 }
 
 func newFakeProcessor(t *testing.T) *fakeProcessor {
@@ -357,6 +369,39 @@ func (fp *fakeProcessor) serve(w http.ResponseWriter, r *http.Request) {
 		if len(fp.stages) > idx {
 			if s := fp.stages[idx]; s != "" {
 				status["stage"] = s
+			}
+		}
+		// #369: progress payloads on in-progress statuses.
+		if st == "running" || st == "accepted" {
+			n := int(fp.pollCount.Add(1))
+			switch {
+			case fp.stallJobID != "" && jobID == fp.stallJobID:
+				status["stage"] = "captions"
+				status["progress"] = map[string]any{"completed_units": 7, "total_units": 100, "unit": "images"}
+			case fp.stallJobID != "":
+				// fairness mode: the healthy sibling completes deterministically
+				// after two polls, independent of the shared status script.
+				fp.mu.Lock()
+				if fp.healthyPolls == nil {
+					fp.healthyPolls = map[string]int{}
+				}
+				fp.healthyPolls[jobID]++
+				polls := fp.healthyPolls[jobID]
+				fp.mu.Unlock()
+				if polls > 2 {
+					status["status"] = "completed"
+					break
+				}
+				status["stage"] = "convert"
+				status["progress"] = map[string]any{"completed_units": polls, "total_units": 2, "unit": "pages"}
+			case fp.frozenProgress > 0:
+				if len(fp.stages) <= idx || fp.stages[idx] == "" {
+					status["stage"] = "captions"
+				}
+				status["progress"] = map[string]any{"completed_units": fp.frozenProgress, "total_units": 100, "unit": "images"}
+			case fp.progressStep > 0:
+				status["stage"] = "captions"
+				status["progress"] = map[string]any{"completed_units": n * fp.progressStep, "total_units": 1000, "unit": "images"}
 			}
 		}
 		writeJSON(w, 200, status)
