@@ -671,15 +671,17 @@ The 0.2.0 code runs against your existing database shape today (the
 Zotero-sync lane stays wired in shared-database shapes — see persistence
 profiles above). The operational cutover — adopting the existing corpus in
 place, no reprocessing — is the Data Migration track (#310–#321): a
-backend-neutral bundle format, Library export/import/verify, shadow
-reads, and an automated cutover with rollback (plus the read-only
-adoption check `VerifyAdoption` — all removed with the window, #367).
-Its runbook ships with the release
-train once the cutover rehearsals are done; until then there is **no
-operator action** — and nothing in this guide depends on it.
+backend-neutral bundle format, Library export/import/verify, and a
+window machinery around it — shadow reads, the automated cutover with
+rollback, and the read-only adoption check `VerifyAdoption`. The
+window machinery is REMOVED with #367; the bundle format and the
+Library data commands remain. Until then there was **no operator
+action** — and nothing in this guide depends on it.
 
 The bundle format and the Library data commands HAVE shipped (DM03/DM04,
-#312/#313), and so has the shadow-read comparison (DM08, #317):
+#312/#313) and remain shipped. The shadow-read comparison (DM08, #317)
+shipped through the last 0.2x release and is removed with #367; its
+evidence lives on under `docs/diagnostics/`. The surviving surface:
 
 ```bash
 # write a bundle from a source database (read-only, one snapshot):

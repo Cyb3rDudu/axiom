@@ -15,6 +15,9 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/config"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/db"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/library/pglib"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/store/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -190,4 +193,67 @@ func TestIT_SQLiteLibraryProfileWithSyncRefused(t *testing.T) {
 		cfg.StorageLibraryDriver = "sqlite"
 		cfg.LibrarySQLitePath = filepath.Join(t.TempDir(), "library.sqlite")
 	}, "no Zotero mirror")
+}
+
+// TestMigrationIsolationLibraryVsStore — each component's migration set
+// creates ONLY its own namespace and ledger (the physical split's
+// structural witness; the shared core schema is the 0.1.x substrate both
+// build on today). The companion TestIT_SeparateLibraryPoolPerComponent
+// asserts the store database's library_* freedom; THIS one asserts the
+// other direction — a Library-only database carries no Store tables —
+// plus the store-only database's library_* freedom.
+func TestMigrationIsolationLibraryVsStore(t *testing.T) {
+	ctx := context.Background()
+
+	libPool, libDSN, libCleanup := freshScratch(t, "libonly")
+	defer libCleanup()
+	if core, err := db.Open(ctx, libDSN); err != nil {
+		t.Fatalf("core open (library side): %v", err)
+	} else if err := core.Migrate(ctx); err != nil {
+		t.Fatalf("core migrate (library side): %v", err)
+	} else {
+		core.Close()
+	}
+	if err := pglib.Migrate(ctx, libPool); err != nil {
+		t.Fatalf("library migrate: %v", err)
+	}
+	// The Library-only database carries NO Store ledger …
+	var n int
+	if err := libPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM pg_tables WHERE schemaname='public' AND tablename='store_schema_migrations'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("the Library engine created the STORE ledger — isolation broken")
+	}
+	// … and NO Store tables at all (the whole store_* namespace, not
+	// just the ledger).
+	if err := libPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'store\_%' ESCAPE '\'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("the Library engine created STORE tables — isolation broken")
+	}
+
+	storePool, storeDSN, storeCleanup := freshScratch(t, "storeonly")
+	defer storeCleanup()
+	if core, err := db.Open(ctx, storeDSN); err != nil {
+		t.Fatalf("core open (store side): %v", err)
+	} else if err := core.Migrate(ctx); err != nil {
+		t.Fatalf("core migrate (store side): %v", err)
+	} else {
+		core.Close()
+	}
+	if err := migrations.Migrate(ctx, storePool); err != nil {
+		t.Fatalf("store migrate: %v", err)
+	}
+	// The Store-only database carries NO Library tables at all.
+	if err := storePool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'library\_%' ESCAPE '\'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("the Store engine created LIBRARY tables — isolation broken")
+	}
 }

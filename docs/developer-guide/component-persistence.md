@@ -111,7 +111,8 @@ mapping oracle fails on vocabulary drift between the backend report and
 the Store's five fields. The backend may carry report-only extras
 (`sparse`) — documented, folded under `bm25` in the Store vocabulary.
 
-## 4. DM handover points (Data Migration track)
+## 4. Persistence-lane facts (the DM handover points retired with the
+   cutover window, #367)
 
 - **Mits-Schreib lane** — wired ONLY for shared-database shapes
   (`AXIOM_LIBRARY_DATABASE_URL` unset or identical to the core DSN);
