@@ -1,5 +1,5 @@
 {
-  "note": "#351 re-anchored trace suite: the 20 VWL/ORG_HA verified entries formerly carried inside v2.1 (v2 base retired — its 25 proposal queries duplicated the book-level gold_suite.json, its 7 z-entries became gold_suite_z.json). Anchors re-resolved globally against the current active chunks; scope = resolved document. Passage-level scoring like the z-suite.",
+  "note": "#351 re-anchored trace suite: the 20 VWL/ORG_HA verified entries formerly carried inside v2.1 (v2 base retired — its 25 proposal queries duplicated the book-level gold_suite.json, its 7 z-entries became gold_suite_z.json). Anchors re-resolved against the current active chunks, each pinned to its pre-rechunk scope document (#200 convention: scopes unchanged); an unexpected anchor miss is fatal, o9 stays the one honest skip. Passage-level scoring like the z-suite. Known quirk kept for scope stability: w14 resolves to the Kompakt-Lexikon Internationale Wirtschaft (the original run's global first-hit), not the Mankiw/Taylor volume named in the trace — documented in RETRIEVAL_BENCHMARK.md.",
   "queries": [
     {
       "id": "w1",
@@ -51,10 +51,10 @@
       "confirmed": true,
       "origin": "v21-trace:Bofinger",
       "scope_document_ids": [
-        "6da80515-37e6-49b5-ac39-723d26d1a66f"
+        "c4dc0951-262d-4db5-98c7-e7061c94a6dc"
       ],
       "gold_chunk_ids": [
-        "2c993c7a-19ea-4a03-b159-be09a13ca304"
+        "9e1f3077-e199-4a0e-b2d2-6de2c076ec23"
       ]
     },
     {
