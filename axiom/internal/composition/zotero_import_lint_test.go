@@ -53,8 +53,6 @@ const zoteroAdapterImport = "github.com/Cyb3rDudu/axiom/axiom/internal/zoteropro
 //	                         gateway surface; leaves with F11
 //	internal/baseline        F01 scaffolding probes the frozen surface
 //	                         (test-only package)
-//	cmd/meta-backfill        the legacy CLI bridge; leaves with the
-//	                         backfill retirement
 var zoteroImportAllowance = []string{
 	"internal/zoteroprovider/",
 	"internal/composition/",
@@ -63,7 +61,6 @@ var zoteroImportAllowance = []string{
 	"internal/library/mirror/",
 	"internal/server/",
 	"internal/baseline/",
-	"cmd/meta-backfill/",
 }
 
 type zoteroImportViolation struct {

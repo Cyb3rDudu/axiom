@@ -8,6 +8,17 @@ deployment artifacts per topology, and collects the 0.2.0 troubleshooting
 patterns. The [clean-machine walkthrough](#clean-machine-walkthrough) at the
 end proves the guide carries a fresh system from zero to a search hit.
 
+> **Historical document — the migration tools are gone.** This guide
+> describes the 0.1.x → 0.2.x migration as it shipped. The one-shot
+> migration machinery — `axiom data cutover`/`rollback` (DM09), `axiom data
+> shadow` (DM08), and the five corpus retrofit backfill binaries
+> (`caption-`/`figcap-`/`locator-`/`meta-`/`sparse-backfill`) — was shipped
+> through the last 0.2x release and is **removed from the codebase**
+> (#367); the Git history conserves it, and the rehearsal evidence lives on
+> under `docs/diagnostics/`. `axiom data export/import/verify` —
+> backup, restore, portability — remain. New installations never needed
+> the migration tools: every fresh document gets the full pipeline.
+
 ## What changed — and what did not
 
 0.2.0 decomposes the previous single-process system into named components

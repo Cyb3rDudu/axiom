@@ -31,8 +31,8 @@
 #      carry a scheme (http:// or https://) and a hostname or IPv4 host —
 #      IPv6 literals are not matched by the netrc host form.
 #
-# Preconditions beyond the stopped RAG: no backfill or rescan tool may run
-# either (caption/figcap/sparse backfills and locator_rescan bulk-write
+# Preconditions beyond the stopped RAG: no rescan tool may run
+# either (locator_rescan bulk-write
 # against search.IndexName and would auto-create the canonical index,
 # refusing the rerun). If rows drained during a premature boot reached the
 # terminal state, the documented requeue (repo/outbox.go) replays them

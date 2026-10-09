@@ -27,11 +27,9 @@ func TestDataUsageErrors(t *testing.T) {
 		{"import two targets", []string{"import", "--component", "library", "--from", "y", "--dsn", "a", "--sqlite", "b"}, exitUsage},
 		{"import missing from", []string{"import", "--component", "library", "--dsn", "a"}, exitUsage},
 		{"verify no target", []string{"verify", "--component", "library", "--from", "y"}, exitUsage},
-		{"shadow missing source", []string{"shadow", "--component", "library", "--dsn", "a", "--out", "r"}, exitUsage},
-		{"shadow no target", []string{"shadow", "--component", "library", "--source-dsn", "s", "--out", "r"}, exitUsage},
-		{"shadow two targets", []string{"shadow", "--component", "library", "--source-dsn", "s", "--dsn", "a", "--sqlite", "b", "--out", "r"}, exitUsage},
-		{"shadow missing out", []string{"shadow", "--component", "library", "--source-dsn", "s", "--dsn", "a"}, exitUsage},
-		{"shadow negative samples", []string{"shadow", "--component", "library", "--source-dsn", "s", "--dsn", "a", "--out", "r", "--max-samples", "-1"}, exitUsage},
+		{"removed verb shadow", []string{"shadow", "--component", "library"}, exitUsage},
+		{"removed verb cutover", []string{"cutover"}, exitUsage},
+		{"removed verb rollback", []string{"rollback"}, exitUsage},
 		{"unknown component", []string{"export", "--component", "store", "--dsn", "x", "--out", "y"}, exitUsage},
 		{"positional junk", []string{"verify", "--component", "library", "--from", "y", "--dsn", "a", "junk"}, exitUsage},
 	}
@@ -69,38 +67,19 @@ func TestDataExportRuntimeFailureSanitized(t *testing.T) {
 	}
 }
 
-// TestDataShadowRuntimeFailureSanitized — the shadow leg carries the
-// same discipline: an unreachable source is a runtime failure (exit 1)
-// whose output carries NO DSN credential material.
-func TestDataShadowRuntimeFailureSanitized(t *testing.T) {
-	const secret = "super-secret-password"
-	rds, wrs, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldStderr := os.Stderr
-	os.Stderr = wrs
-	code := cmdData("axiom", []string{"shadow", "--component", "library",
-		"--source-dsn", "postgresql://axiom_user:" + secret + "@127.0.0.1:1/none?sslmode=disable",
-		"--dsn", "postgresql://axiom_user:x@127.0.0.1:1/none?sslmode=disable",
-		"--out", t.TempDir() + "/shadow-report.json"})
-	os.Stderr = oldStderr
-	wrs.Close()
-	out, _ := io.ReadAll(rds)
-	if code != exitFailure {
-		t.Fatalf("exit = %d, want %d", code, exitFailure)
-	}
-	if strings.Contains(string(out), secret) {
-		t.Fatal("failure output leaked the DSN password")
-	}
-}
-
-// TestDataHelpSurface — the help text documents the data family.
+// TestDataHelpSurface — the help text documents the data family and
+// ONLY the three living verbs (the cutover/shadow/rollback surface
+// retired with #367 — a lingering mention would be a ghost ad).
 func TestDataHelpSurface(t *testing.T) {
 	h := help("axiom")
-	for _, want := range []string{"data export", "data import", "data verify", "data shadow", "DM03", "DM04"} {
+	for _, want := range []string{"data export", "data import", "data verify", "DM03", "DM04"} {
 		if !strings.Contains(h, want) {
 			t.Fatalf("help lacks %q", want)
+		}
+	}
+	for _, banned := range []string{"data shadow", "data cutover", "data rollback"} {
+		if strings.Contains(h, banned) {
+			t.Fatalf("help still advertises the removed %q", banned)
 		}
 	}
 }

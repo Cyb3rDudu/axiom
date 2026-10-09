@@ -237,14 +237,6 @@ jobs:
         env:
           AXIOM_REQUIRE_DRILL: "1"
         run: go test -count=1 -v ./internal/databundle
-      # DM09 (#318): the cutover/rollback rehearsal chain — full window
-      # against seeded scratch databases (confirmation teeth, stuck-lease
-      # sondes, mid-cutover resume, FK drops, post-write rollback with
-      # idempotent re-apply). Same scratch-DB convention as databundle.
-      - name: "data cutover rehearsal (engine: postgres)"
-        env:
-          AXIOM_REQUIRE_DRILL: "1"
-        run: go test -count=1 -v ./internal/cutover
 
   library-engine-sqlite:
     runs-on: ubuntu-latest
@@ -268,13 +260,6 @@ jobs:
       # tests skip by DSN absence — that skip IS this leg's point).
       - name: "data bundle roundtrip (engine: sqlite, PG-free)"
         run: go test -count=1 -v ./internal/databundle
-      # DM09 (#318): the cutover package's DB-free teeth (plan
-      # validation, delta arithmetic, anchor discriminator, env
-      # compatibility, config backup→switch→revert) must run green
-      # with no PostgreSQL anywhere; the PG-gated rehearsal skips by
-      # DSN absence — that skip is this leg's point.
-      - name: "data cutover unit teeth (PG-free)"
-        run: go test -count=1 -v ./internal/cutover
 
   # --- F14 #308: deployment-topology witnesses --------------------------------
   # The split-process leg: the SAME functional gates as the dev-host

@@ -200,9 +200,9 @@ leg_go_db_it() { # runs under the dbshared lock (call site)
     done
     # CI-fidelity: the go-db-it job's checkout has NO compute-worker venv,
     # so engine-backed suites that auto-detect one skip there. Cloak the
-    # venv for this leg so the local leg runs the same proven set (a
-    # venv-equipped checkout currently runs the backfill engine ITs,
-    # which CI never executes). Restored even on failure; setup re-heals
+    # venv for this leg so the local leg runs the same proven set (the
+    # backfill engine ITs retired with #367; the cloak keeps the local
+    # leg CI-fidelity honest). Restored even on failure; setup re-heals
     # a cloak left by a killed run.
     local venv="$REPO/axiom-compute-worker/.venv" rc=0
     if [ -d "$venv" ] && [ -d "$venv.cloaked-by-ci-local" ]; then
@@ -250,10 +250,6 @@ leg_library_engine_postgres() {
         go_env AXIOM_TEST_DATABASE_URL="$IT_DSN" \
             go test -p 1 -count=1 -v ./internal/databundle || rc=$?
     fi
-    if [ "$rc" -eq 0 ]; then
-        go_env AXIOM_TEST_DATABASE_URL="$IT_DSN" \
-            go test -p 1 -count=1 -v ./internal/cutover || rc=$?
-    fi
     return "$rc"
 }
 
@@ -265,9 +261,6 @@ leg_library_engine_sqlite() { # PG-free is the point: no DSN anywhere
         -run 'TestRepositoryContractSuite|TestSkipGuardProbes' || rc=$?
     if [ "$rc" -eq 0 ]; then
         go_env go test -p 1 -count=1 ./internal/databundle || rc=$?
-    fi
-    if [ "$rc" -eq 0 ]; then
-        go_env go test -p 1 -count=1 ./internal/cutover || rc=$?
     fi
     return "$rc"
 }

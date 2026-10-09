@@ -1,4 +1,0 @@
-build/
-*.bin
-py_dense*
-diag_corr.py
