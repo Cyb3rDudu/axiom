@@ -37,7 +37,9 @@ identical citation outcome (exact page) without touching a single ranking-releva
 
 ## Retrieval baseline at stake
 
-The R7/R7b measurements (gold_suite_v21, 52 entries, reproducible via
+The R7/R7b measurements (gold_suite_v21, 52 entries at the time — since #351 a
+standalone 20-entry re-anchored trace suite; the historical 52-entry stand is
+documented in RETRIEVAL_BENCHMARK.md, reproducible via
 `cmd/retrieval-bench`): P@1 0.615, hit@5 0.808, MRR 0.702, hit@10 0.865 at CURRENT
 chunk sizes, plus the hygiene flip-sonde suite (K1–K6). The tuned config won on these
 measurements; any resize resets the evidence to zero and must re-earn the numbers on a

@@ -75,10 +75,7 @@ func main() {
 	mdPath := flag.String("md", "", "write a markdown report to this path")
 	perqPath := flag.String("perq", "", "write per-query records (JSON lines) to this path — #160 evidence: per-query P@1 + frontmatter-in-top5 flags")
 	suitePath := flag.String("suite", "cmd/retrieval-bench/gold_suite.json", "gold suite file")
-	propose := flag.Bool("propose", false, "v2 proposal mode: scope each query to its confirmed gold books, run scoped retrieval, emit passage proposals (JSON + yes/no list)")
-	materialize21 := flag.Bool("materialize21", false, "v2.1: extend gold_suite_v2 with trace-verified VWL/ORG_HA entries -> gold_suite_v21.json")
-	_ = materialize21
-	materialize := flag.Bool("materialize", false, "v2 materialization: apply dudu's decisions to the proposals + anchor-resolve z1-z7, write gold_suite_v2.json")
+	reanchorTrace := flag.Bool("reanchor-trace", false, "#351: re-anchor the 20 trace-verified VWL/ORG_HA entries against the current active chunks -> gold_suite_v21.json (standalone; v2 base retired)")
 	flag.Parse()
 	lg := log.New(os.Stderr, "bench: ", 0)
 
@@ -100,11 +97,7 @@ func main() {
 		fatal("suite mixes %d book-level and %d passage-level entries — one suite, one mode", bookN, chunkN)
 	}
 
-	if *propose {
-		runPropose(context.Background(), suite, *suitePath)
-		return
-	}
-	if *materialize21 {
+	if *reanchorTrace {
 		dbURL := os.Getenv("AXIOM_TEST_DATABASE_URL")
 		if dbURL == "" {
 			fatal("AXIOM_TEST_DATABASE_URL required")
@@ -114,25 +107,9 @@ func main() {
 			fatal("postgres: %v", err)
 		}
 		defer database.Close()
-		if err := materializeV21(context.Background(), database, filepath.Dir(*suitePath)); err != nil {
-			fatal("materialize21: %v", err)
+		if err := materializeTrace(context.Background(), database, filepath.Dir(*suitePath)); err != nil {
+			fatal("reanchor-trace: %v", err)
 		}
-		return
-	}
-	if *materialize {
-		dbURL := os.Getenv("AXIOM_TEST_DATABASE_URL")
-		if dbURL == "" {
-			fatal("AXIOM_TEST_DATABASE_URL required (z-anchor resolution)")
-		}
-		database, err := db.Open(context.Background(), dbURL)
-		if err != nil {
-			fatal("postgres: %v", err)
-		}
-		defer database.Close()
-		if err := materializeV2(context.Background(), database, filepath.Dir(*suitePath)); err != nil {
-			fatal("materialize: %v", err)
-		}
-		fmt.Println("gold_suite_v2.json materialisiert")
 		return
 	}
 
