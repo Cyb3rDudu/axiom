@@ -4,10 +4,10 @@
 
 | Suite | Granularität | Status |
 |---|---|---|---
-| `gold_suite.json` | Buch-Ebene, 25 Queries, dudu-bestägtigt | **aktiv** — Regressionwache |
+| `gold_suite.json` | Buch-Ebene, 25 Queries, dudu-bestätigt | **aktiv** — Regressionwache |
 | `gold_suite_z.json` | Passagen-Ebene, z1–z7, #200 re-anchort | **aktiv** — Reranker-Burial-Pin (z2 Rang 1, z7 top-10) |
 | `gold_suite_v2.json` | Passagen-Ebene, 32 Entries | **stillgelegt (#351)** — Datei entfernt |
-| `gold_suite_v21.json` | Passagen-Ebene | **re-anchort (#351)** — jetzt standalone 20 Trace-Entries |
+| `gold_suite_v21.json` | Passagen-Ebene, 20 Trace-Entries | **re-anchort (#351)** — scope-gepinnt auf die Vor-Rechunk-Dokumente |
 
 Begründung: Nach dem W9-Rechunk existierte keiner der v2/v21-Gold-Chunk-IDs
 (0/52 verifiziert gegen den Live-Index; nur die z-Suite war #200-re-anchort).
@@ -18,8 +18,14 @@ z-Suite — beide Granularitäten sind anderweitig bewacht. v2.1 trug dagegen
 ORG_HA: Kett/Schreyögg/VDMA/NIS2/Hungenberg/DORA/Prozess/Soziotechnik),
 die in KEINER anderen Suite existieren — deshalb re-anchor statt stilllegen.
 Die 20 Anker lösen per `-reanchor-trace` (Suchanker-SQL, #155/#200-Konvention)
-gegen die aktuellen aktiven Chunks; o9 (Umweltsphären) bleibt ehrlich
-übersprungen (Anker nicht im Korpus, wie schon beim Original-Lauf).
+gegen die aktuellen aktiven Chunks — **jeder auf sein Vor-Rechunk-Scope-Dokument
+gepinnt** (#200-Konvention: Scopes bleiben unverändert; ein freier globaler
+First-Hit hätte w5 auf ein fremdes Vorlesungstranskript gelenkt, das den Anker
+nur zitiert); o9 (Umweltsphären) bleibt ehrlich übersprungen (Anker nicht im
+Korpus, wie schon beim Original-Lauf). Bekannter, zwecks Scope-Stabilität
+bewahrter Quirk: w14 löst auf das Kompakt-Lexikon Internationale Wirtschaft
+auf — der globale First-Hit des Original-Laufs, nicht der im Trace genannte
+Mankiw/Taylor-Band.
 Die v2/v2.1-Messungen weiter unten sind **historische Stände** gegen den
 jeweiligen damaligen Korpus — nicht gegen den Live-Index reproduzierbar.
 
@@ -29,7 +35,7 @@ Lauf: 2026-08-16, lokal (Mac, MPS fp32), echter OS-Index (4.813 Chunks), echter 
 `AXIOM_TEST_DATABASE_URL=… AXIOM_PROCESSOR_URL=http://127.0.0.1:8012 go run ./cmd/retrieval-bench -md out.md`
 
 | Konfiguration | P@5 | MRR | R@10 | p50 | p95 | Fehler |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|
 | dense-only | **0.680** | **0.865** | 0.967 | 71 ms | 85 ms | 0 |
 | hybrid (dense+bm25) | 0.608 | 0.815 | **0.987** | 69 ms | 90 ms | 0 |
 | hybrid+rerank | 0.616 | 0.818 | 0.967 | 6.38 s | 7.18 s | 0 |
