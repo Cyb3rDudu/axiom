@@ -796,6 +796,18 @@ func (d *Dispatcher) preflightGate(ctx context.Context, claimed *repo.ClaimedJob
 		d.logger.Printf("%v: preflight skipped — no local source path available", fields)
 		return false // proceed: no bytes to assess
 	}
+	// #365 zombie guard: the rendition may have been REPLACED while this
+	// job sat queued behind the lane — a defect verdict (and repair case)
+	// for a file that no longer exists is noise; the replacement's own job
+	// is the live truth. Obsolete instead (same shape the claim's
+	// deleted-rendition guard uses).
+	if deleted, derr := d.rep.AttachmentProjectionDeleted(ctx, claimed.AttachmentID); derr == nil && deleted {
+		d.logger.Printf("%v: rendition deleted (replaced) while queued — obsoleting instead of preflighting a dead file", fields)
+		if err := d.rep.MarkSkipped(ctx, ref, "rendition deleted (replaced)"); err != nil && !isLost(err) {
+			d.logger.Printf("%v: mark obsolete: %v", fields, err)
+		}
+		return true // handled: never submit, never repair-case
+	}
 	// local_path may carry a file:// prefix (Zotero convention) — strip it
 	// before reading, mirroring the repair orchestrator's TrimPrefix pattern.
 	local := strings.TrimPrefix(req.Attachment.LocalPath, "file://")

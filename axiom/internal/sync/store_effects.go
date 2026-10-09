@@ -162,6 +162,46 @@ func buildSyncRevision(sourceID string, r mirror.SyncRendition, b bibRow) revisi
 	return rev
 }
 
+// buildHealRevision assembles the revision intake artifact for the
+// self-heal sweep from the STORE projection row (the flattened creators/
+// tags arrays — the same SourceRevision shape buildSyncRevision publishes,
+// so the identity dedup unifies heal-key and sync-key rows for live jobs).
+func buildHealRevision(u repo.UnservedRendition) revision.SourceRevision {
+	class := u.CitationClass
+	if class != revision.CitationClassContextual {
+		class = revision.CitationClassCitable
+	}
+	media := u.ContentType
+	if media == "" {
+		media = revision.MediaTypePDF
+	}
+	var authors []string
+	_ = json.Unmarshal(u.Creators, &authors)
+	var tags []string
+	_ = json.Unmarshal(u.Tags, &tags)
+	return revision.SourceRevision{
+		SourceID:    u.SourceID,
+		RevisionID:  strconv.FormatInt(u.Version, 10),
+		RenditionID: u.RenditionKey,
+		ContentHash: u.Hash,
+		MediaType:   media,
+		Bibliography: revision.Bibliography{
+			RecordID:      u.RecordKey,
+			Title:         u.Title,
+			Authors:       authors,
+			Year:          u.Year,
+			Publisher:     u.Publisher,
+			Language:      u.Language,
+			Tags:          tags,
+			CitationClass: class,
+		},
+		LocatorCapabilities: revision.LocatorCapabilities{
+			Page: &revision.PageCapability{Trust: revision.TrustPhysicalOnly},
+		},
+		ContentTicket: "zat:" + u.SourceID + ":" + u.RenditionKey,
+	}
+}
+
 // revisionFingerprint digests the canonical revision JSON into a short
 // stable key component (sha256, first 16 hex chars).
 func revisionFingerprint(revJSON []byte) string {
@@ -278,8 +318,62 @@ func (s *Service) applyStoreEffects(ctx context.Context, sourceID, serverID stri
 	if err != nil {
 		return 0, 0, err
 	}
+	// #365 self-heal sweep: live preferred renditions that serve nothing
+	// and have no work in flight get their intake HERE — the changed-set
+	// alone can never re-offer them (the production replacement gap: the
+	// new rendition's job died terminally while queued and two subsequent
+	// no-change syncs enqueued nothing; only a force-rebuild unblocked the
+	// document). The sweep's key derives from the projection content
+	// (deterministic: replays no-op, terminal failures re-open), and the
+	// identity dedup unifies it with the changed-path key for live rows.
+	unserved, err := s.store.UnservedPreferredRenditionsTx(ctx, tx, sourceID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("unserved-rendition sweep: %w", err)
+	}
+	for _, u := range unserved {
+		if mirror.JobGated(selection, u.DocumentID) {
+			continue // excluded: no jobs from the sweep either (#166 parity)
+		}
+		rev := buildHealRevision(u)
+		revJSON, err := json.Marshal(rev)
+		if err != nil {
+			return 0, 0, fmt.Errorf("marshal heal revision %s: %w", u.RenditionKey, err)
+		}
+		intakeKey := "sync:" + sourceID + ":" + u.RenditionKey + ":" + revisionFingerprint(revJSON)
+		_, minted, err := s.store.EnqueueRevisionIntakeTx(ctx, tx, repo.IntakeRequest{
+			IdempotencyKey:      intakeKey,
+			RevisionSourceID:    sourceID,
+			RevisionRecordID:    u.RecordKey,
+			RevisionRenditionID: u.RenditionKey,
+			RevisionNo:          rev.RevisionID,
+			ContentHash:         u.Hash,
+			RevisionJSON:        revJSON,
+		})
+		switch {
+		case err == nil:
+			if minted {
+				enqueued++
+				// the rendition's attachment uuid is on the projection row;
+				// the resolve reads it lazily at claim (NULL FKs are the
+				// revision-lane contract)
+			}
+		case errors.Is(err, repo.ErrIntakeSuppressed):
+			// served after all (raced a concurrent completion) — honest no-op
+		case errors.Is(err, repo.ErrIntakeKeyMismatch):
+			return 0, 0, fmt.Errorf("heal intake key mismatch for %s: %w", u.RenditionKey, err)
+		default:
+			return 0, 0, fmt.Errorf("heal intake %s: %w", u.RenditionKey, err)
+		}
+	}
 	if err := s.store.MarkProjectionsDeletedTx(ctx, tx, res.DeletedAttachmentIDs); err != nil {
 		return 0, 0, fmt.Errorf("mark deleted projections: %w", err)
+	}
+	// #365: a rendition deleted THIS sync takes its non-terminal jobs with
+	// it — a minted-while-live job must not zombie through a queued claim
+	// (preflight "defekt" on a replaced file, repair case for the dead
+	// rendition) while the replacement's own job is the live truth.
+	if err := s.store.RetireDeletedRenditionJobsTx(ctx, tx, res.DeletedAttachmentIDs); err != nil {
+		return 0, 0, fmt.Errorf("retire deleted-rendition jobs: %w", err)
 	}
 	if err := s.store.ReconcileAttachmentSnapshotsTx(ctx, tx); err != nil {
 		return 0, 0, fmt.Errorf("reconcile attachment snapshots: %w", err)

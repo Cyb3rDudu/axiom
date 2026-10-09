@@ -8,6 +8,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -131,6 +132,120 @@ func reactivateRestoredAttachmentsTx(ctx context.Context, tx pgx.Tx) error {
 		}
 	}
 	return nil
+}
+
+// AttachmentProjectionDeleted reports whether the rendition's projection
+// row is currently deleted — the dispatcher's preflight-time zombie guard
+// (#365): a job claimed just before its rendition got replaced must not
+// mint a defect verdict + repair case for a file that no longer exists;// the replacement's own job is the live truth.
+func (r *Repo) AttachmentProjectionDeleted(ctx context.Context, attachmentID string) (bool, error) {
+	var deleted bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT deleted FROM store_documents WHERE attachment_id=$1::uuid`, attachmentID).Scan(&deleted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil // no row = not known-deleted; the claim's guards own it
+	}
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
+// UnservedRendition is one live preferred projection row that serves
+// nothing and has no work in flight — the sync's self-heal offer set
+// (#365: the changed-set alone can never re-offer these).
+type UnservedRendition struct {
+	DocumentID  string
+	SourceID    string
+	RecordKey   string
+	RenditionKey string
+	Version     int64
+	Hash        string
+	Title       string
+	Creators    []byte // JSON string array (the projection's flattened form)
+	Year        *int
+	Publisher   string
+	Language    string
+	Tags        []byte // JSON string array
+	CitationClass string
+	ContentType   string
+}
+
+// UnservedPreferredRenditionsTx returns the source's live preferred
+// renditions that serve nothing (no active snapshot) and have no work in
+// flight (no pending/claimed/processing job under their revision
+// identity). The sync's self-heal sweep mints their intake — a terminally
+// dead job or a missed mint must not strand a document until an operator
+// force-rebuild (#365).
+func (r *Repo) UnservedPreferredRenditionsTx(ctx context.Context, tx pgx.Tx, sourceID string) ([]UnservedRendition, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT p.document_id::text, p.source_id::text, p.record_key, p.rendition_key, p.source_version,
+		       COALESCE(p.content_hash,''), p.title, p.creators, p.publication_year,
+		       p.publisher, p.language, p.tags, p.citation_class, p.content_type
+		FROM store_documents p
+		WHERE p.source_id::text = $1 AND p.deleted = false AND p.preferred = true
+		  AND p.content_hash IS NOT NULL AND p.content_hash <> ''
+		  AND NOT EXISTS (
+			SELECT 1 FROM processing_snapshots s
+			WHERE s.attachment_id = p.attachment_id AND s.active)
+		  AND NOT EXISTS (
+			SELECT 1 FROM ingest_jobs j
+			WHERE j.revision_source_id = p.source_id::text
+			  AND j.revision_rendition_id = p.rendition_key
+			  AND j.status IN ('pending','claimed','processing'))
+		  AND NOT EXISTS (
+			-- the attempt ceiling is a verdict, not a suggestion: a rendition
+			-- whose jobs burned all attempts at this content stays dead —
+			-- force-rebuild remains the operator escape (no per-sync thrash)
+			SELECT 1 FROM ingest_jobs x
+			WHERE x.revision_source_id = p.source_id::text
+			  AND x.revision_rendition_id = p.rendition_key
+			  AND x.content_hash = p.content_hash
+			  AND x.status = 'failed' AND x.attempt >= x.max_attempts)`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UnservedRendition
+	for rows.Next() {
+		var u UnservedRendition
+		if err := rows.Scan(&u.DocumentID, &u.SourceID, &u.RecordKey, &u.RenditionKey, &u.Version,
+			&u.Hash, &u.Title, &u.Creators, &u.Year, &u.Publisher, &u.Language,
+			&u.Tags, &u.CitationClass, &u.ContentType); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// RetireDeletedRenditionJobsTx (#365) obsoletes the non-terminal jobs of
+// renditions deleted THIS sync — in the same transaction as the projection
+// delete marks. A job minted while the rendition was live must not survive
+// as a zombie: claimed later (the lane may queue it for hours), it would
+// preflight a file that no longer exists and mint a repair case for a
+// rendition that was simply REPLACED (the production case: a wave-queued
+// job for a deleted attachment failed preflight "defekt/DRM" while its
+// replacement never processed). Identity match is by revision keys —
+// unclaimed revision jobs carry NULL attachment FKs until their first
+// claim. Idempotent: terminal rows are untouched.
+func (r *Repo) RetireDeletedRenditionJobsTx(ctx context.Context, tx pgx.Tx, attachmentIDs []string) error {
+	if len(attachmentIDs) == 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE ingest_jobs j SET
+			status='skipped', error_code='SKIPPED',
+			error_message='rendition deleted (replaced or removed)',
+			claimed_by=NULL, lease_token=NULL, lease_until=NULL,
+			next_attempt_at=NULL,
+			completed_at=COALESCE(completed_at, now()), updated_at=now()
+		FROM store_documents p
+		WHERE p.attachment_id = ANY($1::uuid[])
+		  AND p.rendition_key = j.revision_rendition_id
+		  AND p.source_id::text = j.revision_source_id
+		  AND j.status IN ('pending','claimed','processing')`, attachmentIDs)
+	return err
 }
 
 // WriteFailedJobsTx records file-resolution failures as terminal failed

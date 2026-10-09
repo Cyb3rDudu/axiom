@@ -90,6 +90,42 @@ func (r *Repo) EnqueueRevisionIntakeTx(ctx context.Context, tx pgx.Tx, req Intak
 	return r.enqueueRevisionIntake(ctx, tx, req)
 }
 
+// reopenFailedIntake (#365) re-arms a TERMINAL-FAILED intake row when the
+// same offer comes back: attempts must remain (an exhausted row keeps its
+// verdict — force-rebuild stays the escape for genuinely poison content)
+// and the content must not be served (the #294 suppression predicate,
+// mirrored). Returns true when the row was reopened to pending.
+// execQueryer is the union the reopen path needs: pool or caller-owned
+// transaction (same shape as the mint's queryer plus Exec).
+type execQueryer interface {
+	queryer
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func (r *Repo) reopenFailedIntake(ctx context.Context, ex execQueryer, existing *Job, req IntakeRequest) (bool, error) {
+	if existing.Status != "failed" || existing.Attempt >= existing.MaxAttempts {
+		return false, nil
+	}
+	tag, err := ex.Exec(ctx, `
+		UPDATE ingest_jobs SET
+			status='pending', attempt=0,
+			error_code=NULL, error_message=NULL, resolved_at=NULL,
+			next_attempt_at=NULL, claimed_by=NULL, lease_token=NULL, lease_until=NULL,
+			enqueued_at=now(), updated_at=now()
+		WHERE id=$1 AND status='failed' AND attempt < max_attempts
+		  AND NOT EXISTS (
+			-- #294 mirror: content already served = no re-offer
+			SELECT 1 FROM processing_snapshots s
+			JOIN store_documents p ON p.attachment_id = s.attachment_id
+			WHERE p.source_id::text = $2 AND p.rendition_key = $3
+			  AND p.deleted = false AND s.content_hash = $4 AND s.active)`,
+		existing.ID, req.RevisionSourceID, req.RevisionRenditionID, req.ContentHash)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (r *Repo) enqueueRevisionIntake(ctx context.Context, ex queryer, req IntakeRequest) (*Job, bool, error) {
 	// Intake-key idempotency precedes everything (the contract's
 	// precedence rule; validation happened in the service layer already).
