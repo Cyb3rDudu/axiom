@@ -40,7 +40,7 @@
 // (repo's pgx, composition's search.New) that must stay green.
 //
 // Out of scope (deliberate, documented): internal/server, cli,
-// backfill, baseline, composition are transport and scaffolding — they
+// baseline, composition are transport and scaffolding — they
 // WIRE engines and pools by trade; their engine freedom is F14's
 // topology work, not this gate.
 package store

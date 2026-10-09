@@ -21,7 +21,7 @@ COMPOSE_DIR="$REPO/deploy/container"
 COMPOSE_FILE="$COMPOSE_DIR/compose.topology.yml"
 COMPOSE="${AXIOM_TOPOLOGY_COMPOSE:-docker compose}"
 API="http://127.0.0.1:18111"
-FIXTURE="$REPO/axiom/internal/backfill/testdata/book.epub"
+FIXTURE="$REPO/axiom/testdata/book.epub"
 SEED_PATH_IN_CONTAINER="/srv/seed/book.epub"
 
 die() { echo "topology-smoke: $*" >&2; exit 1; }

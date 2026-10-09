@@ -110,7 +110,7 @@ func TestF09StoreIndependenceE2E(t *testing.T) {
 	// Tier-1 text layer, so the preflight quality gate passes; the
 	// runner-served PDFs of the corpus are scan-class and would exercise
 	// the repair track instead).
-	src, err := filepath.Abs("../../internal/backfill/testdata/book.epub")
+	src, err := filepath.Abs("../../testdata/book.epub")
 	if err != nil {
 		t.Fatal(err)
 	}

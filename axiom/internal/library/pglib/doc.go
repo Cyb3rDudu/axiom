@@ -9,8 +9,7 @@
 // mirror schema and its reads; a never-synced or pre-0004 database folds
 // mirror reads to absence, never an error.
 //
-// Boot order for the PostgreSQL profile: Migrate (own ledger), then
-// optionally VerifyAdoption — the read-only Bestands-DB check (fresh /
-// ledgered / refused verdicts; the DM cutover decides, never adopts
-// silently).
+// Boot order for the PostgreSQL profile: Migrate (own ledger). The
+// read-only adoption check (fresh / ledgered / refused verdicts) was
+// the DM09 window's hook and retired with it (#367).
 package pglib

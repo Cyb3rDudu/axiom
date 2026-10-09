@@ -1,7 +1,8 @@
 """#268 — figcap backfill engine (operational CLI).
 
-Pure computation surface of the figcap-backfill one-shot tool
-(cmd/figcap-backfill): re-runs the CAPTION EXTRACTION over already-stored
+Pure computation surface of the retired figcap-backfill one-shot tool
+(cmd/figcap-backfill, removed with #367; the engine stays as the shared
+caption-extraction surface): re-runs the CAPTION EXTRACTION over already-stored
 chunks of active snapshots and recomputes the dense vector of every chunk
 whose figure_captions actually change (added true captions, purged prose
 false positives). No re-ingest, no chunk mutation beyond the figure_captions

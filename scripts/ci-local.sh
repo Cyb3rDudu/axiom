@@ -198,36 +198,10 @@ leg_go_db_it() { # runs under the dbshared lock (call site)
     for db in axiom_mirror_it_test axiom_repair_test axiom_repo_test axiom_server_test; do
         drop_db_if_idle "$db" "fixed-name IT refresh"
     done
-    # CI-fidelity: the go-db-it job's checkout has NO compute-worker venv,
-    # so engine-backed suites that auto-detect one skip there. Cloak the
-    # venv for this leg so the local leg runs the same proven set (the
-    # backfill engine ITs retired with #367; the cloak keeps the local
-    # leg CI-fidelity honest). Restored even on failure; setup re-heals
-    # a cloak left by a killed run.
-    local venv="$REPO/axiom-compute-worker/.venv" rc=0
-    if [ -d "$venv" ] && [ -d "$venv.cloaked-by-ci-local" ]; then
-        # a live venv makes the stale cloak obsolete; plain mv would fold
-        # the live venv INTO the stale dir (POSIX dir-into-dir)
-        echo "ci-local: removing a stale venv cloak (live venv present)"
-        rm -rf "$venv.cloaked-by-ci-local"
-    fi
-    if [ -d "$venv" ]; then
-        if mv "$venv" "$venv.cloaked-by-ci-local"; then
-            echo "ci-local: compute-worker venv cloaked for go-db-it (CI shape)"
-        else
-            echo "ci-local: WARNING: venv cloak failed — running UNcloaked (engine ITs may run; CI parity lost for this leg)" >&2
-        fi
-    fi
+    local rc=0
     cd "$REPO/axiom" &&
         go_env AXIOM_TEST_DATABASE_URL="$IT_DSN" \
             go test -p 1 -count=1 ./... || rc=$?
-    if [ -d "$venv.cloaked-by-ci-local" ]; then
-        if mv "$venv.cloaked-by-ci-local" "$venv"; then
-            echo "ci-local: compute-worker venv restored"
-        else
-            echo "ci-local: WARNING: venv restore failed — cloak left in place; next run's setup re-heals it" >&2
-        fi
-    fi
     return "$rc"
 }
 
@@ -434,14 +408,6 @@ ensure_db() { # ensure_db <name>: create if missing (fresh and empty)
     podman exec "$DB_CONTAINER" createdb -U "$PGUSER" "$1"
 }
 
-scratch_heal_venv() { # under dbshared: restore a cloak orphaned by a killed leg
-    if [ -d "$REPO/axiom-compute-worker/.venv.cloaked-by-ci-local" ] &&
-        [ ! -d "$REPO/axiom-compute-worker/.venv" ]; then
-        mv "$REPO/axiom-compute-worker/.venv.cloaked-by-ci-local" "$REPO/axiom-compute-worker/.venv"
-        echo "ci-local: restored a cloaked compute-worker venv"
-    fi
-}
-
 scratch_ensure_baseline_db() { # under dbshared: the shared baseline fixture
     ensure_db "$BASELINE_DB"
 }
@@ -500,11 +466,10 @@ scratch_setup() { # derive DSNs, clean scratch, create the bases fresh
         return 1
     }
 
-    # shared-state work under the dbshared lock: the venv heal races a
-    # concurrent run's cloak dance, and ensure_db on the shared baseline
-    # fixture races that run's baseline leg (both hold the same lock).
-    # The own per-run base below is pid-unique and needs no lock.
-    with_runlock dbshared scratch_heal_venv
+    # shared-state work under the dbshared lock: ensure_db on the shared
+    # baseline fixture races a concurrent run's baseline leg (both hold
+    # the same lock). The own per-run base below is pid-unique and needs
+    # no lock.
     # own per-run base, fresh: a same-pid leftover from a crashed earlier
     # run is dropped first (idle-guarded); reused IT databases drift (42P10
     # on a phantom unique index) — runs never inherit database state

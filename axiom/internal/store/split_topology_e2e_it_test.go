@@ -326,7 +326,7 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 
 	// Fixture: the runner's own test corpus EPUB (always a Tier-1 text
 	// layer, so the preflight quality gate passes).
-	src, err := filepath.Abs("../../internal/backfill/testdata/book.epub")
+	src, err := filepath.Abs("../../testdata/book.epub")
 	if err != nil {
 		t.Fatal(err)
 	}

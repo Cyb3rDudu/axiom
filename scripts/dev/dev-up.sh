@@ -273,8 +273,6 @@ note "starting dev RAG on :$RAG_PORT …"
     # (deterministic fixtures; F07 replaces them with the Zotero ports).
     # Staging lives under the dev artifact root, isolated from prod.
     AXIOM_LIBRARY_IMPORT_PROVIDERS=fake
-    # runner-checkout discovery for engine-backed tools run against dev
-    AXIOM_RUNNER_DIR="$REPO/axiom-compute-worker"
     AXIOM_FIXER_INVOKER_ENABLED=0
     # never inherit prod's Zotero write credentials: point the key file at a
     # path that must not exist → repair API stays disabled in dev
@@ -284,7 +282,7 @@ note "starting dev RAG on :$RAG_PORT …"
     export AXIOM_DATABASE_URL AXIOM_API_PORT AXIOM_BIND_ADDR AXIOM_OS_INDEX \
         AXIOM_PROCESSOR_URLS AXIOM_PROCESSOR_URL AXIOM_QUERY_RUNNER_URL \
         AXIOM_PROCESSOR_SOURCE_BASE_URL AXIOM_PROCESSOR_RUNNER_NAME \
-        AXIOM_ARTIFACT_ROOT AXIOM_QUARANTINE_ROOT AXIOM_RUNNER_DIR \
+        AXIOM_ARTIFACT_ROOT AXIOM_QUARANTINE_ROOT \
         AXIOM_FIXER_INVOKER_ENABLED AXIOM_ZOTERO_WRITE_KEY_FILE \
         AXIOM_DISPATCHER_ENABLED AXIOM_DISPATCHER_WORKER_ID \
         AXIOM_LIBRARY_IMPORT_PROVIDERS
