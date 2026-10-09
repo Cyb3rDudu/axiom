@@ -1,5 +1,28 @@
 # Retrieval Benchmark (R7, #137)
 
+## Suiten-Inventur (#351, 2026-10-10)
+
+| Suite | Granularität | Status |
+|---|---|---|---
+| `gold_suite.json` | Buch-Ebene, 25 Queries, dudu-bestägtigt | **aktiv** — Regressionwache |
+| `gold_suite_z.json` | Passagen-Ebene, z1–z7, #200 re-anchort | **aktiv** — Reranker-Burial-Pin (z2 Rang 1, z7 top-10) |
+| `gold_suite_v2.json` | Passagen-Ebene, 32 Entries | **stillgelegt (#351)** — Datei entfernt |
+| `gold_suite_v21.json` | Passagen-Ebene | **re-anchort (#351)** — jetzt standalone 20 Trace-Entries |
+
+Begründung: Nach dem W9-Rechunk existierte keiner der v2/v21-Gold-Chunk-IDs
+(0/52 verifiziert gegen den Live-Index; nur die z-Suite war #200-re-anchort).
+v2 hatte **null einzigartigen Query-Inhalt**: seine 25 Proposal-Queries sind
+Duplikate der Buch-Level-Suite, seine 7 verified-Entries sind exakt die
+z-Suite — beide Granularitäten sind anderweitig bewacht. v2.1 trug dagegen
+**20 einzigartige trace-verifizierte Queries** (12 VWL Außenhandel + 8
+ORG_HA: Kett/Schreyögg/VDMA/NIS2/Hungenberg/DORA/Prozess/Soziotechnik),
+die in KEINER anderen Suite existieren — deshalb re-anchor statt stilllegen.
+Die 20 Anker lösen per `-reanchor-trace` (Suchanker-SQL, #155/#200-Konvention)
+gegen die aktuellen aktiven Chunks; o9 (Umweltsphären) bleibt ehrlich
+übersprungen (Anker nicht im Korpus, wie schon beim Original-Lauf).
+Die v2/v2.1-Messungen weiter unten sind **historische Stände** gegen den
+jeweiligen damaligen Korpus — nicht gegen den Live-Index reproduzierbar.
+
 Gold suite: 25 Queries (DE+EN; Konzept/Fakt/Norm/Autor), **25/25 von dudu bestätigt (2026-08-16, „alles grün“)** (implementor-abgeleitet aus den 16 Buchtiteln der Bibliothek; die 5 Quality-Assessment-Queries sind der Startbestand — die Herleitung bleibt als Kontext, der PROVISORISCH-Vermerk ist seit Schritt 0 überholt). Suite: `cmd/retrieval-bench/gold_suite.json` (`confirmed`-Flag pro Query).
 
 Lauf: 2026-08-16, lokal (Mac, MPS fp32), echter OS-Index (4.813 Chunks), echter Query-Runner (R1/R2 warm), echte DB. Reproduzierbar:
@@ -47,7 +70,9 @@ dudu hat alle 25 Gold-Einträge bestätigt („alles grün“; `confirmed`-Flip 
 - Rare-Token-Sub-Suite (Normnummern/Akronyme) für das Sparse-Profil.
 - GraphCandidates-SQL-Tuning, falls der Arm produktiv werden soll.
 
-## v2 — Scoped Gold, Passagen-Ebene (#155, 2026-08-16)
+## v2 — Scoped Gold, Passagen-Ebene (#155, 2026-08-16) — STILLGELEGT (#351)
+
+> **#351-Ruhestandsvermerk:** `gold_suite_v2.json` ist entfernt. Die 25 Proposal-Queries sind Duplikate der Buch-Level-Suite, die 7 verified-Entries sind die z-Suite — null einzigartiger Signalwert. Der folgende Abschnitt dokumentiert den historischen Messstand.
 
 Suite: `gold_suite_v2.json` — **32 Queries, alle gescopet** (filters.document_ids): 25
 dudu-entschiedene Proposals (21× yes, 3× alt:0) + **7 verified** Einträge (z1–z7, aus
@@ -84,7 +109,9 @@ Metriken: P@1/hit@5/MRR/hit@10 auf Chunk-Ebene. 2 Läufe: **identisch auf 3 Dezi
 Reproduzieren: `AXIOM_TEST_DATABASE_URL=… AXIOM_PROCESSOR_URL=http://127.0.0.1:8012 go
 run ./cmd/retrieval-bench -suite cmd/retrieval-bench/gold_suite_v2.json -md out.md`
 
-## v2.1 — Vollbibliothek + VWL/ORG_HA-Traces (#155, 2026-08-16, nach Flutgate)
+## v2.1 — Vollbibliothek + VWL/ORG_HA-Traces (#155, 2026-08-16, nach Flutgate) — RE-ANCHORT (#351)
+
+> **#351-Vermerk:** `gold_suite_v21.json` ist jetzt eine eigenständige 20-Entry-Trace-Suite (re-anchort per `go run ./cmd/retrieval-bench -reanchor-trace`; die v2-Basis ist stillgelegt). Die Metriken unten sind der historische 52-Entry-Lauf gegen den damaligen Korpus.
 
 Suite: `gold_suite_v21.json` — **52 Entries** (v2: 32 + **20 neue verified** aus dudus
 Trace-Dateien: 12 VWL aus `quellen_freihandel.txt` — Topic-Keyword-Qualitätsgate über die
