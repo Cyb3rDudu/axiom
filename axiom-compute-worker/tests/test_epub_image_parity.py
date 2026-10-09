@@ -485,15 +485,24 @@ class TestMdRewriteDoublingGuards:
         assert "![a](zz.png)" in out                # unresolvable stays verbatim
 
     def test_unescaped_opener_never_swallows_across_lines(self):
-        # Guard 2 (line cap) pinned WITHOUT the escape crutch: an
-        # unresolvable UNESCAPED opener must not swallow text across the
-        # line boundary onto a later resolvable ref — removing only the
-        # line cap (keeping the escape guard) must go red here.
-        md = "![a](zz.png) end of line\ntranscript tail\n\n![b](/tmp/med/real_1.png)\n\nafter"
+        # Guard 2 (line cap): an unresolvable UNESCAPED opener must not
+        # swallow text across the line boundary onto a later resolvable
+        # ref. The later ref here deliberately carries NO ![ opener (a
+        # bare resolvable path in parenthesized text) — the ![ candidate
+        # abort cannot catch this shape, so removing ONLY the line cap
+        # (mutation probe: scan_end = min(len, start+4096)) goes red:
+        # the uncapped code binds ![a] onto real_1 and deletes the tail.
+        md = "![a](zz.png) end of line\nsee (/tmp/med/real_1.png)\nafter"
         out = _md_rewrite(md, self._resolve)
-        assert "end of line" in out and "transcript tail" in out
-        assert "![a](zz.png)" in out     # unresolvable ref stays verbatim
-        assert "![b](image_1.png)" in out
+        assert out == md  # no swallow, no rebind, nothing dropped
+
+        # A later MARKER ref on its own line is doubly guarded (line cap
+        # AND the ![ candidate abort) — both markers keep their bindings.
+        md2 = "![a](zz.png) end of line\ntranscript tail\n\n![b](/tmp/med/real_1.png)\n\nafter"
+        out2 = _md_rewrite(md2, self._resolve)
+        assert "end of line" in out2 and "transcript tail" in out2
+        assert "![a](zz.png)" in out2     # unresolvable ref stays verbatim
+        assert "![b](image_1.png)" in out2
 
     def test_real_refs_still_rewrite_across_lines(self):
         md = "pre\n\n![a](/tmp/med/real_0.png) mid ![b](real_2.png)\n\npost"
