@@ -671,9 +671,10 @@ The 0.2.0 code runs against your existing database shape today (the
 Zotero-sync lane stays wired in shared-database shapes — see persistence
 profiles above). The operational cutover — adopting the existing corpus in
 place, no reprocessing — is the Data Migration track (#310–#321): a
-backend-neutral bundle format, Library export/import/verify, a read-only
-adoption check (`VerifyAdoption` — refuses drifted state), shadow reads,
-and an automated cutover with rollback. Its runbook ships with the release
+backend-neutral bundle format, Library export/import/verify, shadow
+reads, and an automated cutover with rollback (plus the read-only
+adoption check `VerifyAdoption` — all removed with the window, #367).
+Its runbook ships with the release
 train once the cutover rehearsals are done; until then there is **no
 operator action** — and nothing in this guide depends on it.
 
@@ -905,7 +906,7 @@ the Store's revision intake (the same contract class the CI topology
 smoke rides):
 
 ```bash
-FIXTURE="axiom/internal/backfill/testdata/book.epub"
+FIXTURE="axiom/testdata/book.epub"
 HASH="$(shasum -a 256 "$FIXTURE" | awk '{print $1}')"   # Linux: sha256sum
 
 docker exec -i axiom-guide-pg psql -U axiom -d axiom -v ON_ERROR_STOP=1 <<SQL

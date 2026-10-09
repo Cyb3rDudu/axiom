@@ -2,9 +2,9 @@
 
 Runs the alignment engine over an active snapshot's chunks and an enriched
 EPUB sibling, producing the enriched/refused chunk plan WITHOUT writing
-anywhere itself. The DB transaction + OpenSearch re-index live on the Go side
-(cmd/locator-backfill); this CLI is the pure computation + dry-run surface the
-operator (or the Go cmd) invokes.
+anywhere itself. The DB transaction + OpenSearch re-index lived on the Go side
+(cmd/locator-backfill, removed with #367); this CLI remains the pure
+computation + dry-run surface over the alignment engine.
 
 Inputs (all via args):
   --epub   <path>   the enriched EPUB sibling (derived_from_sibling page map)

@@ -1,7 +1,12 @@
 # Runner-Feasibility study output (#171)
 
-Decision document and the per-block proof trail. Every number is reproducible
-via `axiom_ng/cmd/feasibility/…` (committed).
+> **Historical document.** The study's scaffolding under `cmd/feasibility`
+> was removed with the one-shot migration machinery (#367); the numbers
+> below were produced from the committed tree of that era — the Git
+> history conserves the exact code (`git log -- cmd/feasibility`).
+
+Decision document and the per-block proof trail. Every number was
+reproducible via `cmd/feasibility/…` (committed, see banner).
 
 - **`go-runner-feasibility.md`** — the decision (component table + CUDA column +
   migration path + determinism + research-claims ledger). Start here.

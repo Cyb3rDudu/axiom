@@ -183,22 +183,21 @@ func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 		AXIOM_PROCESSOR_RUNNER_NAME=axiom-dev-repair-probe
 		AXIOM_ARTIFACT_ROOT="%[4]s"/artifacts
 		AXIOM_QUARANTINE_ROOT="%[4]s"/quarantine
-		AXIOM_RUNNER_DIR="%[5]s"/axiom-compute-worker
 		AXIOM_FIXER_INVOKER_ENABLED=0
-		AXIOM_ZOTERO_BASE="%[6]s"
-		AXIOM_ZOTERO_WRITE_KEY_FILE="%[7]s"
+		AXIOM_ZOTERO_BASE="%[5]s"
+		AXIOM_ZOTERO_WRITE_KEY_FILE="%[6]s"
 		AXIOM_DISPATCHER_ENABLED=0
 		AXIOM_DISPATCHER_WORKER_ID=axiom-dev-repair-probe
 		export AXIOM_DATABASE_URL AXIOM_API_PORT AXIOM_BIND_ADDR AXIOM_OS_INDEX \
 			AXIOM_PROCESSOR_URLS AXIOM_PROCESSOR_URL AXIOM_QUERY_RUNNER_URL \
 			AXIOM_PROCESSOR_SOURCE_BASE_URL AXIOM_PROCESSOR_RUNNER_NAME \
-			AXIOM_ARTIFACT_ROOT AXIOM_QUARANTINE_ROOT AXIOM_RUNNER_DIR \
+			AXIOM_ARTIFACT_ROOT AXIOM_QUARANTINE_ROOT \
 			AXIOM_FIXER_INVOKER_ENABLED AXIOM_ZOTERO_BASE AXIOM_ZOTERO_WRITE_KEY_FILE \
 			AXIOM_DISPATCHER_ENABLED AXIOM_DISPATCHER_WORKER_ID
-		exec "%[8]s"
+		exec "%[7]s"
 	`, envFile("AXIOM_DEV_RAG_ENV", "/run/agenix/axiom-rag.env"),
 		envFile("AXIOM_DEV_RAG_API_ENV", "/run/agenix/axiom-rag-api.env"),
-		probePort, state, repoRoot(), fakeURL, keyFile, bin)
+		probePort, state, fakeURL, keyFile, bin)
 
 	// _PROD_DSN smuggles the env-file DSN through: sourcing happens in the
 	// child, the parent never sees secrets. Exit code 4 = DSN guard tripped
@@ -266,12 +265,6 @@ func envFile(varname, def string) string {
 		return v
 	}
 	return def
-}
-
-func repoRoot() string {
-	// test cwd is axiom/internal/baseline
-	r, _ := filepath.Abs("../../..")
-	return r
 }
 
 // prodDSN reads the rag env file ONLY to extract its DATABASE_URL for the

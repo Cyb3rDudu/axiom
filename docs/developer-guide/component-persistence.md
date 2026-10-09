@@ -113,24 +113,12 @@ the Store's five fields. The backend may carry report-only extras
 
 ## 4. DM handover points (Data Migration track)
 
-- **`pglib.VerifyAdoption(ctx, pool)`** — the read-only Bestands-DB
-  check (SELECTs only): fresh database → adoptable; complete ledger →
-  idempotent; tables without a complete ledger → REFUSED (no silent
-  adoption of drifted state). No production caller by design — it is
-  the DM09 hook. The committed witness runs against a restored copy of
-  the Bestands database (dev-host artifact like the freeze dump;
-  strictly gated by `AXIOM_F12_BESTANDS_DSN`, never
-  `AXIOM_TEST_DATABASE_URL` — CI's go-db-it would otherwise run it
-  against a fresh, library-less database).
 - **Mits-Schreib lane** — wired ONLY for shared-database shapes
   (`AXIOM_LIBRARY_DATABASE_URL` unset or identical to the core DSN);
   a separate library DSN or the SQLite profile unwires it with a loud
   log line (the engine additionally folds mirror reads to absence —
   `TestMitschriebLaneOnLibraryOnlyDatabaseFoldsToAbsence` pins both
   halves, including that library-owned schema faults stay raw errors).
-- **Legacy adoption is a check, never a cutover** — the production
-  cutover remains DM09. The composition's separate-pool seam is the
-  cutover surface: the DM track turns a DSN, not code.
 - **`zotero` import providers require the PostgreSQL profile** — the
   provider's source identity lives in the mirror on the shared
   database; a component-local SQLite file must not reach into the store

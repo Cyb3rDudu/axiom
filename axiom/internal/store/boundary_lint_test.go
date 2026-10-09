@@ -67,8 +67,8 @@ var storePackages = []string{
 // chain. zoteroprovider is the Zotero adapter; sync and library (+mirror)
 // are the Library side; config is the credential carrier (Zotero base
 // URL/key file wiring live there); repair/fixerinvoker are the F08
-// Zotero-coupled write tracks; server/composition/cli/backfill/baseline
-// are transport, wiring and scaffolding a component never depends on.
+// Zotero-coupled write tracks; server/composition/cli/baseline are
+// transport, wiring and scaffolding a component never depends on.
 var bannedPackages = []string{
 	"internal/zoteroprovider",
 	"internal/sync",
@@ -80,7 +80,6 @@ var bannedPackages = []string{
 	"internal/server",
 	"internal/composition",
 	"internal/cli",
-	"internal/backfill",
 	"internal/baseline",
 }
 
