@@ -3,11 +3,11 @@
 # canonical source: fresh db.Migrate of the freeze migrations (reproducible);
 # live axiom_db/axiom_dev delta: documented in devStructureAllowlist (baseline tests)
 # postgres major 17; structure only (row counts live in the separate live inventory)
-# sha256 structure: ca3ca6037939016b09f4d2bdf0fb1515402d5a583b46dd83a1e93aa4c8b62843
+# sha256 structure: 69d3beb8cf04e447af2fd19befa1e9473a5d8e44aef45571bef4c9748feff955
 ## extensions (2)
 plpgsql | 1.0
 vector | 0.8.6
-## migrations ledger (23)
+## migrations ledger (24)
 schema/0001_ingest_jobs.sql
 schema/0002_zotero.sql
 schema/0003_zotero_canonical.sql
@@ -31,6 +31,7 @@ schema/0020_quality_state_english.sql
 schema/0021_image_captions.sql
 schema/0022_figure_captions.sql
 schema/0023_contextual_citation_class.sql
+schema/0024_ingest_jobs_progress.sql
 ## enum types (2)
 ingest_job_status | pending,claimed,processing,completed,failed,cancelled,skipped
 repair_status | rejected,queued,in_repair,healed,failed,blocked_for_dudu
@@ -61,7 +62,7 @@ zotero_items | 114
 zotero_selections | 114
 zotero_sources | 114
 zotero_write_audit | 114
-## columns (278)
+## columns (282)
 ingest_jobs | ack_pending_at | timestamptz | YES | 
 ingest_jobs | attachment_id | uuid | YES | 
 ingest_jobs | attempt | int4 | NO | 0
@@ -78,6 +79,7 @@ ingest_jobs | id | uuid | NO | gen_random_uuid()
 ingest_jobs | idempotency_key | text | YES | 
 ingest_jobs | input_snapshot | jsonb | YES | 
 ingest_jobs | last_heartbeat_at | timestamptz | YES | 
+ingest_jobs | last_progress_at | timestamptz | YES | 
 ingest_jobs | lease_token | uuid | YES | 
 ingest_jobs | lease_until | timestamptz | YES | 
 ingest_jobs | max_attempts | int4 | NO | 3
@@ -86,6 +88,9 @@ ingest_jobs | processing_profile | jsonb | YES |
 ingest_jobs | processor_name | text | YES | 
 ingest_jobs | processor_version | text | YES | 
 ingest_jobs | profile_hash | text | YES | 
+ingest_jobs | progress_done | int4 | YES | 
+ingest_jobs | progress_phase | text | YES | 
+ingest_jobs | progress_total | int4 | YES | 
 ingest_jobs | quality_state | jsonb | YES | 
 ingest_jobs | resolved_at | timestamptz | YES | 
 ingest_jobs | result | jsonb | NO | '{}'::jsonb

@@ -92,6 +92,8 @@ var envRows = []envRow{
 	{"AXIOM_DISPATCHER_CONCURRENCY", "DispatcherConcurrency", false},
 	{"AXIOM_DISPATCHER_PROFILE", "DispatcherProfile", false},
 	{"AXIOM_DISPATCHER_LEASE", "DispatcherLeaseDuration", false},
+	// #369: progress-coupled liveness bound (0 disables the watchdog).
+	{"AXIOM_DISPATCHER_NO_PROGRESS_LIMIT", "DispatcherNoProgressLimit", false},
 	{"AXIOM_DISPATCHER_PREFLIGHT", "DispatcherPreflightEnabled", false},
 	{"AXIOM_FIXER_INVOKER_ENABLED", "FixerInvokerEnabled", false},
 	// F08 #302: canonical worker command; the legacy AXIOM_FIXER_CMD
