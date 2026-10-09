@@ -88,9 +88,21 @@ class Chunker:
         return int(len(text.split()) * 1.3)
 
     def _extract_images_from_text(self, text: str) -> list[dict[str, Any]]:
-        """Extract image references from markdown text."""
+        """Extract image references from markdown text.
+
+        Escaped openers (``\\![…]``, pandoc ≥3.11 renders sample-code
+        ``<img>`` tags inside terminal transcripts that way) are literal
+        text, not images — their ref can never resolve to an artifact
+        and failed the persist gate (#366)."""
         images = []
         for match in self._image_pattern.finditer(text):
+            q = match.start() - 1
+            esc = 0
+            while q >= 0 and text[q] == "\\":
+                esc += 1
+                q -= 1
+            if esc % 2 == 1:
+                continue  # \!-escaped marker is literal text, not an image
             images.append({
                 "alt_text": match.group(1),
                 "path": match.group(2),

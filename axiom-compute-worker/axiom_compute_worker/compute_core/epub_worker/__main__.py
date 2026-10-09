@@ -508,12 +508,35 @@ def _md_rewrite(md: str, resolve) -> str:
     bracket-carrying paths (``fig(1).png`` — the short candidate fails,
     the full one resolves). Unresolvable refs stay verbatim (first
     candidate; the runner's gates handle them downstream).
+
+    #366 hardening, pinned on the live doubling (chunk ref
+    ``image_12.jpgimage_12.jpg``, "Art of Exploitation"): pandoc ≥3.11
+    escapes sample-code ``<img>`` tags inside terminal transcripts as
+    ``\\![](image.jpg)`` — a literal-text marker, not an image. Three
+    guards keep the scanner honest: escaped openers are skipped (odd
+    number of backslashes before ``!``), candidates never cross a line
+    boundary (a markdown ref path is single-line; without the cap the
+    scanner swallowed ~1KB of transcript and resolved via the basename
+    fallback of an UNRELATED later ref), and an opener already inside a
+    previous hit's swallowed region is never rewritten again (the
+    shared-')' double-append that produced the doubled ref).
     """
     out: list[str] = []
     pos = 0
     for m in _MD_IMG_RE.finditer(md):
+        if m.start() < pos:
+            continue  # opener inside a previous hit's swallowed candidate
+        q = m.start() - 1
+        esc = 0
+        while q >= 0 and md[q] == "\\":
+            esc += 1
+            q -= 1
+        if esc % 2 == 1:
+            continue  # \!-escaped marker is literal text, not an image
         start = m.end()
-        scan_end = min(len(md), start + 4096)  # ponytail: sane path cap
+        nl = md.find("\n", start)
+        scan_end = min(len(md), start + 4096,  # ponytail: sane path cap
+                       (nl + 1) if nl >= 0 else len(md))
         j = start
         hit = None
         while j < scan_end:

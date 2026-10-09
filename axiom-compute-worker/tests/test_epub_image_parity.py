@@ -35,6 +35,7 @@ from axiom_compute_worker.compute_core.chunker import Chunker
 from axiom_compute_worker.compute_core.epub_worker.__main__ import (
     _img_attr,
     _inline_html_images,
+    _md_rewrite,
     _rewrite_image_refs,
     _save_extracted_images,
 )
@@ -431,6 +432,71 @@ class TestSaveAndRewrite:
         media.mkdir()
         _, ref_index = _save_extracted_images(media, tmp_path / "out")
         assert _rewrite_image_refs("![x](nope.png)", ref_index) == "![x](nope.png)"
+
+
+# ── #366: the live image-ref doubling ("Art of Exploitation") ───────────
+
+
+class TestMdRewriteDoublingGuards:
+    """Pinned on the production failure: pandoc ≥3.11 escapes sample-code
+    ``<img>`` tags inside terminal transcripts as ``\\![](image.jpg)``;
+    the candidate scanner swallowed ~1KB of transcript, resolved via the
+    basename fallback of a LATER real ref, and the shared-')' double
+    rewrite appended the saved name to itself (chunk ref
+    ``image_12.jpgimage_12.jpg``, RESULT_PERSIST_FAILED)."""
+
+    def _resolve(self, ref: str) -> str | None:
+        # basename fallback mirrors _rewrite_image_refs' _lookup
+        idx = {f"/tmp/med/real_{n}.png": f"image_{n}.png" for n in range(3)}
+        idx.update({f"real_{n}.png": f"image_{n}.png" for n in range(3)})
+        return idx.get(ref) or idx.get(Path(ref).name) or None
+
+    def test_escaped_marker_stays_literal_text(self):
+        # pandoc 3.11 transcript form: escaped opener, sample-code path
+        md = ("cat webroot/index.html \\\n"
+              "\\<img src=\\\"image.jpg\\\"\\> \\\n"
+              "\\![](image.jpg)\\<br\\>")
+        out = _md_rewrite(md, self._resolve)
+        assert out == md  # literal text: never rewritten, nothing dropped
+
+    def test_no_cross_line_swallow_of_later_ref(self):
+        # escaped marker + failing path, real ref in a LATER paragraph:
+        # without the line cap the scanner consumed the whole transcript
+        # and resolved via the real ref's basename
+        md = ("\\![](image.jpg)\\<br\\>\ntranscript tail\n\n"
+              "![x](/tmp/med/real_1.png)\n\nFigure 0x400-3.")
+        out = _md_rewrite(md, self._resolve)
+        assert "image.jpg)\\<br\\>" in out          # transcript verbatim
+        assert "transcript tail" in out             # no content loss
+        assert "![x](image_1.png)" in out           # real ref rewritten once
+        assert "image_1.pngimage_1.png" not in out  # no doubling
+
+    def test_no_double_append_on_shared_paren_same_line(self):
+        # two unescaped refs on ONE line, first path unresolvable directly:
+        # candidate two ends at the second ref's ')' and its basename
+        # resolves — the second rewrite then appended saved+saved
+        md = "![a](zz.png) tail ![b](/tmp/med/real_2.png)"
+        out = _md_rewrite(md, self._resolve)
+        assert "image_2.pngimage_2.png" not in out
+        assert "![b]" in out or "![a]" in out
+
+    def test_real_refs_still_rewrite_across_lines(self):
+        md = "pre\n\n![a](/tmp/med/real_0.png) mid ![b](real_2.png)\n\npost"
+        out = _md_rewrite(md, self._resolve)
+        assert "![a](image_0.png)" in out
+        assert "![b](image_2.png)" in out  # absolute + basename forms intact
+
+    def test_chunker_ignores_escaped_marker_refs(self):
+        # the ref-extraction seam: an escaped sample-code marker is text,
+        # not an image — else its unresolvable path dies at the persist
+        # gate (CHUNK_IMAGE_REF_UNRESOLVED, ref "image.jpg")
+        md = "\\![](image.jpg)\\<br\\>\n\n![x](image_1.png)"
+        chunks = Chunker(max_chunk_tokens=1200).chunk(
+            md, doc_metadata={"doc_id": "i366"}
+        )
+        refs = [r["path"] for c in chunks
+                for r in (c["metadata"].get("image_refs") or [])]
+        assert refs == ["image_1.png"]
 
 
 # ── end-to-end worker + runner seam (the EPUB leg) ───────────────────────
