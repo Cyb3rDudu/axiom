@@ -60,9 +60,10 @@ def _sha256_hex(path: Path) -> str:
 
 _MD_ESCAPE_RE = re.compile(r"\\(.)")
 
-# #372: image extensions the convert checkpoint payload carries (the
-# worker's saved image set — mirrors the epub/pdf worker's _IMAGE_EXTS).
-_IMAGE_EXTS_CP = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+# #372: image extensions the convert checkpoint payload carries — the
+# epub worker's _IMAGE_EXTS (7 entries); the pdf worker preserves
+# arbitrary original extensions, so this union is the payload filter.
+_IMAGE_EXTS_CP = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 
 
 def _drop_link_refs(refs: list[Any]) -> list[Any]:
@@ -1545,9 +1546,9 @@ def _compute_reference(
     attach = request["attachment"]
     source_path = Path(attach["local_path"])
 
-    # #372: cross-attempt phase checkpoints — a retry (or a force-rebuild
-    # of the unchanged file under the same profile/build) resumes at the
-    # first incomplete phase instead of restarting from zero.
+    # #372: cross-attempt phase checkpoints — a retry resumes at the
+    # first incomplete phase instead of restarting from zero (a
+    # force-rebuild re-keys by design, contract §19).
     cp = PhaseCheckpoints(request, settings.get().work_root)
 
     if cp.resume("convert"):
@@ -1946,10 +1947,6 @@ def _real_pipeline(
     set_progress: Callable[[int, int, str], None] | None = None,
     runtime: Any | None = None,
 ) -> dict[str, Any]:
-    import json as _json
-    import subprocess
-    from contextlib import suppress
-
     enter, stage_timings = _stage_tracker(set_stage)
     attach = request["attachment"]
     source_path = Path(attach["local_path"])
@@ -1958,8 +1955,8 @@ def _real_pipeline(
     out_images = work_dir / "images"
 
     # #372: cross-attempt phase checkpoints (same ontology as the #369
-    # progress stages) — a retry or a force-rebuild of the unchanged file
-    # under the same profile/build resumes at the first incomplete phase.
+    # progress stages) — a retry resumes at the first incomplete phase
+    # (a force-rebuild re-keys by design, contract §19).
     cp = PhaseCheckpoints(request, settings.get().work_root)
 
     image_mapping: dict[str, str] = {}
@@ -2041,7 +2038,11 @@ def _real_pipeline(
             cp.save("embed", jsons={"chunks": chunk_dicts})
             cp.mark("embed", reused=False)
     else:
-        cp.mark("embed", reused=True)  # off in profile: nothing to compute
+        # off in profile: an EMPTY marker keeps the scan contiguous —
+        # without it _scan breaks at the embed hole and downstream
+        # phases (entities/relationships/captions) never resume.
+        cp.save("embed", jsons={})
+        cp.mark("embed", reused=True)
 
     # Collect Marker images and declare them as Contract artifacts (§13).
     # Build a ref-mapping: original_marker_name → image-XXXX (Contract-konform).
@@ -2238,7 +2239,9 @@ def _real_pipeline(
         if proc_opt.get("extract_image_captions"):
             cp.mark("captions", reused=False)
         else:
-            cp.mark("captions", reused=True)  # off in profile: nothing to compute
+            # off in profile: empty marker keeps contiguity (see embed)
+            cp.save("captions", jsons={})
+            cp.mark("captions", reused=True)
     figure_captions_present = any(
         (c.get("metadata", {}) or {}).get("figure_captions")
         for c in chunk_dicts

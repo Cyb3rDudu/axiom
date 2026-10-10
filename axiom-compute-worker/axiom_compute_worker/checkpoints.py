@@ -8,9 +8,11 @@ survive the per-job work dir:
 
 * Store: ``<work_root>/checkpoints/<attachment_id>/<key>/`` where the key
   derives from (content hash, processing-profile hash, processor version).
-  A retry — or a force-rebuild of the unchanged file under the same
-  profile and build — hits the same key and resumes; a changed file, a
-  changed profile or a new build invalidates cleanly (different key).
+  A retry hits the same key and resumes; a changed file, a changed
+  profile or a new build invalidates cleanly (different key). A
+  force-rebuild recomputes from zero by design — the key hashes the
+  whole processing block including force_rebuild (contract §19's fresh
+  recompute semantics).
 * Atomicity: payload files land first, the phase marker LAST via
   ``os.replace`` — a kill mid-write leaves an incomplete phase (marker
   absent) that simply recomputes. Contiguity is enforced: only a
@@ -21,7 +23,11 @@ survive the per-job work dir:
 * Retention: saving into a new key prunes sibling keys of the same
   attachment (content moved on — the old checkpoints are dead weight).
   One key (one book's intermediates) per attachment is the steady-state
-  disk ceiling; no TTL machinery.
+  disk ceiling; no TTL machinery. Prune ceiling, documented: the prune
+  is immediate — a re-keyed attempt that dies early has already pruned
+  the base key, and the next plain retry recomputes from zero.
+  Accepted because checkpoints are an optimization, never a
+  correctness dependency.
 
 Boundary (documented non-goal): phase granularity only — a phase that
 died halfway recomputes wholly; page-level resume inside a phase stays
@@ -105,9 +111,15 @@ class PhaseCheckpoints:
     # -- query / accounting ------------------------------------------------
 
     def resume(self, phase: str) -> bool:
-        """True when the phase's marker says completed (and its payload
-        validates) — the caller loads payloads and skips computing."""
-        return phase in self._completed
+        """True when the phase AND every earlier phase is completed —
+        the contiguity (prefix) property is enforced HERE, dynamically,
+        not only at the init scan: a save() that lands out of order (or
+        a hand-repaired store) must never make a downstream phase
+        resumable across an upstream hole."""
+        if phase not in self._completed:
+            return False
+        idx = PHASE_ORDER.index(phase)
+        return all(p in self._completed for p in PHASE_ORDER[:idx])
 
     def report(self) -> dict[str, str]:
         """Phase → computed|reused for the result manifest (only phases

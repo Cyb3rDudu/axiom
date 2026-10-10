@@ -80,10 +80,10 @@ stages are reconstructible from `manifest.stage_timings`. Query endpoints
 
 Each phase writes a completion marker with its staged outputs to
 `<work_root>/checkpoints/<attachment_id>/<key>/`, keyed by (content hash,
-processing-profile hash, processor version). A retry — or a force-rebuild of
-the unchanged file under the same profile and build — resumes at the first
+processing-profile hash, processor version). A retry resumes at the first
 incomplete phase instead of restarting from zero; changed content, changed
-profile or a new build re-keys cleanly. Markers land last (atomic), a kill
+profile or a new build re-keys cleanly. A force-rebuild recomputes from zero
+by design — its key differs (contract §19's fresh-recompute semantics). Markers land last (atomic), a kill
 mid-phase recomputes that phase wholly. `manifest.phase_reuse` names each
 phase `computed` vs `reused` — an operator can tell a fresh processing from a
 resumed one, and `stage_timings` witnesses ~0 elapsed for reused phases.
