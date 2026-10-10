@@ -320,7 +320,7 @@ def _adapt_chunk(
                 # per-paragraph page boundaries so a hit position resolves
                 # to its exact print page, not the span envelope.
                 locator["paragraph_pages"] = [
-                    [str(o), str(l)] for o, l in meta["epub_paragraph_pages"]
+                    [str(off), str(lbl)] for off, lbl in meta["epub_paragraph_pages"]
                 ]
         if meta.get("chapter") is not None:
             locator["chapter"] = int(meta["chapter"])
@@ -715,7 +715,7 @@ def reextract_figure_captions(chunk: dict[str, Any]) -> dict[str, str] | None:
     ref_to_orig: dict[str, str] = {}
     occurrences = _MD_IMAGE_OCCURRENCE_RE.findall(text)
     if len(occurrences) == len(refs):
-        ref_to_orig = dict(zip(refs, (Path(o).name for o in occurrences)))
+        ref_to_orig = dict(zip(refs, (Path(o).name for o in occurrences), strict=True))
     elif len(refs) > 1:
         return None
     probe = {"text": text, "metadata": {"image_refs": refs}}
@@ -782,7 +782,7 @@ def _reembed_captioned(chunk_dicts: list[dict[str, Any]]) -> bool:
         for c in affected:
             (c.get("embeddings") or {}).pop("dense", None)
         return False
-    for c, a in zip(affected, aug):
+    for c, a in zip(affected, aug, strict=True):
         raw = a.get("embeddings")
         if raw:
             c["embeddings"] = raw
@@ -1390,7 +1390,8 @@ def _convert_pdf_reference(pdf_path: Path, md_path: Path):
     pages: list[str] = []
     for i in range(doc.page_count):
         page = doc.load_page(i)
-        text = page.get_text("text").strip()
+        raw = page.get_text("text")
+        text = raw.strip() if isinstance(raw, str) else ""
         if text:
             # Marker-style page marker that the Chunker understands.
             pages.append(f"{{{i}}}{'-' * 10}\n\n{text}")
@@ -1452,7 +1453,7 @@ def compute(
     commit: Callable[[dict[str, Any]], None] | None = None,
     set_progress: Callable[[int, int, str], None] | None = None,
     runtime: Any | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """Run the pure compute pipeline for a validated source. Returns a
     contract processor-result dict (contract §10). Work dir is per-job and
     already validated by the caller. ``set_stage`` advances the live job
@@ -1558,8 +1559,8 @@ def _compute_reference(
         entries = build_cfi_map(str(source_path))
         _enrich_epub_cfi_locators(chunk_dicts or [], entries)
         filled = sum(
-            1 for c in chunk_dicts or []
-            if (c.get("metadata", {}) or {}).get("cfi_start")
+            1 for c in (chunk_dicts or [])
+            if ((c.get("metadata") or {}) if isinstance(c, dict) else {}).get("cfi_start")
         )
         log.info(
             "reference epub cfi enrichment: %d chunk(s), %d entry(ies), %d chunk(s) with cfi_start",
@@ -1647,12 +1648,12 @@ def _enrich_epub_cfi_locators(
         if ps is not None:
             # #234: interior interpolation within the verified anchor run
             entry = entry_by_cfi.get(cfi_start)
-            interp = bool(ptrust and entry)
+            interp = ptrust is not None and entry is not None
             ip_start = (epub_pagelist.interior_page(entry, text)
-                        if interp else None)
+                        if interp and entry is not None else None)
             meta["page_start"] = ip_start or ps
             ip_end = (epub_pagelist.interior_page(entry, text, tail=True)
-                      if interp else None)
+                      if interp and entry is not None else None)
             meta["page_end"] = max(
                 meta["page_start"],
                 ip_end or pos_by_cfi.get(cfi_end, (ps, None, None))[0] or ps)
