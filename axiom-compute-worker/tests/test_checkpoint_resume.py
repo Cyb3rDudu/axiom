@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -195,3 +196,94 @@ class TestResumeThroughCompute:
                     == json.dumps(r2["chunks"], sort_keys=True))
         finally:
             settings.set(old)
+
+
+class TestWatchdogEvictionResume:
+    """#369 integration: the watchdog's orphan-compute stop cancels the
+    runner job mid-compute; the claim scan evicts; the reclaim resubmits
+    under the SAME idempotency key (the runner relaunches the cancelled
+    entry). The relaunched attempt must RESUME at the phase checkpoint,
+    not restart: the conversion that completed before the cancel is not
+    re-run."""
+
+    def test_cancel_then_resubmit_resumes_at_phase(self, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from axiom_compute_worker import app as appmod
+        from axiom_compute_worker.runtime import JobRuntime
+
+        src = _pdf(tmp_path)
+        started = threading.Event()
+        release = threading.Event()
+        convert_calls = []
+
+        real_convert = runner._convert_reference
+
+        def slow_convert(request, source_path, work_dir):
+            convert_calls.append(request["job_id"])
+            out = real_convert(request, source_path, work_dir)
+            started.set()
+            release.wait(10)  # hold inside the convert phase (post-output)
+            return out
+
+        monkeypatch.setattr(runner, "_convert_reference", slow_convert)
+        old = settings.get()
+        settings.set(Settings(work_root=tmp_path / "work",
+                              allowed_source_roots=(str(tmp_path),),
+                              compute_backend="reference", warmup=False,
+                              max_concurrent_jobs=1, admission_queue_capacity=9))
+        try:
+            with TestClient(appmod.app) as client:
+                r1 = client.post("/v1/process", json=_payload_372(src, "k-evict"))
+                assert r1.status_code == 202, r1.text
+                assert started.wait(5), "compute never started"
+                # the watchdog's cancel lands mid-compute (post-convert-output,
+                # pre-marker in this backend — the phase is NOT yet complete)
+                assert client.post("/v1/jobs/k-evict/cancel").json()["status"] == "cancelled"
+                release.set()
+                _wait_untracked(appmod, "k-evict")
+
+                # The reference backend's cancel is cooperative: attempt 1's
+                # compute thread finished its convert phase (and its marker)
+                # after the cancel — so the relaunched attempt RESUMES and
+                # never re-converts. A resumed convert does not call
+                # _convert_reference at all — the witness is the terminal
+                # status plus the convert-call counter, not a stage event.
+                r2 = client.post("/v1/process", json=_payload_372(src, "k-evict"))
+                assert r2.status_code == 202, r2.text
+                assert r2.json().get("deduplicated") is True
+                _wait_terminal(client, "k-evict")
+                assert len(convert_calls) == 1, (
+                    f"relaunched attempt re-converted despite the checkpoint: "
+                    f"{convert_calls}"
+                )
+        finally:
+            release.set()
+            settings.set(old)
+
+
+def _payload_372(src: Path, key: str) -> dict:
+    req = _request(src, key)
+    return req
+
+
+def _wait_terminal(client, job_id: str, timeout_s: float = 15.0) -> None:
+    import time as _t
+
+    deadline = _t.monotonic() + timeout_s
+    while True:
+        st = client.get(f"/v1/jobs/{job_id}").json().get("status")
+        if st in ("completed", "failed", "cancelled"):
+            assert st == "completed", f"relaunched job ended {st}"
+            return
+        assert _t.monotonic() < deadline, f"job {job_id} never reached terminal"
+        _t.sleep(0.05)
+
+
+def _wait_untracked(appmod, job_id: str, timeout_s: float = 10.0) -> None:
+    import time as _t
+
+    deadline = _t.monotonic() + timeout_s
+    while appmod._scheduler().is_relevant(job_id):
+        assert _t.monotonic() < deadline, f"job {job_id} never left the scheduler"
+        _t.sleep(0.02)
