@@ -2,7 +2,7 @@
 
 The kill probe simulates the production abort at a defined phase
 boundary (the conversion raises mid-attempt like a killed worker); the
-retry (a FRESH work dir — a new attempt/jobe id) must resume at the
+retry (a FRESH work dir — a new attempt/job id) must resume at the
 first incomplete phase: convert reused (~0 timing witness), chunk
 computed. The hash probe pins invalidation: a changed file starts
 clean. The honesty probe pins manifest.phase_reuse.
@@ -86,6 +86,41 @@ class TestCheckpointsUnit:
         req3["processing"]["compute_dense_embeddings"] = True
         assert PhaseCheckpoints(req3, tmp_path).root != req1.root
 
+    def test_contiguity_middle_hole(self, tmp_path):
+        # A marker is only resumable when every EARLIER phase is complete:
+        # entities with a valid marker but a missing chunk marker must NOT
+        # resume. Mutation probe: removing the break in _scan (scanning all
+        # markers regardless of holes) makes the first assertion fail.
+        req = _request(_pdf(tmp_path))
+        cp = PhaseCheckpoints(req, tmp_path)
+        cp.save("convert", jsons={})
+        cp.save("entities", jsons={})  # chunk hole in between
+        assert cp.resume("convert") is True
+        assert cp.resume("chunk") is False
+        assert cp.resume("entities") is False, "resumed across a middle hole"
+
+        cp2 = PhaseCheckpoints(req, tmp_path / "b")
+        cp2.save("convert", jsons={})
+        cp2.save("chunk", jsons={})
+        cp2.save("embed", jsons={})  # prefix must be COMPLETE, not just present
+        cp2.save("entities", jsons={})
+        assert cp2.resume("entities") is True
+
+    def test_numpy_scalars_serialize(self, tmp_path):
+        # f3369908 regression pin: the real embedder writes float32 arrays;
+        # the payload dump must normalize them or the save crashes.
+        numpy = pytest.importorskip("numpy")
+        import json as _json
+
+        from axiom_compute_worker.checkpoints import _json_default
+
+        assert _json.loads(
+            _json.dumps({"x": numpy.float32(0.5)}, default=_json_default)
+        )["x"] == 0.5
+        cp = PhaseCheckpoints(_request(_pdf(tmp_path)), tmp_path)
+        cp.save("embed", jsons={"vals": [numpy.float32(0.25)]})
+        assert cp.load_json("embed", "vals") == [0.25]
+
     def test_sibling_prune_on_new_key(self, tmp_path):
         req_a = _request(_pdf(tmp_path, "a.pdf", "one"))
         cp = PhaseCheckpoints(req_a, tmp_path)
@@ -120,8 +155,7 @@ class TestResumeThroughCompute:
 
             import axiom_compute_worker.chunking as _cm
 
-            if "_orig_chunk_markdown" not in _cm.__dict__:
-                _cm._orig_chunk_markdown = _cm.chunk_markdown
+            orig_chunk = _cm.chunk_markdown
             monkeypatch.setattr(runner, "_convert_reference", counting_convert)
             monkeypatch.setattr(
                 "axiom_compute_worker.chunking.chunk_markdown", killed_chunk
@@ -133,15 +167,8 @@ class TestResumeThroughCompute:
             assert calls["convert"] == 1
 
             # attempt 2 (fresh work dir = new job id): resume, don't restart.
-            # Capture the ORIGINAL before any patching — re-reading the
-            # module attr now would snapshot the killed stub.
-            import axiom_compute_worker.chunking as chunking_mod
-
             monkeypatch.setattr(
-                "axiom_compute_worker.chunking.chunk_markdown",
-                chunking_mod.__dict__.get("_orig_chunk_markdown")
-                or __import__("axiom_compute_worker.chunking",
-                              fromlist=["chunk_markdown"]).chunk_markdown,
+                "axiom_compute_worker.chunking.chunk_markdown", orig_chunk
             )
             result = runner.compute(_request(src), _workdir(tmp_path, "attempt2"))
 
@@ -149,11 +176,16 @@ class TestResumeThroughCompute:
             reuse = result["manifest"]["phase_reuse"]
             assert reuse["convert"] == "reused"
             assert reuse["chunk"] == "computed"
-            # timing witness: the reused convert stage entered and finished
-            # within the same instant (start timestamp recorded on resume,
-            # chunk entered immediately after — no conversion elapsed)
+            # timing witness: a RESUMED convert enters and chunk enters
+            # within the same instant (adjacent start timestamps); a real
+            # convert takes minutes, so adjacency distinguishes reuse from
+            # recompute where start-ordering alone could not.
+            from datetime import datetime as _dt
+
             timings = result["manifest"]["stage_timings"]
-            assert timings["convert"] <= timings["chunk"]
+            delta = (_dt.fromisoformat(timings["chunk"])
+                     - _dt.fromisoformat(timings["convert"])).total_seconds()
+            assert delta < 2, f"convert→chunk gap {delta}s — convert re-ran"
             assert result["status"] == "completed"
         finally:
             settings.set(old)
@@ -210,7 +242,6 @@ class TestWatchdogEvictionResume:
         from fastapi.testclient import TestClient
 
         from axiom_compute_worker import app as appmod
-        from axiom_compute_worker.runtime import JobRuntime
 
         src = _pdf(tmp_path)
         started = threading.Event()
