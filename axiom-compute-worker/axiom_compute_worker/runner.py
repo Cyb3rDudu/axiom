@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from . import CONTRACT_VERSION, DENSE_EMBEDDING_DIM, DENSE_EMBEDDING_MODEL
+from .checkpoints import PhaseCheckpoints
 from .config import settings
 from .validation import SourceError
 
@@ -1547,8 +1548,6 @@ def _compute_reference(
     # #372: cross-attempt phase checkpoints — a retry (or a force-rebuild
     # of the unchanged file under the same profile/build) resumes at the
     # first incomplete phase instead of restarting from zero.
-    from .checkpoints import PhaseCheckpoints
-
     cp = PhaseCheckpoints(request, settings.get().work_root)
 
     if cp.resume("convert"):
@@ -1961,8 +1960,6 @@ def _real_pipeline(
     # #372: cross-attempt phase checkpoints (same ontology as the #369
     # progress stages) — a retry or a force-rebuild of the unchanged file
     # under the same profile/build resumes at the first incomplete phase.
-    from .checkpoints import PhaseCheckpoints
-
     cp = PhaseCheckpoints(request, settings.get().work_root)
 
     image_mapping: dict[str, str] = {}
@@ -1990,8 +1987,9 @@ def _real_pipeline(
         (_markdown, image_mapping, page_label_map, page_source_map,
          page_chapter_map, marker_pagemap_max, cfi_entries) = _real_convert_phase(
             request, source_path, work_dir, content_type, runtime, out_md, out_images)
-        image_files = {img.name: img for img in sorted(out_images.iterdir())
-                       if img.is_file() and img.suffix.lower() in _IMAGE_EXTS_CP}
+        image_files = ({img.name: img for img in sorted(out_images.iterdir())
+                        if img.is_file() and img.suffix.lower() in _IMAGE_EXTS_CP}
+                       if out_images.is_dir() else {})
         cp.save("convert",
                 files={"markdown.md": out_md, **image_files},
                 jsons={"image_mapping": image_mapping,
