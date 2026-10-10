@@ -53,8 +53,19 @@ PHASE_ORDER = ["convert", "chunk", "embed", "entities", "relationships", "captio
 
 def _link_or_copy(src: Path, dest: Path) -> None:
     """Hardlink when possible (same filesystem, cheap, keeps the inode
-    alive when the job dir dies), plain copy otherwise."""
+    alive when the job dir dies), plain copy otherwise. Idempotent: a
+    dest that already holds the same content (the resubmit-same-job-id
+    shape re-links into a work dir the prior attempt already populated —
+    possibly the very same inode the checkpoint was hardlinked FROM) is
+    a no-op; a DIFFERENT existing dest is replaced."""
     dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        try:
+            if src.samefile(dest):
+                return  # already the staged content
+        except OSError:
+            pass
+        dest.unlink()
     try:
         os.link(src, dest)
     except OSError:
