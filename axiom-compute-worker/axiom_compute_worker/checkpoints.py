@@ -51,6 +51,13 @@ log = logging.getLogger(__name__)
 PHASE_ORDER = ["convert", "chunk", "embed", "entities", "relationships", "captions"]
 
 
+def _json_default(obj: Any) -> Any:
+    """numpy scalars (embeddings arrive as float32 arrays) → JSON natives."""
+    if type(obj).__module__.startswith("numpy"):
+        return obj.item()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 def _link_or_copy(src: Path, dest: Path) -> None:
     """Hardlink when possible (same filesystem, cheap, keeps the inode
     alive when the job dir dies), plain copy otherwise. Idempotent: a
@@ -124,7 +131,7 @@ class PhaseCheckpoints:
         entries: dict[str, int] = {}
         for name, obj in (jsons or {}).items():
             p = payload_dir / f"{name}.json"
-            p.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+            p.write_text(json.dumps(obj, ensure_ascii=False, default=_json_default), encoding="utf-8")
             entries[p.name] = p.stat().st_size
         for name, src in (files or {}).items():
             dest = payload_dir / name

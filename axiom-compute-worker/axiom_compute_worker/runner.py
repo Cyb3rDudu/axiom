@@ -1762,6 +1762,9 @@ def _real_convert_phase(
     epub_worker — tables, images), image_mapping parse, and the format
     branch's page-trust / CFI / pagelist state. Extracted verbatim from
     _real_pipeline for #372 checkpoint wiring (no behavior change)."""
+    import json as _json
+    import subprocess
+    from contextlib import suppress
     convert = (
         "axiom_compute_worker.compute_core.pdf_worker"
         if content_type == "application/pdf"
