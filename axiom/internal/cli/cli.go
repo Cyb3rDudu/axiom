@@ -176,7 +176,7 @@ func cmdServe(name string, args []string, flags map[string]string) int {
 		// not degraded). A HALF-configured split (one URL, no DSN) is still
 		// degraded and keeps the warning.
 		if len(roles) == 1 && !fullSplitEdge(cfg) {
-			fmt.Fprintln(os.Stderr, name+": WARNING: AXIOM_DATABASE_URL not set; serving api-only (degraded)")
+			fmt.Fprintln(os.Stderr, name+": WARNING: AXIOM_STORE_DATABASE_URL not set; serving api-only (degraded)")
 		}
 	case "library":
 		// F07 #301: the Library slice is real now — the Zotero provider
@@ -254,7 +254,7 @@ func apiServeSplitCredentials(cfg config.Config, note func(string)) config.Confi
 		return cfg
 	}
 	if cfg.DatabaseURL != "" {
-		note("AXIOM_STORE_DATABASE_URL/AXIOM_DATABASE_URL set but serve api runs the split edge (AXIOM_LIBRARY_URL+AXIOM_STORE_URL) — the api process stays credential-free (#316); the DSN is ignored here")
+		note("AXIOM_STORE_DATABASE_URL set but serve api runs the split edge (AXIOM_LIBRARY_URL+AXIOM_STORE_URL) — the api process stays credential-free (#316); the DSN is ignored here")
 		cfg.DatabaseURL = ""
 	}
 	if cfg.DispatcherEnabled {
