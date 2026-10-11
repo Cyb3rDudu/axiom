@@ -323,7 +323,7 @@ func TestNoSecretValuesInAnyOutput(t *testing.T) {
 	t.Setenv("AXIOM_STORE_DATABASE_URL", "postgresql://u:"+dsnPW+"@127.0.0.1:5432/db?sslmode=disable")
 	t.Setenv("AXIOM_OPENSEARCH_PASSWORD", "opensearch-hunter2")
 	t.Setenv("AXIOM_WS_SECRET", "ws-hunter3")
-	t.Setenv("AXIOM_PROCESSOR_SOURCE_SECRET", "src-hunter4")
+	t.Setenv("AXIOM_COMPUTE_WORKER_SOURCE_SECRET", "src-hunter4") // #368: canonical spelling (the removed name cannot appear anyway)
 	t.Setenv("AXIOM_ARTIFACT_ROOT", t.TempDir())
 
 	var outBuf, errBuf strings.Builder
