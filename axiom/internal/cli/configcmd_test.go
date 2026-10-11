@@ -318,7 +318,7 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 	t.Setenv("AXIOM_ARTIFACT_ROOT", "/tmp/axiom-artifacts")
 	t.Setenv("AXIOM_API_PORT", "8222")
 	t.Setenv("AXIOM_SEARCH_RERANK", "false")
-	t.Setenv("AXIOM_PROCESSOR_URL", "http://legacy-runner:8012")                              // legacy spelling feeds
+	t.Setenv("AXIOM_PROCESSOR_URL", "http://legacy-runner:8012")                              // removed spelling, feeds nothing (#368)
 	t.Setenv("AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL", "postgresql://axiom@localhost:5432/lib") // username-only userinfo: NOT a credential — imports
 
 	before, _, err := config.LoadResolved(nil)

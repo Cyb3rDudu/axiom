@@ -346,7 +346,7 @@ func (c *Client) SubmitProcess(ctx context.Context, req *ProcessRequest) (*Proce
 	var acc ProcessAccepted
 	// C1: remote runners download source_url SYNCHRONOUSLY inside
 	// POST /v1/process (runner budget default 120s), so the result budget
-	// (AXIOM_PROCESSOR_TIMEOUT) also acts as the submit FLOOR — a hard
+	// (AXIOM_COMPUTE_WORKER_TIMEOUT) also acts as the submit FLOOR — a hard
 	// budgetSubmit would kill every remote book with a >30s download.
 	sub := budgetSubmit
 	if c.resultBudget > sub {

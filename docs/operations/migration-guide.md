@@ -33,10 +33,10 @@ public edge:
   `axiom/internal/baseline/fixtures/api_inventory.txt` in the repository;
   the same suite runs green against the new
   binary in all-in-one **and** split-process form.
-- **Unchanged:** your environment. Every 0.1.x env var still loads; legacy
-  spellings feed their canonical successors through the deprecation witness
-  (warn once per process, count every use — see the
-  [deprecation schedule](deprecations.md)).
+- **Changed in v0.2.4 (#368):** your environment. The dispatcher-side legacy
+  spellings no longer load — they feed nothing and every refusal names the
+  canonical successor (see the
+  [deprecation schedule](deprecations.md) for what went and what remains).
 - **New:** one binary, `axiom`, selects its process slice via
   `axiom serve all|api|library|store`; components have ownership boundaries;
   the Library can run on PostgreSQL **or** SQLite.

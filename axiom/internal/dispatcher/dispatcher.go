@@ -96,7 +96,7 @@ type Config struct {
 	// signed source_url to every process request — remote source delivery.
 	ProcessorSourceBaseURL string
 	// ProcessorSourceSecret is the shared HMAC secret for source URLs; must
-	// match the server's AXIOM_PROCESSOR_SOURCE_SECRET.
+	// match the server's AXIOM_COMPUTE_WORKER_SOURCE_SECRET.
 	ProcessorSourceSecret string
 
 	// PreflightEnabled (#175): when set, a claimed job's source PDF is sent
