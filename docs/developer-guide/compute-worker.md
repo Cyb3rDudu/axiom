@@ -76,6 +76,30 @@ The live stage is exposed by `GET /v1/jobs/{job_id}`; after completion the same
 stages are reconstructible from `manifest.stage_timings`. Query endpoints
 (`/v1/embed`, `/v1/rerank`) are synchronous single-stage calls.
 
+### Phase checkpoints and resume (#372)
+
+Each phase writes a completion marker with its staged outputs to
+`<work_root>/checkpoints/<attachment_id>/<key>/`, keyed by (content hash,
+processing-profile hash, processor version). A retry resumes at the first
+incomplete phase instead of restarting from zero; changed content, changed
+profile or a new build re-keys cleanly. A force-rebuild recomputes from zero
+by design — its key differs (contract §19's fresh-recompute semantics). Markers land last (atomic), a kill
+mid-phase recomputes that phase wholly. `manifest.phase_reuse` names each
+phase `computed` vs `reused` — an operator can tell a fresh processing from a
+resumed one, and `stage_timings` witnesses ~0 elapsed for reused phases.
+Retention is one key (one book's intermediates) per attachment per namespace;
+saving into a new key prunes the superseded siblings within its own namespace
+only. force-rebuild runs in its own namespace: it recomputes from zero by
+design — it is the operator's escape hatch (contract §19; decision
+2026-10-11, #372) — and can never prune the base namespace's resume basis.
+Phase exceptions: `validate_source` and `assemble` carry no markers (pure
+per-attempt work / deterministic rebuild), and `captions` has no live-stage
+`enter()` — it rides the §9 `images` progress — so a reused captions phase
+has no `stage_timings` entry.
+
+Boundary (deliberate): phase granularity only — a phase that dies halfway
+recomputes wholly; page-level resume inside a phase is out of scope.
+
 ## Compute backends
 
 | Backend | Use | Dependencies |
