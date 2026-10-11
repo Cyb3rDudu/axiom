@@ -47,7 +47,7 @@ func kgServer(t *testing.T, kg *fakeKG) *Server {
 
 func TestKGRoutesNotConfigured(t *testing.T) {
 	s := kgServer(t, nil)
-	for _, path := range []string{"/api/kg/entities", "/api/kg/entities/00000000-0000-0000-0000-000000000000/neighbors", "/api/kg/relations"} {
+	for _, path := range []string{"/api/v1/kg/entities", "/api/v1/kg/entities/00000000-0000-0000-0000-000000000000/neighbors", "/api/v1/kg/relations"} {
 		rec := httptest.NewRecorder()
 		s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != http.StatusServiceUnavailable {
@@ -60,7 +60,7 @@ func TestKGEntitiesSearch(t *testing.T) {
 	kg := &fakeKG{entities: []repo.KGEntity{{ID: "e1", CanonicalForm: "United Nations", Mentions: 12}}}
 	s := kgServer(t, kg)
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/kg/entities?q=united&limit=5", nil))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/kg/entities?q=united&limit=5", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -77,14 +77,14 @@ func TestKGNeighborsUUIDGuard(t *testing.T) {
 	kg := &fakeKG{}
 	s := kgServer(t, kg)
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/kg/entities/not-a-uuid/neighbors", nil))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/kg/entities/not-a-uuid/neighbors", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("non-uuid id must 400, got %d", rec.Code)
 	}
 	// Valid shape passes through with the custom stability floor.
 	rec2 := httptest.NewRecorder()
 	s.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet,
-		"/api/kg/entities/00000000-0000-0000-0000-00000000000a/neighbors?min_mentions=3", nil))
+		"/api/v1/kg/entities/00000000-0000-0000-0000-00000000000a/neighbors?min_mentions=3", nil))
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("valid id must 200, got %d: %s", rec2.Code, rec2.Body.String())
 	}
@@ -102,7 +102,7 @@ func TestKGRelationsFilters(t *testing.T) {
 	s := kgServer(t, kg)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/api/kg/relations?type=supports&entity=00000000-0000-0000-0000-00000000000b&document_id=00000000-0000-0000-0000-00000000000d", nil))
+		"/api/v1/kg/relations?type=supports&entity=00000000-0000-0000-0000-00000000000b&document_id=00000000-0000-0000-0000-00000000000d", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
@@ -131,13 +131,13 @@ func TestKGRelationsDocumentScopeGuard(t *testing.T) {
 	s := kgServer(t, kg)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/api/kg/relations?document_id=not-a-uuid", nil))
+		"/api/v1/kg/relations?document_id=not-a-uuid", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("malformed document_id must 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 	// No document_id: empty scope passes through (browse mode).
 	rec2 := httptest.NewRecorder()
-	s.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/api/kg/relations", nil))
+	s.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/api/v1/kg/relations", nil))
 	if rec2.Code != http.StatusOK || kg.lastDoc != "" {
 		t.Fatalf("absent document_id must pass empty scope, got %d lastDoc=%q", rec2.Code, kg.lastDoc)
 	}
@@ -168,7 +168,7 @@ func TestKGEnvelopeDeterminism(t *testing.T) {
 	get := func(t *testing.T, s *Server) map[string]json.RawMessage {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/kg/relations", nil))
+		s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/kg/relations", nil))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 		}
@@ -205,7 +205,7 @@ func TestKGEnvelopeDeterminism(t *testing.T) {
 	// 3. no hydrator wired: bare raw list (shape untouched)
 	s3 := kgServer(t, &fakeKG{relations: relWithEvidence([]string{"c1"})})
 	rec := httptest.NewRecorder()
-	s3.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/kg/relations", nil))
+	s3.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/kg/relations", nil))
 	if strings.Contains(rec.Body.String(), "sources") || !strings.HasPrefix(strings.TrimSpace(rec.Body.String()), "[") {
 		t.Fatalf("without hydrator the bare list is the contract, got: %s", rec.Body.String())
 	}
@@ -222,7 +222,7 @@ func TestKGRelationsEntityIDWiring(t *testing.T) {
 	// entity_id passes through as the entity filter (new canonical name).
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/api/kg/relations?entity_id=00000000-0000-0000-0000-00000000000b", nil))
+		"/api/v1/kg/relations?entity_id=00000000-0000-0000-0000-00000000000b", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -233,7 +233,7 @@ func TestKGRelationsEntityIDWiring(t *testing.T) {
 	// legacy `entity` alias keeps working (existing callers).
 	rec2 := httptest.NewRecorder()
 	s.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet,
-		"/api/kg/relations?entity=00000000-0000-0000-0000-00000000000c", nil))
+		"/api/v1/kg/relations?entity=00000000-0000-0000-0000-00000000000c", nil))
 	if rec2.Code != http.StatusOK || kg.lastEnt != "00000000-0000-0000-0000-00000000000c|" {
 		t.Fatalf("legacy entity alias broken: %d %q", rec2.Code, kg.lastEnt)
 	}
@@ -241,7 +241,7 @@ func TestKGRelationsEntityIDWiring(t *testing.T) {
 	// entity_id wins when both are present (deterministic precedence).
 	rec3 := httptest.NewRecorder()
 	s.ServeHTTP(rec3, httptest.NewRequest(http.MethodGet,
-		"/api/kg/relations?entity=00000000-0000-0000-0000-00000000000c&entity_id=00000000-0000-0000-0000-00000000000b", nil))
+		"/api/v1/kg/relations?entity=00000000-0000-0000-0000-00000000000c&entity_id=00000000-0000-0000-0000-00000000000b", nil))
 	if kg.lastEnt != "00000000-0000-0000-0000-00000000000b|" {
 		t.Fatalf("entity_id must take precedence, got %q", kg.lastEnt)
 	}
@@ -249,7 +249,7 @@ func TestKGRelationsEntityIDWiring(t *testing.T) {
 	// malformed entity_id hits the (now effective) uuid guard.
 	rec4 := httptest.NewRecorder()
 	s.ServeHTTP(rec4, httptest.NewRequest(http.MethodGet,
-		"/api/kg/relations?entity_id=not-a-uuid", nil))
+		"/api/v1/kg/relations?entity_id=not-a-uuid", nil))
 	if rec4.Code != http.StatusBadRequest {
 		t.Fatalf("malformed entity_id must 400, got %d", rec4.Code)
 	}
@@ -261,7 +261,7 @@ func TestKGEmptyAnswersAreArrays(t *testing.T) {
 	kg := &fakeKG{} // returns nil relations
 	s := kgServer(t, kg)
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/kg/relations", nil))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/kg/relations", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}

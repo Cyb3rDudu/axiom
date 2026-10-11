@@ -24,7 +24,7 @@ The ingestion surface reports every document's lifecycle (see the
 
 ```bash
 # Overall picture
-curl http://<host>:<port>/api/ingest/jobs
+curl http://<host>:<port>/api/v1/ingest/jobs
 ```
 
 Expect a status of `pending`, `claimed`, `processing`, `completed`, `failed`,
@@ -46,7 +46,7 @@ To see where a job currently is, ask the **runner**, not the dispatcher:
 `GET http://<runner-host>:<runner-port>/v1/jobs/{job_id}` returns the live
 `stage` (plus progress). Use the job id straight from the ingest list — the
 dispatcher submits that same id to the runner unchanged, so no id translation
-is needed; the dispatcher's `/api/ingest/jobs` simply has no per-job route
+is needed; the dispatcher's `/api/v1/ingest/jobs` simply has no per-job route
 (only the paged list). After the job completes, the same stages are
 reconstructible from the persisted `manifest.stage_timings`, so post-hoc
 analysis needs no live observation.

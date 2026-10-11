@@ -53,7 +53,7 @@ type canonicalIdentity struct {
 // handler (never from constants — the gate must witness the response).
 func identityOf(srv *server.Server) canonicalIdentity {
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
 	if rec.Code != http.StatusOK {
 		panic("health status " + http.StatusText(rec.Code))
 	}

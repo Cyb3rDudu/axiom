@@ -39,7 +39,7 @@ func TestLivePassageGolden(t *testing.T) {
 	}
 
 	var p map[string]any
-	if code := httpJSON(t, "GET", ragBase()+"/api/passage/"+f.ChunkID, nil, &p); code != 200 {
+	if code := httpJSON(t, "GET", ragBase()+"/api/v1/passage/"+f.ChunkID, nil, &p); code != 200 {
 		t.Fatalf("passage status %d", code)
 	}
 	goldenCompare(t, "passage_shape.json", shapeOf(p))
@@ -220,7 +220,7 @@ func TestLiveKGGolden(t *testing.T) {
 	}
 
 	var entities []map[string]any
-	if code := httpJSON(t, "GET", ragBase()+"/api/kg/entities?q="+f.EntityQuery+"&limit=3", nil, &entities); code != 200 {
+	if code := httpJSON(t, "GET", ragBase()+"/api/v1/kg/entities?q="+f.EntityQuery+"&limit=3", nil, &entities); code != 200 {
 		t.Fatalf("kg entities status %d", code)
 	}
 	if len(entities) == 0 {
@@ -244,7 +244,7 @@ func TestLiveKGGolden(t *testing.T) {
 
 	id, _ := top["id"].(string)
 	var neighbors map[string]any
-	if code := httpJSON(t, "GET", ragBase()+"/api/kg/entities/"+id+"/neighbors", nil, &neighbors); code != 200 {
+	if code := httpJSON(t, "GET", ragBase()+"/api/v1/kg/entities/"+id+"/neighbors", nil, &neighbors); code != 200 {
 		t.Fatalf("kg neighbors status %d", code)
 	}
 	goldenCompare(t, "kg_neighbors_shape.json", shapeOf(neighbors))
@@ -253,7 +253,7 @@ func TestLiveKGGolden(t *testing.T) {
 	}
 
 	var relations map[string]any
-	if code := httpJSON(t, "GET", ragBase()+"/api/kg/relations?limit=5", nil, &relations); code != 200 {
+	if code := httpJSON(t, "GET", ragBase()+"/api/v1/kg/relations?limit=5", nil, &relations); code != 200 {
 		t.Fatalf("kg relations status %d", code)
 	}
 	rels, _ := relations["relations"].([]any)

@@ -43,7 +43,7 @@ missing=""
 for f in $ENV_FILES; do
     [ -f "$HOME/.config/axiom/$f" ] || missing="$missing\n  ~/.config/axiom/$f (0700, secrets here)"
 done
-[ -x /opt/axiom/bin/axiom-ng ] || missing="$missing\n  /opt/axiom/bin/axiom-ng (make install / install_release.sh)"
+[ -x /opt/axiom/bin/axiom ] || missing="$missing\n  /opt/axiom/bin/axiom (make install / install_release.sh)"
 [ -x /opt/axiom/compute-worker/current/env/bin/python ] || missing="$missing\n  /opt/axiom/compute-worker/current/env/bin/python"
 if [ "$with_bridge" = 1 ] && grep -q __BRIDGE_CMD__ "$SRC/com.axiom.carrier-bridge.plist" 2>/dev/null; then
     missing="$missing\n  carrier-bridge template still contains __BRIDGE_CMD__ (edit deploy/launchd/com.axiom.carrier-bridge.plist first!)"
@@ -88,7 +88,7 @@ fi
 echo "services to install into $DEST:"
 for s in $SERVICES; do echo "  $s -> $DEST/$s.plist (logs: $LOGS/)"; done
 [ "$with_bridge" = 1 ] && echo "  com.axiom.carrier-bridge (template — edit __BRIDGE_CMD__ first!)"
-echo "Prereqs: /opt/axiom/bin/axiom-ng + /opt/axiom/compute-worker/current (make install), env files in ~/.config/axiom/*.env (0700)."
+echo "Prereqs: /opt/axiom/bin/axiom + /opt/axiom/compute-worker/current (make install), env files in ~/.config/axiom/*.env (0700)."
 echo "Proceed? [yes/No]"
 read -r answer
 [ "$answer" = "yes" ] || {

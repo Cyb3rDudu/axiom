@@ -27,7 +27,7 @@ func (f *fakeSearch) Search(ctx context.Context, req search.Request) (*search.Re
 func TestSearchRouteNotConfigured(t *testing.T) {
 	s := New(":0", log.Default())
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/search",
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/search",
 		strings.NewReader(`{"query":"x"}`)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("want 503 without service, got %d", rec.Code)
@@ -38,7 +38,7 @@ func TestSearchRouteBadBody(t *testing.T) {
 	s := New(":0", log.Default())
 	s.SetSearchService(&fakeSearch{})
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/search",
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/search",
 		strings.NewReader(`not json`)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 for invalid body, got %d", rec.Code)
@@ -49,7 +49,7 @@ func TestSearchRouteBadRequestMapped(t *testing.T) {
 	s := New(":0", log.Default())
 	s.SetSearchService(&fakeSearch{err: search.ErrBadRequest("query must not be blank")})
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/search",
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/search",
 		strings.NewReader(`{"query":""}`)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 for ErrBadRequest, got %d", rec.Code)
@@ -66,7 +66,7 @@ func TestSearchRouteOK(t *testing.T) {
 			Locator: search.LocatorView{Kind: "page", Label: "S. 47"}}},
 	}})
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/search",
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/search",
 		strings.NewReader(`{"query":"csr","top_n":1}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())

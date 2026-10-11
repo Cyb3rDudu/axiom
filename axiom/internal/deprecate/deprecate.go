@@ -1,7 +1,7 @@
 // Package deprecate is the central legacy-usage witness (ADR 0001 §6,
 // #296). Legacy entrypoints and env vars stay functional through 0.2.x;
 // their use is warned about exactly once per process and counted on
-// every call. The counters are exported via /api/health (deprecations)
+// every call. The counters are exported via /api/v1/health (deprecations)
 // and are the data basis for the 0.3.x+ removal decision — not gut
 // feeling. F02 ships the mechanism only; the legacy entrypoints
 // themselves arrive with F05/F08/F10 and call Use from their aliases.

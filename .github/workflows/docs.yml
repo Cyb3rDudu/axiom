@@ -59,12 +59,11 @@ jobs:
               # Product name is 'axiom'. Allowed occurrences (#352 sweep):
               # 1) the single historical note in About ("was known as
               #    *axiom-ng*") — exempted at phrase level, not whole-file;
-              # 2) go run/go build command lines referencing the alias
-              #    binary (`axiom/cmd/axiom-ng`, `cd axiom && go run
-              #    ./cmd/axiom-ng`) — code paths are technical facts;
-              # 3) CLI invocations of the binary (`./axiom-ng -flag …`,
-              #    `axiom-ng --version`) — the binary's name is a fact;
-              # 4) release artifact names (`axiom-ng-<version>…`) and the
+              # 2) #368 (v0.2.4): the alias binary is GONE — code-path
+              #    and CLI-invocation exemptions were REMOVED with it; a
+              #    reintroduced `cmd/axiom-ng` or `axiom-ng --flag`
+              #    reference goes red;
+              # 3) release artifact names (`axiom-ng-<version>…`) and the
               #    alias list (`axiom-ng, axiom-compute-worker,
               #    axiom-repair-worker`) — shipped names are facts;
               # 5) mapping-table rows: ADR 0001 (the binding decision
@@ -90,8 +89,6 @@ jobs:
                        grep -iH 'axiom-ng' mkdocs.yml; } \
                     | grep -v '_inventory.md' \
                     | grep -vF 'was known as *axiom-ng*' \
-                    | grep -vE '(go run|go build).*cmd/axiom-ng' \
-                    | grep -vE '(\./)?axiom-ng +-' \
                     | grep -vF 'axiom-ng-<version>' \
                     | grep -vF 'axiom-ng, axiom-compute-worker' \
                     | grep -vE "$ADRROWS" \

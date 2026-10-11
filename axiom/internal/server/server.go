@@ -89,14 +89,14 @@ type Server struct {
 func (s *Server) SetRevisionPublisher(p axlibrary.RevisionPublisher) { s.revisionPublisher = p }
 
 // New builds a Server with no backing-dependency checkers yet. Register them
-// via RegisterCheck so /api/health reports their reachability.
+// via RegisterCheck so /api/v1/health reports their reachability.
 func New(addr string, log *log.Logger) *Server {
 	return &Server{addr: addr, checkers: map[string]Checker{}, log: log, wsLive: newWSLiveConns()}
 }
 
-// RegisterCheck adds a named dependency checker reported by /api/health.
+// RegisterCheck adds a named dependency checker reported by /api/v1/health.
 // The registry is mutex-guarded (DM07 #316, review round 2): the F11
-// internal edges serve /api/health from a listener that starts while
+// internal edges serve /api/v1/health from a listener that starts while
 // LATER components still register their checks — an unsynchronized
 // map write next to handleHealth's range is a fatal race, not an
 // recoverable error.
@@ -106,7 +106,7 @@ func (s *Server) RegisterCheck(name string, c Checker) {
 	s.checkers[name] = c
 }
 
-// SetContextualState wires the #262 /api/health contextual field: "active"
+// SetContextualState wires the #262 /api/v1/health contextual field: "active"
 // or "degraded_no_sync" while rules are configured (omitted otherwise) — a
 // permanently degraded deployment must be observable, not silent.
 func (s *Server) SetContextualState(f func() string) { s.contextualState = f }
@@ -151,7 +151,7 @@ func componentRolesOrDefault(roles []string) []string {
 // full-stack vocabulary).
 func (s *Server) SetComponentRoles(roles []string) { s.componentRoles = roles }
 
-// SetReadinessState wires the F05 /api/health readiness field: the
+// SetReadinessState wires the F05 /api/v1/health readiness field: the
 // aggregated per-role component readiness of THIS process (composition
 // root is the caller; values "ready" | "starting" | "stopping").
 func (s *Server) SetReadinessState(f func() map[string]string) { s.readinessState = f }
@@ -162,29 +162,25 @@ func (s *Server) Handler() http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 
-	r.Get("/api/health", s.handleHealth)
-	// Canonical /api/v1 namespace (F05, #299): the same handlers as the
-	// compat routes — byte-identical responses by construction (one
-	// handler, two registrations; the parity test witnesses it). Start
-	// set: health, search, passage; further routes arrive with the
-	// component extraction (F06–F10). The unversioned routes above stay
-	// untouched through 0.2.x (F01 baseline guards them byte-for-byte).
+	// #368 (ADR 0001 executed, v0.2.4): /api/v1 is the ONLY public API
+	// surface — the 13 unversioned compat routes next to these canonical
+	// registrations are gone. Operational/admin surfaces (ws, runners/live,
+	// processor/source, kg/consolidate, repair/*) stay unversioned: they
+	// were never part of the public client contract.
 	r.Get("/api/v1/health", s.handleHealth)
-	r.Post("/api/zotero/sync", s.handleSync)
-	r.Get("/api/ingest/jobs", s.handleJobs)
-	r.Post("/api/ingest/documents/{documentID}/force-rebuild", s.handleForceRebuild)
-	r.Get("/api/zotero/selection", s.handleGetSelection)
-	r.Get("/api/zotero/selection/resolved", s.handleSelectionResolved)
-	r.Put("/api/zotero/selection", s.handlePutSelection)
-	r.Get("/api/zotero/documents", s.handleZoteroDocuments)
-	r.Post("/api/search", s.handleSearch)
+	r.Post("/api/v1/zotero/sync", s.handleSync)
+	r.Get("/api/v1/ingest/jobs", s.handleJobs)
+	r.Post("/api/v1/ingest/documents/{documentID}/force-rebuild", s.handleForceRebuild)
+	r.Get("/api/v1/zotero/selection", s.handleGetSelection)
+	r.Get("/api/v1/zotero/selection/resolved", s.handleSelectionResolved)
+	r.Put("/api/v1/zotero/selection", s.handlePutSelection)
+	r.Get("/api/v1/zotero/documents", s.handleZoteroDocuments)
 	r.Post("/api/v1/search", s.handleSearch)
-	r.Get("/api/passage/{id}", s.handlePassage)
 	r.Get("/api/v1/passage/{id}", s.handlePassage)
-	r.Get("/api/passage/{id}/page", s.handlePassageAt)
-	r.Get("/api/kg/entities", s.handleKGEntities)
-	r.Get("/api/kg/entities/{id}/neighbors", s.handleKGNeighbors)
-	r.Get("/api/kg/relations", s.handleKGRelations)
+	r.Get("/api/v1/passage/{id}/page", s.handlePassageAt)
+	r.Get("/api/v1/kg/entities", s.handleKGEntities)
+	r.Get("/api/v1/kg/entities/{id}/neighbors", s.handleKGNeighbors)
+	r.Get("/api/v1/kg/relations", s.handleKGRelations)
 	// #168 (B2): the live event WebSocket. Registered always; the handler
 	// 404s when s.ws is nil (sourceSecret/repair-API pattern — unwired is
 	// indistinguishable from absent).
@@ -224,7 +220,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.Handler().ServeHTTP(w, r)
 }
 
-// healthResponse is returned by /api/health.
+// healthResponse is returned by /api/v1/health.
 type healthResponse struct {
 	OK     bool           `json:"ok"`
 	Build  string         `json:"build"` // version banner — must match `axiom --version` (#205 DoD)
@@ -252,7 +248,7 @@ type healthResponse struct {
 }
 
 // HealthEndpoint exposes the health handler for MOUNTING (DM07 #316:
-// the F11 internal component edges serve GET /api/health from the SAME
+// the F11 internal component edges serve GET /api/v1/health from the SAME
 // checker registry as the public surface, so the credential-free api
 // edge can proxy dependency visibility over the component edges —
 // identical payload, no extra state).

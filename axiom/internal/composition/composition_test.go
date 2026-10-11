@@ -85,7 +85,7 @@ func TestSelectRejectsMissingDependency(t *testing.T) {
 // is a configuration error, not a degrade.
 func TestSelectRejectsStoreWithoutDSN(t *testing.T) {
 	_, err := Select(apiOnlyCfg(0), testLogger(), Ports{}, RoleStore)
-	if err == nil || !strings.Contains(err.Error(), "AXIOM_DATABASE_URL") {
+	if err == nil || !strings.Contains(err.Error(), "AXIOM_STORE_DATABASE_URL") {
 		t.Fatalf("store without DSN must fail with the DSN diagnosis, got: %v", err)
 	}
 }
@@ -151,7 +151,7 @@ func TestAPIOnlyLifecycleAndQuietStop(t *testing.T) {
 		t.Fatalf("ready: %v", err)
 	}
 
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/health", port))
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", port))
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -255,13 +255,13 @@ func TestBinaryExitsNonZeroOnHalfWiring(t *testing.T) {
 		t.Skip("binary build skipped in -short mode")
 	}
 	bin := filepath.Join(t.TempDir(), "axiom-ng")
-	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/axiom-ng").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/axiom").CombinedOutput(); err != nil {
 		t.Fatalf("build binary: %v\n%s", err, out)
 	}
 	cmd := exec.Command(bin)
 	cmd.Env = append(os.Environ(),
 		"AXIOM_DISPATCHER_ENABLED=1",
-		"AXIOM_DATABASE_URL=",
+		"AXIOM_STORE_DATABASE_URL=",
 		fmt.Sprintf("AXIOM_API_PORT=%d", freePort(t)),
 	)
 	out, err := cmd.CombinedOutput()
@@ -346,7 +346,7 @@ func TestSelectWorkerEnvPrecedenceNote(t *testing.T) {
 }
 
 // TestReadinessPublicInHealth — F05 #299: the aggregated internal readiness
-// is publicly visible in /api/health ("ready" once the component's internal
+// is publicly visible in /api/v1/health ("ready" once the component's internal
 // signal fired) and flips to "stopping" when the shutdown begins (witnessed
 // on the snapshot directly — the listener is gone by then).
 func TestReadinessPublicInHealth(t *testing.T) {
@@ -367,7 +367,7 @@ func TestReadinessPublicInHealth(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	var readiness map[string]string
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/health", port))
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", port))
 		if err == nil {
 			var health struct {
 				Readiness map[string]string `json:"readiness"`

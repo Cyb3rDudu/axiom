@@ -165,7 +165,7 @@ func startSplitProc(t *testing.T, e *splitE2EEnv, role string, port, edge int) *
 		"HOME=" + os.Getenv("HOME"),
 		"PATH=" + os.Getenv("PATH"),
 		"TMPDIR=" + os.Getenv("TMPDIR"),
-		"AXIOM_DATABASE_URL=" + e.dsn,
+		"AXIOM_STORE_DATABASE_URL=" + e.dsn,
 		fmt.Sprintf("AXIOM_API_PORT=%d", port),
 		"AXIOM_BIND_ADDR=127.0.0.1",
 		"AXIOM_OPENSEARCH_URL=" + e.osURL,
@@ -387,7 +387,7 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 	startAndWait := func(role string, port, edge int) *splitProc {
 		proc := startSplitProc(t, e, role, port, edge)
 		waitFor(t, 90*time.Second, role+" process healthy", func() error {
-			resp, err := http.Get(proc.url() + "/api/health")
+			resp, err := http.Get(proc.url() + "/api/v1/health")
 			if err != nil {
 				// alive but not answering: surface the boot log tail so a
 				// wedged start names its stall, not just "refused"
@@ -422,7 +422,7 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 	// above already polices per process). The four LEGACY check names
 	// live on the component processes now, not at the edge.
 	waitFor(t, 90*time.Second, "split public edge healthy", func() error {
-		resp, err := http.Get(e.api.url() + "/api/health")
+		resp, err := http.Get(e.api.url() + "/api/v1/health")
 		if err != nil {
 			return err
 		}
@@ -460,7 +460,7 @@ func TestF14SplitTopologyE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(libPool.Close)
-	syncResp := postJSON(t, e.library.url()+"/api/zotero/sync", map[string]any{})
+	syncResp := postJSON(t, e.library.url()+"/api/v1/zotero/sync", map[string]any{})
 	if syncResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(syncResp.Body)
 		t.Fatalf("sync status %d: %s; library log tail:\n%s", syncResp.StatusCode, body, tailLogs(e.library.logs))

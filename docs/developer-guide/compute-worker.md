@@ -37,7 +37,7 @@ The runner plays two roles; the dispatcher wires which URL is which:
   search API. Defaults to the **local** always-on runner so retrieval survives a
   remote-runner outage. Override with `AXIOM_QUERY_RUNNER_URL`.
 - **Ingest role** (`/v1/process`) — document processing, with a primary
-  (`AXIOM_PROCESSOR_URL`) and a fallback (`AXIOM_INGEST_FALLBACK_URL`) forming a
+  (`AXIOM_COMPUTE_WORKER_URL`) and a fallback (`AXIOM_INGEST_FALLBACK_URL`) forming a
   failover chain. The fallback defaults to a local runner (complete, ~11×
   slower).
 
@@ -195,7 +195,7 @@ frozen (the F01 baseline suite and the contract suite are the witnesses).
 | Install | `/opt/axiom/compute-worker/<version>/`, shim `bin/axiom-compute-worker` | wrapper `bin/axiom-runner` (warns once, delegates) |
 | make target | `make compute-worker` | `make runner` (deprecation echo) |
 | launchd | `com.axiom.compute-worker` | old label retires with the operator switch |
-| Dispatcher env | `AXIOM_COMPUTE_WORKER_{URL,URLS,NAME,TIMEOUT,SOURCE_SECRET,SOURCE_BASE_URL,HEALTH_INTERVAL}` | the `AXIOM_PROCESSOR_*` / `AXIOM_RUNNER_HEALTH_INTERVAL` spellings (witnessed via `/api/health/deprecations`) |
+| Dispatcher env | `AXIOM_COMPUTE_WORKER_{URL,URLS,NAME,TIMEOUT,SOURCE_SECRET,SOURCE_BASE_URL,HEALTH_INTERVAL}` | the `AXIOM_PROCESSOR_*` / `AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL` spellings (witnessed via `/api/health/deprecations`) |
 | Worker env | `AXIOM_PROCESSOR_*` (unchanged) | — (frozen per #304; NOT renamed) |
 
 **Alias runtime:** aliases are functional through all of 0.2.x; removal
@@ -213,8 +213,8 @@ itself the package, now the packages sit one level inside (see the
 Containerfile in `EXTERNAL_RUNNER_DEPLOYMENT.md`). With PYTHONPATH on the
 project dir, `CMD ["python", "-m", "axiom_ng_runner"]` KEEPS WORKING
 (warn-once alias); with PYTHONPATH on `/app` BOTH the canonical and the
-legacy module fail to resolve. Dispatcher-side env may stay on the legacy
-spellings; each process warns once and reports the use. Role vocabulary
+legacy module fail to resolve. Dispatcher-side legacy env spellings are
+removed (#368) — every refusal names the canonical successor. Role vocabulary
 (`AXIOM_QUERY_RUNNER_URL`, `AXIOM_INGEST_FALLBACK_URL`) deliberately keeps
 its spelling — F09 froze the topology semantics.
 

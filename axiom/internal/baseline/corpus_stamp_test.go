@@ -218,7 +218,7 @@ func precheckCorpusStamp() error {
 	}
 	dsn := fingerprintDSN()
 	if dsn == "" {
-		return fmt.Errorf("corpus stamp: live mode without AXIOM_DATABASE_URL (source scripts/dev/env.sh)")
+		return fmt.Errorf("corpus stamp: live mode without AXIOM_STORE_DATABASE_URL (source scripts/dev/env.sh)")
 	}
 	osURL := os.Getenv("AXIOM_OPENSEARCH_URL")
 	if osURL == "" {

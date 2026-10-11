@@ -28,7 +28,7 @@ func passageReq(t *testing.T, svc PassageService, id string) *httptest.ResponseR
 		s.SetPassageService(svc)
 	}
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/passage/"+id, nil))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/passage/"+id, nil))
 	return rec
 }
 
@@ -103,7 +103,7 @@ func TestPassagePageAt_ExactPageFromMap(t *testing.T) {
 	s.SetPassageService(stub)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/api/passage/04881089-3833-420f-a8a9-5b493e4a7d56/page?at=610", nil))
+		"/api/v1/passage/04881089-3833-420f-a8a9-5b493e4a7d56/page?at=610", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -128,7 +128,7 @@ func TestPassagePageAt_NoMap404(t *testing.T) {
 	s.SetPassageService(stub)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/api/passage/00000000-0000-4000-8000-000000000002/page?at=5", nil))
+		"/api/v1/passage/00000000-0000-4000-8000-000000000002/page?at=5", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("pre-#194 chunk without map must 404 with the span hint, got %d", rec.Code)
 	}
@@ -139,7 +139,7 @@ func TestPassagePageAt_BadOffset400(t *testing.T) {
 	s.SetPassageService(stubPassage{})
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/api/passage/04881089-3833-420f-a8a9-5b493e4a7d56/page?at=abc", nil))
+		"/api/v1/passage/04881089-3833-420f-a8a9-5b493e4a7d56/page?at=abc", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 for non-numeric ?at, got %d", rec.Code)
 	}
@@ -157,7 +157,7 @@ func TestPassagePageAt_EPUB404(t *testing.T) {
 	s.SetPassageService(stub)
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/api/passage/04881089-3833-420f-a8a9-5b493e4a7d56/page?at=610", nil))
+		"/api/v1/passage/04881089-3833-420f-a8a9-5b493e4a7d56/page?at=610", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("EPUB page query must 404 (APA section is the citation form), got %d", rec.Code)
 	}

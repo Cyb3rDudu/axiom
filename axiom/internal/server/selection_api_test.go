@@ -95,7 +95,7 @@ func TestSelectionRoundTrip(t *testing.T) {
 	s.SetSelectionRepo(stub)
 
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/zotero/selection",
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/zotero/selection",
 		strings.NewReader(`{"selection":[{"document_id":"`+id+`","mode":"excluded"}]}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("put: %d %s", rec.Code, rec.Body.String())
@@ -104,7 +104,7 @@ func TestSelectionRoundTrip(t *testing.T) {
 		t.Fatalf("batch not passed through: %+v", stub.put)
 	}
 	rec = httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/selection", nil))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/zotero/selection", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"excluded"`) {
 		t.Fatalf("get: %d %s", rec.Code, rec.Body.String())
 	}
@@ -121,7 +121,7 @@ func TestSelectionRouteWitness_CollectionsThroughHTTP(t *testing.T) {
 	s.SetSelectionRepo(stub)
 
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/zotero/selection",
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/zotero/selection",
 		strings.NewReader(`{"selection":[{"document_id":"00000000-0000-4000-8000-000000000001","mode":"excluded"}],"collections":[{"collection_key":"VWLPRAXY","mode":"included"}]}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("put: %d %s", rec.Code, rec.Body.String())
@@ -130,12 +130,12 @@ func TestSelectionRouteWitness_CollectionsThroughHTTP(t *testing.T) {
 		t.Fatalf("collection entry must reach the batch write: %+v", stub.collsPut)
 	}
 	rec = httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/selection", nil))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/zotero/selection", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"VWLPRAXY":"included"`) {
 		t.Fatalf("get must show the collection selection: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/selection/resolved", nil))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/zotero/selection/resolved", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("resolved: %d %s", rec.Code, rec.Body.String())
 	}
@@ -156,18 +156,18 @@ func TestSelectionRouteWitness_CollectionsThroughHTTP(t *testing.T) {
 }
 
 func TestSelectionValidation(t *testing.T) {
-	if rec, _ := selReq(t, http.MethodPut, "/api/zotero/selection",
+	if rec, _ := selReq(t, http.MethodPut, "/api/v1/zotero/selection",
 		`{"selection":[{"document_id":"nope","mode":"excluded"}]}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("non-uuid must 400: %d", rec.Code)
 	}
-	if rec, _ := selReq(t, http.MethodPut, "/api/zotero/selection",
+	if rec, _ := selReq(t, http.MethodPut, "/api/v1/zotero/selection",
 		`{"selection":[{"document_id":"00000000-0000-4000-8000-000000000001","mode":"wah"}]}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad mode must 400: %d", rec.Code)
 	}
-	if rec, _ := selReq(t, http.MethodGet, "/api/zotero/documents?sync_state=bogus", ""); rec.Code != http.StatusBadRequest {
+	if rec, _ := selReq(t, http.MethodGet, "/api/v1/zotero/documents?sync_state=bogus", ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad sync_state must 400: %d", rec.Code)
 	}
-	if rec, _ := selReq(t, http.MethodGet, "/api/zotero/selection", ""); rec.Code != http.StatusOK {
+	if rec, _ := selReq(t, http.MethodGet, "/api/v1/zotero/selection", ""); rec.Code != http.StatusOK {
 		// stub wired in selReq — not-configured covered separately below
 		t.Fatalf("wired get must 200: %d", rec.Code)
 	}
@@ -176,7 +176,7 @@ func TestSelectionValidation(t *testing.T) {
 func TestSelectionNotConfigured(t *testing.T) {
 	s := New(":0", nil)
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/selection", nil))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/zotero/selection", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("want 503, got %d", rec.Code)
 	}
@@ -188,7 +188,7 @@ func TestSelectionFKMaps422(t *testing.T) {
 		err: fmt.Errorf("upsert selection: %w", &pgconn.PgError{Code: "23503", Message: "insert or update on table \"zotero_selections\" violates foreign key"})}
 	s.SetSelectionRepo(stub)
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/zotero/selection",
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/zotero/selection",
 		strings.NewReader(`{"selection":[{"document_id":"00000000-0000-4000-8000-000000000001","mode":"excluded"}]}`)))
 	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "unknown document") {
 		t.Fatalf("fk violation must 422 with hint, got %d %s", rec.Code, rec.Body.String())
@@ -196,7 +196,7 @@ func TestSelectionFKMaps422(t *testing.T) {
 	// other errors stay 500
 	stub.err = fmt.Errorf("boom")
 	rec = httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/zotero/selection",
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/zotero/selection",
 		strings.NewReader(`{"selection":[{"document_id":"00000000-0000-4000-8000-000000000001","mode":"excluded"}]}`)))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("non-fk error must stay 500, got %d", rec.Code)
@@ -212,7 +212,7 @@ func TestDocumentsListing(t *testing.T) {
 	}}
 	s.SetSelectionRepo(stub)
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/zotero/documents?sync_state=held", nil))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/zotero/documents?sync_state=held", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"sync_state":"held"`) {
 		t.Fatalf("listing: %d %s", rec.Code, rec.Body.String())
 	}
@@ -235,7 +235,7 @@ func TestSyncOverrideBody(t *testing.T) {
 	s.SetSyncAPI(stub)
 	body := `{"include":["00000000-0000-4000-8000-000000000009"],"exclude":["00000000-0000-4000-8000-000000000008"]}`
 	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/zotero/sync", strings.NewReader(body)))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/zotero/sync", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("sync with override: %d %s", rec.Code, rec.Body.String())
 	}
@@ -244,13 +244,13 @@ func TestSyncOverrideBody(t *testing.T) {
 	}
 	// invalid ids are rejected before any sync runs
 	rec = httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/zotero/sync", strings.NewReader(`{"include":["junk"]}`)))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/zotero/sync", strings.NewReader(`{"include":["junk"]}`)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad override id must 400: %d", rec.Code)
 	}
 	// empty body = plain sync (nil override)
 	rec = httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/zotero/sync", nil))
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/zotero/sync", nil))
 	if rec.Code != http.StatusOK || stub.lastOverride != nil {
 		t.Fatalf("plain sync must pass nil override: %d %+v", rec.Code, stub.lastOverride)
 	}

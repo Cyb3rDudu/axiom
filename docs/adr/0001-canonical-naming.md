@@ -1,6 +1,10 @@
 # ADR 0001: Canonical naming for the 0.2.0 component split
 
-- Status: Accepted (F02, #296; part of the 0.2.0 epic #342)
+- Status: Accepted (F02, #296; part of the 0.2.0 epic #342) —
+  **executed at v0.2.4 (#368)**: the scheduled alias-generation removal
+  (axiom-ng binary, legacy dispatcher/repair env spellings, the
+  unversioned compat routes) shipped as the final 0.2.x release
+  (decision update 2026-10-10, dudu); 0.3.0 develops on the clean base
 - Date: 2026-09-22
 - Baseline reference: F01 suite e7425f0 (#295); frozen tag v0.1.18,
   deployed binary generation bf77410 (suite ≠ deployed generation)
@@ -51,21 +55,27 @@ The public binary is **`axiom`** with role startup:
 axiom serve all|api|library|store
 ```
 
-The previous binary name becomes a functional **compatibility alias**
-through 0.2.x (wired with F05; it delegates to `axiom` and reports
-through the deprecation witness below — mapping table row 1).
+The previous binary name was a functional **compatibility alias**
+through 0.2.x (wired with F05; it delegated to `axiom` and reported
+through the deprecation witness below — mapping table row 1). The alias
+binary, its build/install/release surfaces and the legacy env
+spellings are **removed in v0.2.4** (#368): `axiom-ng` invocations fail
+with command-not-found, and removed env names are refused loudly with
+their canonical successor.
 
 ### 4. Mapping table (old → canonical → alias → removal horizon)
 
 | Old name (0.1.x) | Canonical (0.2.0) | Alias (functional through 0.2.x) | Removal horizon |
 |---|---|---|---|
-| `axiom-ng` binary, `axiom_ng` module | `axiom` (`axiom serve …`) | `axiom-ng` delegates | earliest an announced major; never silently (see §6) |
-| `axiom_ng_runner`, service "axiom-runner" | `axiom-compute-worker` | old module entrypoint | same rule; alias wired with F10 |
-| `axiom-fixer` (`pdf_repair_agent`) | `axiom-repair-worker` | `axiom-fixer` shim | same rule; alias wired with F08 |
+| `axiom-ng` binary, `axiom_ng` module | `axiom` (`axiom serve …`) | `axiom-ng` delegates | **removed v0.2.4 (#368)** |
+| `axiom_ng_runner`, service "axiom-runner" | `axiom-compute-worker` | old module entrypoint | still aliased (Python module surface) |
+| `axiom-fixer` (`pdf_repair_agent`) | `axiom-repair-worker` | `axiom-fixer` shim | still aliased (executor fallback) |
 | — | `axiom-research-worker` | — | reserved |
 | — | components Library / Store / Research | — | extraction is F04/F06/F09 scope |
 | `AXIOM_FIXSVC_*` env namespace | retired with `axiom_fixsvc` (no consumer ever existed outside the deleted service) | none — the worker env does not pass the prefix; see the deprecation schedule's "Retired by deletion" | n/a (dead since the F08 cutover) |
-| `AXIOM_FIX_SH_TIMEOUT` | `AXIOM_FIXER_SH_TIMEOUT` | fix.sh reads canonical with legacy fallback (warns once); the invoker hands down both through the transition | same rule |
+| `AXIOM_FIX_SH_TIMEOUT` | `AXIOM_FIXER_SH_TIMEOUT` | legacy pass-through through 0.2.x | **removed v0.2.4 (#368)** |
+| `AXIOM_DATABASE_URL`, `AXIOM_PROCESSOR_*` (dispatcher-side), `AXIOM_RUNNER_HEALTH_INTERVAL`, `AXIOM_FIXER_CMD` | canonical spellings (see deprecations page) | dual-fed fallback through 0.2.x | **removed v0.2.4 (#368; refusal names the successor)** |
+| unversioned `/api/*` public routes | `/api/v1/*` | compat pairs next to the canonical edge | **removed v0.2.4 (#368; versioned surface only)** |
 
 ### 5. Identity fields (additive, ADR-consistent)
 
@@ -73,7 +83,7 @@ Names become a decision by being visible in the runtime. Both services
 carry additive identity fields alongside every existing field — nothing
 renamed, nothing removed:
 
-| Field | RAG `/api/health` | Runner `/v1/capabilities` |
+| Field | RAG `/api/v1/health` | Runner `/v1/capabilities` |
 |---|---|---|
 | `canonical_name` | `"axiom"` | `"axiom-compute-worker"` |
 | `service_class` | `"api+library+store"` (compact role identity; narrows with F04/F05) | `"compute-worker"` |
@@ -99,9 +109,10 @@ One central hook per runtime (Go: `internal/deprecate`; Python:
   the data basis for the 0.3.x+ removal decision instead of gut feeling,
 - is **silenceable** for tests.
 
-Alias policy: aliases stay functional through all of 0.2.x. Removal
-happens earliest in an announced major release, never silently, and only
-after the exported counters justify it.
+Alias policy: aliases stayed functional through all of 0.2.x and were
+removed with the alias generation in v0.2.4 (#368) — announced on the
+deprecations page, never silently, on counter evidence (the production
+instance reported the canonical spellings only).
 
 ### 7. Language rule
 

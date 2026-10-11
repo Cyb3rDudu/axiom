@@ -153,13 +153,13 @@ func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 		. "%[1]s"
 		. "%[2]s"
 		set +a
-		unset AXIOM_DATABASE_URL
-		AXIOM_DATABASE_URL="$(printf '%%s' "$_PROD_DSN" | sed -E 's#/axiom_db([?]|$)#/axiom_dev\1#')"
-		[ -n "$AXIOM_DATABASE_URL" ] || exit 3
+		unset AXIOM_STORE_DATABASE_URL
+		AXIOM_STORE_DATABASE_URL="$(printf '%%s' "$_PROD_DSN" | sed -E 's#/axiom_db([?]|$)#/axiom_dev\1#')"
+		[ -n "$AXIOM_STORE_DATABASE_URL" ] || exit 3
 		# hard assert (same convention as dev-up.sh): a rewrite that silently
 		# did not stick would point this second RAG at axiom_db — fail LOUDLY
 		# before exec, never serve from prod
-		case "$AXIOM_DATABASE_URL" in
+		case "$AXIOM_STORE_DATABASE_URL" in
 		*"/axiom_dev" | *"/axiom_dev"[?]*) ;;
 		*"/axiom_db"*)
 			echo "repair probe: DATABASE_URL still points at axiom_db — rewrite failed" >&2
@@ -188,7 +188,7 @@ func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 		AXIOM_ZOTERO_WRITE_KEY_FILE="%[6]s"
 		AXIOM_DISPATCHER_ENABLED=0
 		AXIOM_DISPATCHER_WORKER_ID=axiom-dev-repair-probe
-		export AXIOM_DATABASE_URL AXIOM_API_PORT AXIOM_BIND_ADDR AXIOM_OS_INDEX \
+		export AXIOM_STORE_DATABASE_URL AXIOM_API_PORT AXIOM_BIND_ADDR AXIOM_OS_INDEX \
 			AXIOM_PROCESSOR_URLS AXIOM_PROCESSOR_URL AXIOM_QUERY_RUNNER_URL \
 			AXIOM_PROCESSOR_SOURCE_BASE_URL AXIOM_PROCESSOR_RUNNER_NAME \
 			AXIOM_ARTIFACT_ROOT AXIOM_QUARANTINE_ROOT \
@@ -234,7 +234,7 @@ func startRepairRAG(t *testing.T, fakeURL string) (base string, stop func()) {
 		var h struct {
 			OK bool `json:"ok"`
 		}
-		if code := httpMaybeJSON(t, "GET", base+"/api/health", nil, &h, true); code == 200 && h.OK {
+		if code := httpMaybeJSON(t, "GET", base+"/api/v1/health", nil, &h, true); code == 200 && h.OK {
 			// repair surface must be wired now: the queue endpoint must answer
 			var q map[string]any
 			if code := httpJSON(t, "GET", base+"/api/repair/queue", nil, &q); code == 200 {
@@ -272,7 +272,7 @@ func envFile(varname, def string) string {
 func prodDSN(t *testing.T) string {
 	t.Helper()
 	out, err := exec.Command("/bin/bash", "-c",
-		`set -a; . "`+envFile("AXIOM_DEV_RAG_ENV", "/run/agenix/axiom-rag.env")+`"; set +a; printf '%s' "$AXIOM_DATABASE_URL"`).Output()
+		`set -a; . "`+envFile("AXIOM_DEV_RAG_ENV", "/run/agenix/axiom-rag.env")+`"; set +a; printf '%s' "$AXIOM_STORE_DATABASE_URL"`).Output()
 	if err != nil {
 		t.Fatalf("read DSN from rag env: %v", err)
 	}

@@ -10,7 +10,7 @@ retrieval "arms" you can turn on.
 Search is a single HTTP call to the axiom API:
 
 ```bash
-curl -X POST http://127.0.0.1:8011/api/search \
+curl -X POST http://127.0.0.1:8011/api/v1/search \
   -H 'Content-Type: application/json' \
   -d '{"query": "What does the literature say about criticism of ESG ratings?", "top_n": 5}'
 ```
@@ -19,7 +19,7 @@ curl -X POST http://127.0.0.1:8011/api/search \
 an English question finds German books and vice versa). `top_n` is how many
 results you want. That's the whole call.
 
-> Reading this locally? Point `POST /api/search` at your axiom API port (8011 by
+> Reading this locally? Point `POST /api/v1/search` at your axiom API port (8011 by
 > default). The response includes which recall arms were used, so you can see
 > what happened even before reading the results.
 
@@ -83,7 +83,7 @@ it. `sparse` and `graph` are opt-in arms behind `AXIOM_SEARCH_SPARSE_ARM` and
 Use the returned `chunk_id` to retrieve the full citation context:
 
 ```bash
-curl http://127.0.0.1:8011/api/passage/<chunk-id>
+curl http://127.0.0.1:8011/api/v1/passage/<chunk-id>
 ```
 
 The passage response contains the chunk, its source and locator, and the
@@ -99,7 +99,7 @@ Resolve a character position inside a multi-page passage to one exact print
 page:
 
 ```bash
-curl 'http://127.0.0.1:8011/api/passage/<chunk-id>/page?at=1000'
+curl 'http://127.0.0.1:8011/api/v1/passage/<chunk-id>/page?at=1000'
 ```
 
 ```json
@@ -115,9 +115,9 @@ The graph API exposes entities, one-hop neighbors, and evidence-backed
 relations:
 
 ```bash
-curl 'http://127.0.0.1:8011/api/kg/entities?q=doppelte%20Wesentlichkeit'
-curl 'http://127.0.0.1:8011/api/kg/entities/<entity-id>/neighbors?limit=20'
-curl 'http://127.0.0.1:8011/api/kg/relations?document_id=<document-uuid>'
+curl 'http://127.0.0.1:8011/api/v1/kg/entities?q=doppelte%20Wesentlichkeit'
+curl 'http://127.0.0.1:8011/api/v1/kg/entities/<entity-id>/neighbors?limit=20'
+curl 'http://127.0.0.1:8011/api/v1/kg/relations?document_id=<document-uuid>'
 ```
 
 Entity search ranks four match classes in order: exact form,

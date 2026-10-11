@@ -39,7 +39,7 @@ EPUB-Reparaturen: `application/epub+zip`). Antwort: Schrittreport
 4. **Geheilte Datei hochladen** — unter dem Parent-Item mit Schema-Dateiname
    (`{Autor|Herausgeber|Institution} - {Jahr} - {Titel}.ext`, Mutation 2,
    `CreateAttachmentWithFile`).
-5. **Sync auslösen** (`POST /api/zotero/sync`) — das geheilte Attachment ist
+5. **Sync auslösen** (`POST /api/v1/zotero/sync`) — das geheilte Attachment ist
    jetzt der einzige verarbeitbare Kandidat → preferred → Preflight →
    reguläres Processing. Der Endpoint antwortet mit `next_step` als Erinnerung.
 

@@ -295,7 +295,7 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 	secrets := map[string]string{
 		"AXIOM_WS_SECRET":                    "ws-secret-value-xyz",
 		"AXIOM_OPENSEARCH_PASSWORD":          "os-password-value-xyz",
-		"AXIOM_DATABASE_URL":                 "postgresql://u:db-password-xyz@h/db",
+		"AXIOM_STORE_DATABASE_URL":                 "postgresql://u:db-password-xyz@h/db",
 		"AXIOM_COMPUTE_WORKER_SOURCE_SECRET": "hmac-source-secret-xyz",
 	}
 	for k, v := range secrets {
@@ -420,7 +420,7 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 		}
 	}
 	// the DSN's credential never entered the settings either.
-	if v, ok := first.Values["AXIOM_DATABASE_URL"]; ok {
+	if v, ok := first.Values["AXIOM_STORE_DATABASE_URL"]; ok {
 		t.Fatalf("secret-valued key must not be a settings row, got %q", v)
 	}
 }
@@ -581,7 +581,7 @@ func TestDoctorProbeHTTPRedactsCredentialQuery(t *testing.T) {
 // have gone unnoticed.
 func TestConfigValidateExitsZeroWhenConsistent(t *testing.T) {
 	backedConfig(t) // pin the store path — never the runner's default
-	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "")
 	t.Setenv("AXIOM_SEARCH_RERANK", "false")
 	t.Setenv("AXIOM_API_PORT", "8222")
 	if exit, out, _ := captureRunTo("config", "validate"); exit != exitOK {
@@ -622,50 +622,36 @@ func TestImportEnvPositiveRows(t *testing.T) {
 	}
 }
 
-// TestSecretRefDriftIsPairAware — a reference imported under the legacy
-// spelling stays drift-free once the export migrates to the canonical
-// spelling: the chain feeds the FIELD, and the drift check knows the
-// pair.
-func TestSecretRefDriftIsPairAware(t *testing.T) {
+// TestSecretRefLegacySpellingRefused — #368: a config.sqlite secret
+// reference under a removed legacy spelling is refused loudly (the row
+// is unknown vocabulary); the canonical spelling stays drift-free.
+func TestSecretRefLegacySpellingRefused(t *testing.T) {
 	defer restoreProcessEnv(snapshotEnv())()
 	path := backedConfig(t)
 	st, err := configstore.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetAll(nil, map[string]string{"AXIOM_PROCESSOR_SOURCE_SECRET": configstore.SecretRefSourceEnv}); err != nil {
+	if err := st.SetAll(nil, map[string]string{"AXIOM_COMPUTE_WORKER_SOURCE_SECRET": configstore.SecretRefSourceEnv}); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()
-	// legacy spelling unset, canonical spelling set: no drift.
 	t.Setenv("AXIOM_COMPUTE_WORKER_SOURCE_SECRET", "fed-via-canonical")
 	if problems := config.SecretRefDrift(); len(problems) != 0 {
-		t.Fatalf("pair-aware drift check must not fire, got %v", problems)
-	}
-	// both spellings unset: drift.
-	os.Unsetenv("AXIOM_COMPUTE_WORKER_SOURCE_SECRET")
-	if problems := config.SecretRefDrift(); len(problems) == 0 {
-		t.Fatal("drift must fire when neither spelling feeds the reference")
+		t.Fatalf("canonical reference must stay drift-free, got %v", problems)
 	}
 }
 
-// TestValidateEnvSkipsShadowedLegacySpelling — a legacy value the
-// resolver never reads (canonical sibling set) is dead config, not a
-// silent fallback: validate must not report it.
-func TestValidateEnvSkipsShadowedLegacySpelling(t *testing.T) {
+// TestValidateEnvNamesRemovedLegacySpelling — a removed legacy spelling
+// set in the environment is dead config the operator must hear about:
+// validate names it with the canonical successor (#368).
+func TestValidateEnvNamesRemovedLegacySpelling(t *testing.T) {
 	t.Setenv("AXIOM_COMPUTE_WORKER_TIMEOUT", "5m")
 	t.Setenv("AXIOM_PROCESSOR_TIMEOUT", "not-a-duration")
-	if problems := config.ValidateEnv(); len(problems) != 0 {
-		t.Fatalf("shadowed legacy value must be skipped, got %v", problems)
-	}
-	// Converse: with the canonical spelling UNSET the legacy value is
-	// LIVE — an unparseable one must still be flagged (a skip logic that
-	// degenerated into "never check legacy" would pass the half above
-	// and ship broken legacy boots).
-	os.Unsetenv("AXIOM_COMPUTE_WORKER_TIMEOUT")
 	problems := config.ValidateEnv()
-	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "; "), "AXIOM_PROCESSOR_TIMEOUT") {
-		t.Fatalf("unshadowed invalid legacy value must be flagged, got %v", problems)
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "AXIOM_COMPUTE_WORKER_TIMEOUT") {
+		t.Fatalf("validate must name the removed spelling and its successor, got %v", problems)
 	}
 }
 

@@ -68,7 +68,7 @@ func TestIT_MigrateAppliesPendingWithLedgerReport(t *testing.T) {
 	scratch, cleanup := i362ScratchDB(t)
 	defer cleanup()
 	t.Setenv("AXIOM_STORE_DATABASE_URL", scratch) // canonical spelling
-	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "")
 	t.Setenv("AXIOM_LIBRARY_DATABASE_URL", "") // single-database shape
 	ctx := context.Background()
 

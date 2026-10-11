@@ -16,20 +16,20 @@ every rejected request.
 
 | Method | Path | Purpose | Availability |
 | --- | --- | --- | --- |
-| `GET` | `/api/health` | Dependency readiness | Always registered |
-| `POST` | `/api/zotero/sync` | Mirror Zotero and enqueue changed attachments | Requires PostgreSQL wiring |
-| `GET` | `/api/ingest/jobs` | List recent ingest jobs | Requires PostgreSQL wiring |
-| `POST` | `/api/ingest/documents/{documentID}/force-rebuild` | Enqueue a force-rebuild re-ingest for one document | Requires PostgreSQL wiring |
-| `GET` | `/api/zotero/selection` | Read persisted document and collection choices | Requires PostgreSQL wiring |
-| `GET` | `/api/zotero/selection/resolved` | Expand collection choices to document IDs | Requires PostgreSQL wiring |
-| `PUT` | `/api/zotero/selection` | Write document and collection choices atomically | Requires PostgreSQL wiring |
-| `GET` | `/api/zotero/documents` | List Zotero documents by effective ingest state | Requires PostgreSQL wiring |
-| `POST` | `/api/search` | Search processed passages | Requires PostgreSQL wiring and a usable OpenSearch recall arm; query-runner failure degrades the available arms |
-| `GET` | `/api/passage/{id}` | Read one active passage with source and neighbors | Requires search wiring |
-| `GET` | `/api/passage/{id}/page` | Resolve a character offset to an exact page label | Requires search wiring and a paragraph page map |
-| `GET` | `/api/kg/entities` | Search or browse graph entities | Requires PostgreSQL wiring |
-| `GET` | `/api/kg/entities/{id}/neighbors` | Read one-hop graph edges | Requires PostgreSQL wiring |
-| `GET` | `/api/kg/relations` | Browse and filter graph relations | Requires PostgreSQL wiring |
+| `GET` | `/api/v1/health` | Dependency readiness | Always registered |
+| `POST` | `/api/v1/zotero/sync` | Mirror Zotero and enqueue changed attachments | Requires PostgreSQL wiring |
+| `GET` | `/api/v1/ingest/jobs` | List recent ingest jobs | Requires PostgreSQL wiring |
+| `POST` | `/api/v1/ingest/documents/{documentID}/force-rebuild` | Enqueue a force-rebuild re-ingest for one document | Requires PostgreSQL wiring |
+| `GET` | `/api/v1/zotero/selection` | Read persisted document and collection choices | Requires PostgreSQL wiring |
+| `GET` | `/api/v1/zotero/selection/resolved` | Expand collection choices to document IDs | Requires PostgreSQL wiring |
+| `PUT` | `/api/v1/zotero/selection` | Write document and collection choices atomically | Requires PostgreSQL wiring |
+| `GET` | `/api/v1/zotero/documents` | List Zotero documents by effective ingest state | Requires PostgreSQL wiring |
+| `POST` | `/api/v1/search` | Search processed passages | Requires PostgreSQL wiring and a usable OpenSearch recall arm; query-runner failure degrades the available arms |
+| `GET` | `/api/v1/passage/{id}` | Read one active passage with source and neighbors | Requires search wiring |
+| `GET` | `/api/v1/passage/{id}/page` | Resolve a character offset to an exact page label | Requires search wiring and a paragraph page map |
+| `GET` | `/api/v1/kg/entities` | Search or browse graph entities | Requires PostgreSQL wiring |
+| `GET` | `/api/v1/kg/entities/{id}/neighbors` | Read one-hop graph edges | Requires PostgreSQL wiring |
+| `GET` | `/api/v1/kg/relations` | Browse and filter graph relations | Requires PostgreSQL wiring |
 | `POST` | `/api/kg/consolidate` | Merge duplicate active entities by exact canonical form | Registered only when the consolidation service is wired |
 | `GET` | `/api/processor/source/{jobID}` | Stream a leased job's source to a runner | Fails closed unless source secret and repository are wired |
 | `GET` | `/api/repair/queue` | List repair work with source metadata | Registered only when the repair API is wired |
@@ -41,7 +41,7 @@ every rejected request.
 
 ## Health and jobs
 
-### `GET /api/health`
+### `GET /api/v1/health`
 
 The response is always HTTP `200`. `ok` is false when any registered checker
 fails; `checks` contains `ok`, an error string, or `unknown` for each dependency.
@@ -60,7 +60,7 @@ Live response shape:
 {"ok":true,"build":"axiom v0.2.0-…-g1a2b3c4 (commit 1a2b3c4, release build)","checks":{"ingest-runner":"ok","postgres":"ok","query-runner":"ok","zotero":"ok"}}
 ```
 
-### `GET /api/ingest/jobs`
+### `GET /api/v1/ingest/jobs`
 
 | Query parameter | Default | Accepted values |
 | --- | --- | --- |
@@ -97,7 +97,7 @@ completed jobs is correct semantics.
 }
 ```
 
-### `POST /api/ingest/documents/{documentID}/force-rebuild`
+### `POST /api/v1/ingest/documents/{documentID}/force-rebuild`
 
 First-class re-ingest after a terminal `ARTIFACTS_EXPIRED` job (#259): enqueues
 a NEW pending job with `force_rebuild=true` for the document's preferred
@@ -107,7 +107,7 @@ never mutate the old job's frozen inputs. Concurrent rebuild calls for the
 same attachment are serialized by a database advisory lock; exactly one
 active rebuild job is admitted (the losers see `409`).
 
-The document id is the UUID from `GET /api/zotero/documents`. Responses:
+The document id is the UUID from `GET /api/v1/zotero/documents`. Responses:
 
 | Status | Meaning |
 | --- | --- |
@@ -120,7 +120,7 @@ The document id is the UUID from `GET /api/zotero/documents`. Responses:
 
 ## Zotero sync and selection
 
-### `POST /api/zotero/sync`
+### `POST /api/v1/zotero/sync`
 
 An absent or empty body runs a sync with the persisted selection. An optional
 body applies document overrides to this run only:
@@ -168,7 +168,7 @@ files before opening the apply transaction, and enqueues selected attachments
 only when their content requires work. A successful commit schedules entity
 consolidation after the sync response; see [KG consolidation](#post-apikgconsolidate).
 
-### `GET /api/zotero/selection`
+### `GET /api/v1/zotero/selection`
 
 Returns persisted modes as maps. No row means the default selection behavior.
 
@@ -176,7 +176,7 @@ Returns persisted modes as maps. No row means the default selection behavior.
 {"collections":{},"selection":{}}
 ```
 
-### `GET /api/zotero/selection/resolved`
+### `GET /api/v1/zotero/selection/resolved`
 
 Returns every persisted collection choice expanded to direct document IDs, the
 persisted document modes, and the effective number of suppressed documents.
@@ -185,7 +185,7 @@ persisted document modes, and the effective number of suppressed documents.
 {"collections":[],"documents":{},"suppressed_documents":0}
 ```
 
-### `PUT /api/zotero/selection`
+### `PUT /api/v1/zotero/selection`
 
 Document and collection updates are committed in one transaction:
 
@@ -222,7 +222,7 @@ The effective cascade is:
 4. A one-run sync exclusion always applies. A one-run inclusion cannot bypass an
    active collection gate.
 
-### `GET /api/zotero/documents`
+### `GET /api/v1/zotero/documents`
 
 | Query parameter | Default | Accepted values |
 | --- | --- | --- |
@@ -270,7 +270,7 @@ truth until reprocessing re-runs the document.
 
 ## Search and passages
 
-### `POST /api/search`
+### `POST /api/v1/search`
 
 ```json
 {
@@ -380,7 +380,7 @@ EPUB hits with a trusted page anchor map render as, e.g.,
 A single failed recall arm degrades the result and is reported as false or
 absent in `arms`; total recall failure returns `503`.
 
-### `GET /api/passage/{id}`
+### `GET /api/v1/passage/{id}`
 
 `id` is a chunk UUID. The response returns the active chunk, document/snapshot/
 attachment IDs, chunk index, text, section path, locator, bibliographic source,
@@ -424,7 +424,7 @@ An unknown chunk returns `404`. A chunk from an inactive snapshot also returns
 `404`, with its snapshot and attachment IDs plus a hint to search for the
 current generation.
 
-### `GET /api/passage/{id}/page?at=N`
+### `GET /api/v1/passage/{id}/page?at=N`
 
 `at` is a required, non-negative character offset into the chunk text. The
 server selects the final `paragraph_pages` boundary whose offset is less than or
@@ -459,7 +459,7 @@ envelope with a `sources` map keyed by evidence chunk ID. Without hydration,
 they are bare arrays. Entity search is always a bare array. Empty arrays are
 serialized as `[]`, never `null`.
 
-### `GET /api/kg/entities`
+### `GET /api/v1/kg/entities`
 
 | Query parameter | Default | Range |
 | --- | --- | --- |
@@ -504,7 +504,7 @@ Live response shape:
 ]
 ```
 
-### `GET /api/kg/entities/{id}/neighbors`
+### `GET /api/v1/kg/entities/{id}/neighbors`
 
 `id` must be an entity UUID; variant IDs resolve to their family root.
 `min_mentions` and `limit` have the same defaults and ranges as entity search.
@@ -515,7 +515,7 @@ Each edge contains `other_id`, `other_form`, optional `other_type`, `direction`
 Neighbors are read from materialized root-level triples. Intra-family self-loops
 are excluded during read-model refresh.
 
-### `GET /api/kg/relations`
+### `GET /api/v1/kg/relations`
 
 | Query parameter | Default | Meaning |
 | --- | --- | --- |

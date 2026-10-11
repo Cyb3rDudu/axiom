@@ -1,71 +1,51 @@
 package config
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/Cyb3rDudu/axiom/axiom/internal/deprecate"
-)
-
-// TestEffectiveComputeWorkerURLShadowingMatrix — F10 #304: the two
-// compute-worker URL rows must tell the resolver's (computeWorkerEnv's)
-// truth about WHO fed the effective value — the generalized dual-fed
-// mechanism behind the F08 worker-command matrix. The remote-carrier
-// pointing var is the highest-traffic member of the family; it stands in
-// for all seven dual-fed compute-worker fields.
-func TestEffectiveComputeWorkerURLShadowingMatrix(t *testing.T) {
-	deprecate.SetSilent(true)
-	t.Cleanup(func() { deprecate.SetSilent(false) })
-	row := func() (canonical, legacy Entry) {
-		for _, e := range Effective(Load()) {
-			switch e.Env {
-			case "AXIOM_COMPUTE_WORKER_URL":
-				canonical = e
-			case "AXIOM_PROCESSOR_URL":
-				legacy = e
-			}
-		}
-		if canonical.Env == "" || legacy.Env == "" {
-			t.Fatal("compute-worker URL rows missing from effective view")
-		}
-		return
+// #368: the dual-fed shadowing matrix is gone with the legacy spellings —
+// the effective view carries ONLY canonical rows. Probe: no removed name
+// owns a row, and the canonical compute-worker URL row renders the plain
+// env/default truth.
+func TestEffectiveHasNoLegacyRows(t *testing.T) {
+	rows := map[string]bool{}
+	for _, e := range Effective(Load()) {
+		rows[e.Env] = true
 	}
+	for name := range legacyProbeNames {
+		if rows[name] {
+			t.Errorf("effective view still carries removed legacy row %s", name)
+		}
+	}
+	for _, want := range []string{
+		"AXIOM_STORE_DATABASE_URL", "AXIOM_REPAIR_WORKER_CMD",
+		"AXIOM_COMPUTE_WORKER_URL", "AXIOM_COMPUTE_WORKER_URLS",
+		"AXIOM_COMPUTE_WORKER_NAME", "AXIOM_COMPUTE_WORKER_TIMEOUT",
+		"AXIOM_COMPUTE_WORKER_SOURCE_SECRET", "AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL",
+		"AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL",
+	} {
+		if !rows[want] {
+			t.Errorf("canonical row %s missing from effective view", want)
+		}
+	}
+}
 
-	t.Run("both set: canonical wins, legacy shadowed", func(t *testing.T) {
-		t.Setenv("AXIOM_COMPUTE_WORKER_URL", "http://carrier:19542")
-		t.Setenv("AXIOM_PROCESSOR_URL", "http://legacy:8012")
-		canonical, legacy := row()
-		if canonical.Source != "env" || canonical.Value != "http://carrier:19542" {
-			t.Fatalf("canonical row = %v/%v, want env + canonical value", canonical.Source, canonical.Value)
+func TestEffectiveComputeWorkerURLSourceTruth(t *testing.T) {
+	var e Entry
+	for _, row := range Effective(Load()) {
+		if row.Env == "AXIOM_COMPUTE_WORKER_URL" {
+			e = row
 		}
-		if legacy.Source != "default" {
-			t.Fatalf("shadowed legacy row source = %q, want default (it fed nothing)", legacy.Source)
+	}
+	if e.Source != "default" {
+		t.Fatalf("unset key renders source %q, want default", e.Source)
+	}
+	t.Setenv("AXIOM_COMPUTE_WORKER_URL", "http://carrier:19542")
+	for _, row := range Effective(Load()) {
+		if row.Env == "AXIOM_COMPUTE_WORKER_URL" {
+			e = row
 		}
-		if legacy.Value != "http://carrier:19542" {
-			t.Fatalf("legacy row value = %v, want the effective (canonical) value", legacy.Value)
-		}
-	})
-
-	t.Run("legacy only: legacy row is env, canonical renders default", func(t *testing.T) {
-		t.Setenv("AXIOM_COMPUTE_WORKER_URL", "")
-		t.Setenv("AXIOM_PROCESSOR_URL", "http://legacy:8012")
-		canonical, legacy := row()
-		if legacy.Source != "env" || legacy.Value != "http://legacy:8012" {
-			t.Fatalf("legacy row = %v/%v, want env + legacy value", legacy.Source, legacy.Value)
-		}
-		if canonical.Source != "default" {
-			t.Fatalf("canonical row source = %q, want default (its key fed nothing)", canonical.Source)
-		}
-		if canonical.Value != "http://legacy:8012" {
-			t.Fatalf("canonical row value = %v, want the effective (legacy-fed) value", canonical.Value)
-		}
-	})
-
-	t.Run("none set: both default", func(t *testing.T) {
-		t.Setenv("AXIOM_COMPUTE_WORKER_URL", "")
-		t.Setenv("AXIOM_PROCESSOR_URL", "")
-		canonical, legacy := row()
-		if canonical.Source != "default" || legacy.Source != "default" {
-			t.Fatalf("sources = %q/%q, want default/default", canonical.Source, legacy.Source)
-		}
-	})
+	}
+	if e.Source != "env" || e.Value != "http://carrier:19542" {
+		t.Fatalf("set key renders %v/%v, want env + value", e.Source, e.Value)
+	}
 }

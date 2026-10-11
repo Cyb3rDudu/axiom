@@ -21,8 +21,8 @@ REPO="${AXIOM_RELEASE_REPO:-Cyb3rDudu/axiom}"
 
 case "$component" in
 rag)
-    # F05 (#299): alias + canonical binary, same release generation.
-    patterns="axiom-ng-$version-* axiom-$version-*"
+    # #368: canonical binary only — the axiom-ng alias asset is gone.
+    patterns="axiom-$version-*"
     ;;
 compute-worker | runner)
     # canonical component name is compute-worker (F10 #304, ADR 0001

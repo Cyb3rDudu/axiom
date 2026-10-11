@@ -51,9 +51,9 @@ owns state, queue, search index        does conversion, chunking, ML
 
    ```bash
    export AXIOM_ZOTERO_BASE=http://localhost:23119/api
-   export AXIOM_DATABASE_URL=postgres://<user>:<pass>@localhost:5432/<db>
+   export AXIOM_STORE_DATABASE_URL=postgres://<user>:<pass>@localhost:5432/<db>
    export AXIOM_OPENSEARCH_URL=http://localhost:9200
-   export AXIOM_PROCESSOR_URL=http://127.0.0.1:8537
+   export AXIOM_COMPUTE_WORKER_URL=http://127.0.0.1:8537
    export AXIOM_DISPATCHER_ENABLED=true
    cd axiom && go run ./cmd/axiom      # API on :8011
    ```
@@ -61,8 +61,8 @@ owns state, queue, search index        does conversion, chunking, ML
 3. **Sync Zotero, then watch the pipeline**:
 
    ```bash
-   curl -X POST http://127.0.0.1:8011/api/zotero/sync
-   curl     http://127.0.0.1:8011/api/ingest/jobs
+   curl -X POST http://127.0.0.1:8011/api/v1/zotero/sync
+   curl     http://127.0.0.1:8011/api/v1/ingest/jobs
    ```
 
 Requirements: Zotero desktop (Local API enabled), PostgreSQL with `pgvector`,

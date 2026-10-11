@@ -138,7 +138,7 @@ func TestSearchGoldenLive(t *testing.T) {
 				Locator json.RawMessage `json:"locator"`
 			} `json:"hits"`
 		}
-		if code := httpJSON(t, "POST", ragBase()+"/api/search",
+		if code := httpJSON(t, "POST", ragBase()+"/api/v1/search",
 			map[string]any{"query": q.Query}, &resp); code != 200 {
 			t.Fatalf("search %q: status %d", q.Query, code)
 		}

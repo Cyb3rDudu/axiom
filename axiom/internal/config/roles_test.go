@@ -5,7 +5,7 @@ import "testing"
 // R4 (#134) role URLs: query runner + ingest fallback.
 
 func TestRunnerRoleDefaults(t *testing.T) {
-	t.Setenv("AXIOM_PROCESSOR_URL", "http://carrier:8012") // primary at the GPU box
+	t.Setenv("AXIOM_COMPUTE_WORKER_URL", "http://carrier:8012") // primary at the GPU box
 
 	c := Load()
 	// Query and ingest-fallback stay LOCAL even when the ingest primary is

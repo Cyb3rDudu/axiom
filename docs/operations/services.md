@@ -7,7 +7,7 @@ not the reference path. `make` is a dev surface only.
 
 | Name | What | Artifact | Install |
 | --- | --- | --- | --- |
-| `rag` | Go binary (API + dispatcher are modes of one binary) | `axiom-ng-<version>-darwin-arm64` | `/opt/axiom/rag/<version>/` |
+| `rag` | Go binary (API + dispatcher are modes of one binary) | `axiom-<version>-darwin-arm64` | `/opt/axiom/rag/<version>/` |
 | `compute-worker` | axiom compute worker (query embed/rerank + ingest, MPS; canonical name since F10 #304) | `axiom-compute-worker-<version>-macos-arm64.tar.zst` (conda-pack) | `/opt/axiom/compute-worker/<version>/{env,app}` |
 | `fixer` | pdf_repair_agent (autarkic, event runner; public name axiom-repair-worker since F08 #302) | `axiom-fixer-<version>-macos-arm64.tar.zst` | `/opt/axiom/fixer/<version>/{env,app}` |
 
@@ -24,7 +24,7 @@ not the reference path. `make` is a dev surface only.
 
 ```text
 /opt/axiom/<component>/<version>/    + current -> <version> (atomic symlink)
-/opt/axiom/bin/                      stable shims: axiom-ng, axiom-compute-worker, axiom-repair-worker
+/opt/axiom/bin/                      stable shims: axiom, axiom-compute-worker, axiom-repair-worker
                                      (+ axiom-runner / axiom-fixer compat aliases, ADR 0001 §4)
 ~/.config/axiom/*.env                env files, 0700, SECRETS ONLY HERE
 ~/.local/state/axiom/{logs,runs,models}/   state OUT of /opt and OUT of the repo
@@ -117,8 +117,8 @@ cheaply attribute the 404 storm.
 
 - Before starting a one-off dispatcher (debug, migration, wave): confirm no
   standing `com.axiom.rag-dispatch` is running against the same
-  `AXIOM_DATABASE_URL`.
-- Never point two launchd services at the same `AXIOM_DATABASE_URL`. If you
+  `AXIOM_STORE_DATABASE_URL`.
+- Never point two launchd services at the same `AXIOM_STORE_DATABASE_URL`. If you
   need more lanes, raise the runner's declared `max_concurrent_jobs` (the lane
   budget derives) instead of starting a second process.
 - The safety net is the DB claim budget, not a substitute for this policy: it
@@ -265,7 +265,7 @@ must be wired — the orchestrator uploads through it).
   (`queued → in_repair`, loop guard included), and executes the isolated
   worker `AXIOM_REPAIR_WORKER_CMD <key> --apply` (default
   `/opt/axiom/bin/axiom-repair-worker`, the canonical name since F08; the
-  legacy `AXIOM_FIXER_CMD` keeps working through the deprecation witness,
+  removed legacy spelling is refused loudly (#368),
   and an install without the canonical shim falls back to the legacy
   `axiom-fixer` wrapper until re-installed — operators change nothing
   during 0.2.x). One invocation per key per claim — the one-shot `--key`
@@ -391,7 +391,7 @@ One file per service in `~/.config/axiom/`, mode 0700. Secrets (DSN, HMAC
 source secret, DeepSeek keys) live ONLY there — never in `/tmp` (the reboot
 wiped /tmp and took the secret with it), never inline in plists.
 
-- `rag.env` — shared: `AXIOM_DATABASE_URL`, `AXIOM_OPENSEARCH_URL`,
+- `rag.env` — shared: `AXIOM_STORE_DATABASE_URL`, `AXIOM_OPENSEARCH_URL`,
   `AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL`, `AXIOM_COMPUTE_WORKER_SOURCE_SECRET`
 - `rag-api.env` — instance: `AXIOM_API_PORT=8011`, `AXIOM_BIND_ADDR`,
   `AXIOM_DISPATCHER_ENABLED=0`
@@ -403,9 +403,10 @@ wiped /tmp and took the secret with it), never inline in plists.
   first, local floor last). The SAME env file works at home and on the
   road: without the Carrier, the health probe skips it and ingest runs
   locally — no reconfiguration, no failover timeout per submit.
-  The legacy pair `AXIOM_PROCESSOR_URL` + `AXIOM_INGEST_FALLBACK_URL` keeps
-  working (folded into a two-entry chain); plural wins when both are set
-  (legacy spellings: [deprecation schedule](deprecations.md)).
+  The singular pair `AXIOM_COMPUTE_WORKER_URL` +
+  `AXIOM_INGEST_FALLBACK_URL` folds into a two-entry chain; plural wins
+  when both are set (the dispatcher-side legacy spellings are gone,
+  #368 — [deprecation schedule](deprecations.md)).
   Optional: `AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL` (default 60s).
 - `runner.env` — `AXIOM_PROCESSOR_COMPUTE=real`, `AXIOM_PROCESSOR_PORT=8012`
 
@@ -450,7 +451,7 @@ non-secret settings, and `--key` stays a per-event argument.
 ## Debug vs production (DoD core, #205 §5)
 
 - Production artifacts are release-built, version-stamped, checksummed.
-  `axiom --version` AND `/api/health` (field `build`) must report the
+  `axiom --version` AND `/api/v1/health` (field `build`) must report the
   same banner. If the banner says `debug build`, it is NOT production.
 - A debug build REFUSES to bind ports 8011–8015
   (`AXIOM_ALLOW_DEBUG_BIND=1` opts out for local dev). The 2026-08-23

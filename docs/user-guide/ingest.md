@@ -34,7 +34,7 @@ turn into a fake "completed".
 The simplest way to observe the lifecycle is a status query:
 
 ```bash
-curl http://127.0.0.1:8011/api/ingest/jobs
+curl http://127.0.0.1:8011/api/v1/ingest/jobs
 ```
 
 The endpoint returns recent jobs, newest first. Each row includes job, source,
@@ -45,7 +45,7 @@ surface; inspect the returned array or query PostgreSQL when one-job detail is
 required.
 
 The exact field names and nullable values are documented in the
-[HTTP API reference](../references/api.md#get-apiingestjobs).
+[HTTP API reference](../references/api.md#get-apiv1ingestjobs).
 
 > **Do I have to watch SQL to use axiom?** No. The status query above is enough
 > for normal use. The SQL below is only for the curious or for operators.

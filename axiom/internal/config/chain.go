@@ -113,83 +113,34 @@ func LoadResolved(flags map[string]string) (Config, Chain, error) {
 	if problems := ValidateFlags(flags); len(problems) > 0 {
 		return Config{}, Chain{}, fmt.Errorf("--set invalid:\n\t%s", strings.Join(problems, "\n\t"))
 	}
-	// DM07 #316 — the store-DSN conflict guard. Both spellings set with
-	// DIFFERENT values is two operators asserting two truths: precedence
-	// would improvise one. Refuse instead (the hard compat rule: the
-	// single-DSN AXIOM_DATABASE_URL keeps working until the cutover —
-	// an operator moving to the canonical spelling unsets the legacy
-	// one; identical values are the harmless overlap and pass). Secret
-	// keys never materialize from file or flags, so the environment is
-	// the only value source — this check is exact. The message names
-	// keys, never values.
-	if legacy, canonical := os.Getenv("AXIOM_DATABASE_URL"), os.Getenv("AXIOM_STORE_DATABASE_URL"); legacy != "" && canonical != "" && legacy != canonical {
-		return Config{}, Chain{}, fmt.Errorf("AXIOM_DATABASE_URL and AXIOM_STORE_DATABASE_URL are both set but differ — resolve to ONE spelling (AXIOM_DATABASE_URL stays the supported single-DSN form until the cutover; unset it when moving to AXIOM_STORE_DATABASE_URL)")
-	}
-
+	// #368: the DM07 store-DSN conflict guard is gone with the legacy
+	// spelling — the vocabulary refuses the name loudly instead.
 	ch := Chain{
 		Flag:   map[string]bool{},
 		File:   map[string]bool{},
 		envSet: snapshotEnvStages(),
 	}
-	// File stage. Legacy spellings of dual-fed pairs materialize FIRST,
-	// canonical spellings (and single-fed keys) SECOND — when the file
-	// carries both spellings of a pair the canonical row lands last and
-	// owns the field deterministically (the resolver's own spelling
-	// rule). A pair whose EITHER spelling the environment owns is
-	// skipped entirely: materializing the file's spelling of the other
-	// row would let file beat env across spellings.
-	for _, canonicalPass := range []bool{false, true} {
-		for key, value := range settings.Values {
-			pair, dual := pairOf(key)
-			if dual && (key == pair[0]) != canonicalPass {
-				continue
-			}
-			if ch.envSet[key] || (dual && (ch.envSet[pair[0]] || ch.envSet[pair[1]])) {
-				continue // the environment owns this key or its field
-			}
-			if err := os.Setenv(key, value); err != nil {
-				return Config{}, Chain{}, fmt.Errorf("config: materialize %s: %w", key, err)
-			}
-			ch.File[key] = true
+	// File stage. Keys the environment owns are skipped (env beats file).
+	for key, value := range settings.Values {
+		if ch.envSet[key] {
+			continue // the environment owns this key
 		}
+		if err := os.Setenv(key, value); err != nil {
+			return Config{}, Chain{}, fmt.Errorf("config: materialize %s: %w", key, err)
+		}
+		ch.File[key] = true
 	}
-	// Flag stage. A flag naming EITHER spelling of a pair owns the whole
-	// field: the value materializes onto the CANONICAL key, so the
-	// resolver's spelling rule cannot invert flag > env across spellings.
-	// Legacy-named flags apply first — a canonical-named flag on the same
-	// pair deterministically wins when both are set.
-	for _, canonicalPass := range []bool{false, true} {
-		for key, value := range flags {
-			pair, dual := pairOf(key)
-			if dual && (key == pair[0]) != canonicalPass {
-				continue
-			}
-			target := key
-			if dual {
-				target = pair[0]
-			}
-			if err := os.Setenv(target, value); err != nil {
-				return Config{}, Chain{}, fmt.Errorf("config: materialize flag %s: %w", key, err)
-			}
-			ch.Flag[target] = true
-			if target != key {
-				ch.Flag[key] = true
-			}
+	// Flag stage: flags beat env and file, materialized onto their own
+	// (canonical-only, #368) key.
+	for key, value := range flags {
+		if err := os.Setenv(key, value); err != nil {
+			return Config{}, Chain{}, fmt.Errorf("config: materialize flag %s: %w", key, err)
 		}
+		ch.Flag[key] = true
 	}
 	return Load(), ch, nil
 }
 
-// pairOf returns the dual-fed (canonical, legacy) env pair key
-// participates in, if any — the pair-aware materialization's lookup.
-func pairOf(key string) (pair [2]string, dual bool) {
-	row, known := rowsByKey[key]
-	if !known {
-		return [2]string{}, false
-	}
-	p, dual := dualFedEnv[row.field]
-	return p, dual
-}
 
 // snapshotEnvStages records which keys the environment feeds BEFORE any
 // materialization: present AND meaningful (non-empty, or the set-empty
@@ -221,19 +172,6 @@ func (ch Chain) stage(row envRow) string {
 			return SourceDefault
 		}
 	}
-	// Dual-fed fields generalize the F08/F10 resolver truth: the
-	// canonical spelling's stage wins when it fed the value; the legacy
-	// row carries its own stage only when canonical stayed default.
-	if pair, dual := dualFedEnv[row.field]; dual {
-		canonicalStage := stageOf(pair[0])
-		if row.env == pair[0] {
-			return canonicalStage
-		}
-		if canonicalStage != SourceDefault {
-			return SourceDefault // shadowed legacy spelling
-		}
-		return stageOf(pair[1])
-	}
 	return stageOf(row.env)
 }
 
@@ -241,9 +179,7 @@ func (ch Chain) stage(row envRow) string {
 // "--set K=V" and "--set=K=V" shapes) and returns the flag pairs plus
 // the remaining arguments in order. Syntax errors (a dangling --set, a
 // token without '=') are reported; KEY-level validation is
-// ValidateFlags. A pair naming BOTH spellings of a dual-fed field
-// resolves to the canonical-named flag (LoadResolved materializes the
-// legacy one first).
+// ValidateFlags.
 func ParseSetFlags(args []string) (map[string]string, []string, error) {
 	flags := map[string]string{}
 	var rest []string
@@ -291,7 +227,11 @@ func validateKV(key, value, stage string) []string {
 	switch {
 	case !known:
 		// %q: the key is operator input — quoting kills newline/log
-		// spoofing through a crafted key.
+		// spoofing through a crafted key. A removed legacy name names
+		// its canonical successor (#368) — the error says what to do.
+		if succ := LegacyEnvSuccessor[key]; succ != "" {
+			return []string{fmt.Sprintf("%q: %s — removed in v0.2.4 (ADR 0001 executed); use %s", key, UnknownKeyProblem, succ)}
+		}
 		return []string{fmt.Sprintf("%q: %s", key, UnknownKeyProblem)}
 	case row.secret:
 		if stage == stageFlag {
@@ -394,19 +334,7 @@ func SecretRefDrift() []string {
 		}
 		fed := os.Getenv(key) != ""
 		if !fed {
-			if pair, dual := pairOf(key); dual {
-				fed = os.Getenv(pair[0]) != "" || os.Getenv(pair[1]) != ""
-			}
-		}
-		if !fed {
-			// The sibling clause is PAIR-AWARE phrasing: for a dual-fed
-			// secret either spelling feeds it; an unpaired secret key has
-			// no sibling to name.
-			if _, dual := pairOf(key); dual {
-				problems = append(problems, fmt.Sprintf("%s: secret reference expects the environment to feed it, but neither it nor its dual-fed sibling is set — the default (empty) applies", key))
-			} else {
-				problems = append(problems, fmt.Sprintf("%s: secret reference expects the environment to feed it, but the environment does not feed it — the default (empty) applies", key))
-			}
+			problems = append(problems, fmt.Sprintf("%s: secret reference expects the environment to feed it, but the environment does not feed it — the default (empty) applies", key))
 		}
 	}
 	sort.Strings(problems)
@@ -416,10 +344,9 @@ func SecretRefDrift() []string {
 // EnvImportRows maps the environment onto file rows for the one-shot
 // importer: every key the environment FEEDS becomes a settings row
 // (non-secret) or a secret reference (secret keys — never values).
-// Dual-fed fields import only the spelling that feeds the value (the
-// shadowed spelling would drift into the file as dead config); the
-// set-empty-disable key imports its empty value (a meaningful state).
-// Values are read ONCE — no secret value ever leaves this function.
+// The set-empty-disable key imports its empty value (a meaningful
+// state). Values are read ONCE — no secret value ever leaves this
+// function.
 func EnvImportRows() (values, secretRefs map[string]string) {
 	values = map[string]string{}
 	secretRefs = map[string]string{}
@@ -434,19 +361,6 @@ func EnvImportRows() (values, secretRefs map[string]string) {
 		return v, true
 	}
 	for _, row := range envRows {
-		if pair, dual := dualFedEnv[row.field]; dual {
-			if row.env == pair[0] {
-				// the canonical spelling feeds → import it, skip the legacy row
-				if v, ok := fed(pair[0]); ok {
-					importRow(row, v, values, secretRefs)
-				}
-			} else if _, canFed := fed(pair[0]); !canFed {
-				if v, ok := fed(pair[1]); ok {
-					importRow(row, v, values, secretRefs)
-				}
-			}
-			continue
-		}
 		if v, ok := fed(row.env); ok {
 			importRow(row, v, values, secretRefs)
 		}

@@ -25,21 +25,17 @@ The Go orchestrator's RUNTIME SURFACES — `serve` (every role and the compat bo
 
 - Each stage overrides only what it sets; unset stages fall through.
 - Scope: mode-specific knobs outside the shared vocabulary (e.g. `AXIOM_RETENTION_*`) and the debug-bind opt-out stay direct environment reads.
-- **Dual-fed pairs resolve per field.** The legacy/canonical spelling
-  pairs (`AXIOM_COMPUTE_WORKER_*` vs `AXIOM_PROCESSOR_*`,
-  `AXIOM_REPAIR_WORKER_CMD` vs `AXIOM_FIXER_CMD`) are ONE knob each: the
-  chain binds the logical knob — a `config.sqlite` row on either
-  spelling never out-ranks an environment value on the other, and a
-  `--set` on either spelling wins the whole field. Spelling precedence
-  (canonical over legacy) breaks ties *within* one stage only; when
-  `--set` names both spellings, the canonical-named flag wins.
+- **Removed legacy spellings are refused loudly** (#368, v0.2.4): a set
+  or stored legacy name (`AXIOM_PROCESSOR_*` dispatcher-side spellings,
+  `AXIOM_STORE_DATABASE_URL`'s predecessor, `AXIOM_REPAIR_WORKER_CMD`'s
+  predecessor) feeds nothing — `config validate`, `--set` and
+  `config.sqlite` rows name the canonical successor in the refusal.
 - **Env-only is the fully supported path**: without a `config.sqlite`, every
   boot resolves exactly as before (the container story — no file needed, none
   created).
 - The file layer and the flag layer apply with **environment semantics**: a
   value stored in the file behaves exactly as if the operator had exported it
-  (same parsers, same dual-fed canonical/legacy rules, same deprecation
-  witnesses on legacy spellings).
+  (same parsers, same refusal of removed spellings).
 - The file and flag surfaces refuse values carrying inline credentials
   (DSN/URL userinfo-with-password, credential query or keyword parameters) —
   and by design also **free-text values containing a credential-shaped
@@ -112,28 +108,29 @@ cfg-dependent checks skipped honestly.
 
 ## Go — the orchestrator (`axiom`)
 
-Rows below lead with the canonical spelling; where a legacy alias still feeds
-the same knob it is named in the row and tracked in the
-[deprecation schedule](../operations/deprecations.md).
+Removed legacy spellings are gone (#368): they feed nothing and every
+refusal names the canonical successor — the
+[deprecation schedule](../operations/deprecations.md) lists what v0.2.4
+removed.
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
 | `AXIOM_ZOTERO_BASE` | `http://localhost:23119/api` | The Zotero local JSON API base. |
 | `AXIOM_ZOTERO_LIBRARY` | `users/0` | Library prefix (local user's library). |
-| `AXIOM_DATABASE_URL` | — | PostgreSQL + pgvector DSN. |
+| `AXIOM_STORE_DATABASE_URL` | — | PostgreSQL + pgvector DSN. |
 | `AXIOM_OPENSEARCH_URL` | `http://127.0.0.1:9200` | OpenSearch endpoint. **Explicitly set to empty disables** the outbox drainer (rows stay pending, no error). |
 | `AXIOM_OPENSEARCH_USERNAME` | — | Optional basic-auth user for the outbox drainer; empty = anonymous. |
 | `AXIOM_OPENSEARCH_PASSWORD` | — | Optional basic-auth password. |
-| `AXIOM_COMPUTE_WORKER_SOURCE_SECRET` | — | Shared HMAC secret for remote source delivery (dispatcher signs, `/api/processor/source` verifies). Empty disables the feature on both sides. Canonical spelling (F10 #304); legacy `AXIOM_PROCESSOR_SOURCE_SECRET` still feeds it (warn-once alias). |
-| `AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL` | `http://127.0.0.1:<APIPort>` | Externally reachable base URL remote compute workers use to pull sources. Canonical spelling (F10 #304); legacy `AXIOM_PROCESSOR_SOURCE_BASE_URL` still feeds it (warn-once alias). `<APIPort>` resolves to the configured `AXIOM_API_PORT` (8011 by default); the URL defaults to loopback (co-located runners). |
-| `AXIOM_COMPUTE_WORKER_URLS` | — | Ordered ingest-runner candidate list, comma-separated, preference order (#207). Canonical spelling (F10 #304); the legacy `AXIOM_PROCESSOR_URLS` below still feeds it — warned once and counted in `/api/health/deprecations`. When set it defines the COMPLETE chain and wins over both legacy variables. A periodic health probe (`AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL`) keeps dead candidates out of the submit path; submit-time failover (transport/5xx → next candidate, 4xx → error) stays as the safety net. |
-| `AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL` | `60s` | Interval of the ingest-candidate health probe (#207). Canonical spelling (F10 #304); legacy `AXIOM_RUNNER_HEALTH_INTERVAL` still feeds it (warn-once alias). `<=0` disables the background probe (startup remains best-effort) — a candidate demoted by submit-time failover is then only restored by a successful submit on it, so a preferred runner that recovered is not asked first again until restart. |
+| `AXIOM_COMPUTE_WORKER_SOURCE_SECRET` | — | Shared HMAC secret for remote source delivery (dispatcher signs, `/api/processor/source` verifies). Empty disables the feature on both sides. |
+| `AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL` | `http://127.0.0.1:<APIPort>` | Externally reachable base URL remote compute workers use to pull sources. `<APIPort>` resolves to the configured `AXIOM_API_PORT` (8011 by default); the URL defaults to loopback (co-located runners). |
+| `AXIOM_COMPUTE_WORKER_URLS` | — | Ordered ingest-runner candidate list, comma-separated, preference order (#207). Canonical spelling (F10 #304); the legacy `AXIOM_PROCESSOR_URLS` below  When set it defines the COMPLETE chain (#368: legacy spellings are gone — the refusal names the successor). A periodic health probe (`AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL`) keeps dead candidates out of the submit path; submit-time failover (transport/5xx → next candidate, 4xx → error) stays as the safety net. |
+| `AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL` | `60s` | Interval of the ingest-candidate health probe (#207). `<=0` disables the background probe (startup remains best-effort) — a candidate demoted by submit-time failover is then only restored by a successful submit on it, so a preferred runner that recovered is not asked first again until restart. |
 | `AXIOM_COMPUTE_WORKER_URL` | `http://localhost:8012` | Primary ingest-role compute-worker URL (canonical, F10 #304). |
 | `AXIOM_PROCESSOR_URL` | (alias) | **Legacy** alias of `AXIOM_COMPUTE_WORKER_URL` — still read through 0.2.x (warn-once, counted; see the [deprecation schedule](../operations/deprecations.md) and ADR 0001 §4). |
 | `AXIOM_INGEST_FALLBACK_URL` | `http://localhost:8012` | Emergency ingest runner appended as the last candidate when the chain is built from the singular primary (legacy failover pair; folded into the candidate list only when `AXIOM_COMPUTE_WORKER_URLS` is unset — see precedence below). |
 | `AXIOM_QUERY_RUNNER_URL` | `http://localhost:8012` | Query-role runner for `/v1/embed` + `/v1/rerank` (R4). Defaults to the local runner so retrieval survives a remote outage. |
-| `AXIOM_COMPUTE_WORKER_TIMEOUT` | `300s` | Bounds the **result** fetch and (as the submit floor) the synchronous remote source download inside `POST /v1/process`. Canonical spelling (F10 #304); legacy `AXIOM_PROCESSOR_TIMEOUT` still feeds it (warn-once alias). Remote deployments raise it to cover the runner's download budget. |
-| `AXIOM_COMPUTE_WORKER_NAME` | processor-URL host | Human identity of the compute worker this dispatcher drives; lands in the phase log line and `ingest_jobs.runner_name` at claim time. Canonical spelling (F10 #304); legacy `AXIOM_PROCESSOR_RUNNER_NAME` still feeds it (warn-once alias). |
+| `AXIOM_COMPUTE_WORKER_TIMEOUT` | `300s` | Bounds the **result** fetch and (as the submit floor) the synchronous remote source download inside `POST /v1/process`. Remote deployments raise it to cover the runner's download budget. |
+| `AXIOM_COMPUTE_WORKER_NAME` | processor-URL host | Human identity of the compute worker this dispatcher drives; lands in the phase log line and `ingest_jobs.runner_name` at claim time. |
 | `AXIOM_DISPATCHER_ENABLED` | off | Gates the claim/process dispatcher loop; it never runs unless explicitly `1 | true | yes`. |
 | `AXIOM_DISPATCHER_WORKER_ID` | `axiom` | This process's stable worker identity for leases (literal code default). Left at default, two dispatchers share one identity — set it per process when running multiple. |
 | `AXIOM_DISPATCHER_CONCURRENCY` | `1` | Parallel claim/process slots. |
@@ -145,7 +142,7 @@ the same knob it is named in the row and tracked in the
 | `AXIOM_LIBRARY_IMPORT_MAX_BYTES` | `536870912` (512 MiB) | Caps one Library import's content bytes (F06 #300). Values above the in-code hard cap (2 GiB) clamp to it; `0`/unset = the 512 MiB service default. |
 | `AXIOM_LIBRARY_IMPORT_PROVIDERS` | — | Selects the Library import write-side provider set (F06 #300). `fake` wires the deterministic fake providers (dev-env proof until F07 ports Zotero); unset leaves the `/api/v1/library/imports` routes unwired (404 — the honest no-provider state). |
 | `AXIOM_STORAGE_LIBRARY_DRIVER` | `postgres` | Library persistence engine (F12 #306): `postgres` (own pool over `AXIOM_LIBRARY_DATABASE_URL`, defaulting to the core DSN) or `sqlite` (one `library.sqlite` file, single host — WAL/FK/busy-timeout asserted at start, 0600). `zotero` import providers require the PostgreSQL profile (the Zotero mirror lives on the shared database). |
-| `AXIOM_LIBRARY_DATABASE_URL` | — | The Library component's own PostgreSQL DSN (F12 #306); unset = `AXIOM_DATABASE_URL`. A separate DSN unwires the legacy sync-lane revision Mits-Schreib honestly (no mirror reachable; revision intake is the successor). Redacted like the core DSN in `config get --effective`. |
+| `AXIOM_LIBRARY_DATABASE_URL` | — | The Library component's own PostgreSQL DSN (F12 #306); unset = `AXIOM_STORE_DATABASE_URL`. A separate DSN unwires the legacy sync-lane revision Mits-Schreib honestly (no mirror reachable; revision intake is the successor). Redacted like the core DSN in `config get --effective`. |
 | `AXIOM_LIBRARY_SQLITE_PATH` | `~/.axiom/library.sqlite` | The `library.sqlite` file for the SQLite profile (F12 #306). One file per component: never ATTACHed, never shared with the Store or config.sqlite. |
 | `AXIOM_API_PORT` | `8011` | Port the `axiom` REST API listens on. |
 | `AXIOM_ALLOW_DEBUG_BIND` | off | Explicit opt-out that lets a **debug** build bind a production port (8011, 8013–8015). Release builds always bind; unset/wrong values keep the guard active. |
@@ -199,10 +196,7 @@ Confusing them is the most common config error:
 
 > **Precedence (#207):** `AXIOM_COMPUTE_WORKER_URLS` (complete chain, wins over
 > everything) → `AXIOM_COMPUTE_WORKER_URL` + `AXIOM_INGEST_FALLBACK_URL`
-> (folded into a two-entry chain; the legacy `AXIOM_PROCESSOR_URL`/
-> `AXIOM_PROCESSOR_URLS` spellings still feed the same knobs — warned once,
-> counted, see the [deprecation schedule](../operations/deprecations.md)) →
-> default local runner.
+> (folded into a two-entry chain) → default local runner.
 >
 > `AXIOM_COMPUTE_WORKER_URL` / `AXIOM_QUERY_RUNNER_URL` / `AXIOM_INGEST_FALLBACK_URL`
 > all default to `http://localhost:8012` (the local always-on runner). The

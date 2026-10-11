@@ -434,14 +434,11 @@ func (inv *Invoker) runWorker(ctx context.Context, item *RepairItem) (int, strin
 		// contract, pinned by TestRunFixerOCRBudgetEnv).
 		req.Budget = inv.cfg.OCRTimeout
 		inv.logger.Printf("case: key %s: OCR-class wedge-guard %s (wrapper kills at %s) — no tempo limit, orphan prevention only", item.AttachmentKey, req.Budget, fixShBudget(req.Budget))
-		// ADR 0001 pattern (fixer-home strand): the canonical
-		// AXIOM_FIXER_SH_TIMEOUT leads; the legacy AXIOM_FIX_SH_TIMEOUT
-		// keeps riding along through the transition so an installed
-		// artifact from before the rename still reads its budget.
+		// #368: canonical AXIOM_FIXER_SH_TIMEOUT only — the legacy
+		// AXIOM_FIX_SH_TIMEOUT pass-through is gone.
 		secs := int(fixShBudget(req.Budget).Seconds())
 		req.Env = append(req.Env,
-			fmt.Sprintf("AXIOM_FIXER_SH_TIMEOUT=%d", secs),
-			fmt.Sprintf("AXIOM_FIX_SH_TIMEOUT=%d", secs))
+			fmt.Sprintf("AXIOM_FIXER_SH_TIMEOUT=%d", secs))
 	}
 	res, err := inv.executor().Execute(ctx, req)
 	return res.ExitCode, res.Output, err

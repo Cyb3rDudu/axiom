@@ -156,7 +156,7 @@ and never chunk the healed bytes.
 After W7 reaches terminal states (checklist 4.5) and BEFORE §2.3:
 
 ```bash
-curl -s -X POST http://localhost:8011/api/zotero/sync | jq .   # ONE sync
+curl -s -X POST http://localhost:8011/api/v1/zotero/sync | jq .   # ONE sync
 ```
 
 The same-tx reconcile (retire-in-same-sync, #184) deactivates the old
@@ -184,7 +184,7 @@ AXIOM_DISPATCHER_PROFILE=full-rag-v1              # see profile note below
 AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL=http://<admin-host>:<port>   # the axiom API host serving /api/processor/source/<jobID>
 AXIOM_COMPUTE_WORKER_SOURCE_SECRET=<from the running dispatcher env — never in docs>
 # Standalone dispatcher processes also need (no defaults):
-AXIOM_DATABASE_URL=<Mac Postgres DSN>
+AXIOM_STORE_DATABASE_URL=<Mac Postgres DSN>
 AXIOM_ARTIFACT_ROOT=<artifact dir — full-rag-v1 extracts images; validation fails without it>
 ```
 
@@ -301,7 +301,7 @@ Since #197 consolidation is a STANDING mechanism, reachable three ways:
 
 ```bash
 # 1) CLI epilogue (unchanged — runbook calls this after the drain):
-AXIOM_DATABASE_URL=<dsn> ./axiom -consolidate-entities
+AXIOM_STORE_DATABASE_URL=<dsn> ./axiom -consolidate-entities
 # epilogue: entity consolidation complete: N entities merged, duplicate forms M->0
 
 # 2) REST (loopback-bound write route, admin surface like the other writes):
@@ -336,11 +336,11 @@ reprocessing of a book carries the gate automatically; no rebuild needed:
 
 ```bash
 # Candidate report (deletes NOTHING) — review before every productive drop:
-AXIOM_DATABASE_URL=<dsn> ./axiom -cleanup-frontmatter-kg
+AXIOM_STORE_DATABASE_URL=<dsn> ./axiom -cleanup-frontmatter-kg
 # fmgate: frontmatter cleanup DRY RUN: {chunks:.. relations:.. entities:.. mentions:..}
 
 # Execute (once, idempotent; backup first, see backups/ convention):
-AXIOM_DATABASE_URL=<dsn> ./axiom -cleanup-frontmatter-kg --apply
+AXIOM_STORE_DATABASE_URL=<dsn> ./axiom -cleanup-frontmatter-kg --apply
 ```
 
 Rules (identical to the persist gate): a relation dies when ALL its evidence
