@@ -295,7 +295,7 @@ func TestImportEnvIdempotentEffectiveIdenticalAndSecretFree(t *testing.T) {
 	secrets := map[string]string{
 		"AXIOM_WS_SECRET":                    "ws-secret-value-xyz",
 		"AXIOM_OPENSEARCH_PASSWORD":          "os-password-value-xyz",
-		"AXIOM_STORE_DATABASE_URL":                 "postgresql://u:db-password-xyz@h/db",
+		"AXIOM_STORE_DATABASE_URL":           "postgresql://u:db-password-xyz@h/db",
 		"AXIOM_COMPUTE_WORKER_SOURCE_SECRET": "hmac-source-secret-xyz",
 	}
 	for k, v := range secrets {
