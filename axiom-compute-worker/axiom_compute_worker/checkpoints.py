@@ -104,8 +104,16 @@ class PhaseCheckpoints:
         profile_src = json.dumps(request.get("processing") or {}, sort_keys=True)
         profile = hashlib.sha256(profile_src.encode()).hexdigest()
         digest = content.split(":")[-1]
+        # force-rebuild is the operator's escape hatch: recompute from
+        # zero BY DESIGN (decision 2026-10-11, #372). Its checkpoints live
+        # in a separate namespace so a force attempt can never prune the
+        # normal key's resume basis (a dying force attempt must not cost
+        # the next plain retry its resume).
+        self._force = bool((request.get("processing") or {}).get("force_rebuild"))
+        ns = "force" if self._force else "base"
         key = f"{digest[:16]}-{profile[:8]}-{__version__}"
-        self.root = Path(work_root) / "checkpoints" / str(attach["attachment_id"]) / key
+        self.root = (Path(work_root) / "checkpoints" / str(attach["attachment_id"])
+                     / ns / key)
         self._completed = self._scan()
 
     # -- query / accounting ------------------------------------------------
@@ -126,8 +134,13 @@ class PhaseCheckpoints:
         the pipeline actually ran through)."""
         return dict(self._phases_run)
 
-    def mark(self, phase: str, reused: bool) -> None:
-        self._phases_run[phase] = "reused" if reused else "computed"
+    def mark(self, phase: str, state: str | bool) -> None:
+        """Record the phase's outcome for the report. Accepts the
+        historical booleans (False → computed, True → reused) or the
+        explicit strings computed / reused / skipped (off in profile)."""
+        if isinstance(state, bool):
+            state = "reused" if state else "computed"
+        self._phases_run[phase] = state
 
     # -- payload IO ---------------------------------------------------------
 
@@ -205,8 +218,10 @@ class PhaseCheckpoints:
         return done
 
     def _prune_siblings(self) -> None:
-        """One live key per attachment: content/profile/build moved on →
-        the old intermediates are dead weight."""
+        """One live key per attachment AND namespace: content/profile/build
+        moved on → the old intermediates are dead weight. The force
+        namespace never prunes the base namespace (the escape hatch must
+        not destroy the normal retry's resume basis) and vice versa."""
         assert self.root is not None
         parent = self.root.parent
         try:

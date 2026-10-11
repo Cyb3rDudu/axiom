@@ -60,10 +60,6 @@ def _sha256_hex(path: Path) -> str:
 
 _MD_ESCAPE_RE = re.compile(r"\\(.)")
 
-# #372: image extensions the convert checkpoint payload carries — the
-# epub worker's _IMAGE_EXTS (7 entries); the pdf worker preserves
-# arbitrary original extensions, so this union is the payload filter.
-_IMAGE_EXTS_CP = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 
 
 def _drop_link_refs(refs: list[Any]) -> list[Any]:
@@ -1557,7 +1553,7 @@ def _compute_reference(
         page_label_map = _int_keys(cp.load_json("convert", "page_label_map"))
         page_count = int(cp.load_json("convert", "page_count"))
         enter("convert")  # timing witness: ~0 elapsed (reused)
-        cp.mark("convert", reused=True)
+        cp.mark("convert", "reused")
     else:
         enter("convert")
         markdown, page_label_map, page_count, md_path = _convert_reference(
@@ -1566,21 +1562,21 @@ def _compute_reference(
         page_label_map = _int_keys(page_label_map)
         cp.save("convert", files={"markdown.md": md_path},
                 jsons={"page_label_map": page_label_map, "page_count": page_count})
-        cp.mark("convert", reused=False)
+        cp.mark("convert", "computed")
 
     # Pure, hermetic deterministic chunker (stdlib-only). Produces chunks in
     # final contract shape directly (see chunking.chunk_markdown).
     if cp.resume("chunk"):
         chunk_dicts = cp.load_json("chunk", "chunks")
         enter("chunk")  # timing witness: ~0 elapsed (reused)
-        cp.mark("chunk", reused=True)
+        cp.mark("chunk", "reused")
     else:
         enter("chunk")
         from .chunking import chunk_markdown
 
         chunk_dicts = chunk_markdown(markdown, page_label_map)
         cp.save("chunk", jsons={"chunks": chunk_dicts})
-        cp.mark("chunk", reused=False)
+        cp.mark("chunk", "computed")
 
     # §11 parity for EPUB sources: the chunker pre-shapes epub_cfi locators
     # with EMPTY cfi positions; the real backend fills them from the
@@ -1969,7 +1965,7 @@ def _real_pipeline(
         cp.load_file("convert", "markdown.md", out_md)
         payload_dir = cp.root / "convert"
         for img in sorted(payload_dir.iterdir()):
-            if img.is_file() and img.suffix.lower() in _IMAGE_EXTS_CP:
+            if img.is_file() and img.suffix.lower() != ".json":
                 cp.load_file("convert", img.name, out_images / img.name)
         image_mapping = cp.load_json("convert", "image_mapping") or {}
         page_label_map = _int_keys(cp.load_json("convert", "page_label_map") or {})
@@ -1978,14 +1974,20 @@ def _real_pipeline(
         marker_pagemap_max = cp.load_json("convert", "marker_pagemap_max")
         cfi_entries = cp.load_json("convert", "cfi_entries") or []
         enter("convert")  # timing witness: ~0 elapsed (reused)
-        cp.mark("convert", reused=True)
+        cp.mark("convert", "reused")
     else:
         enter("convert")
         (_markdown, image_mapping, page_label_map, page_source_map,
          page_chapter_map, marker_pagemap_max, cfi_entries) = _real_convert_phase(
             request, source_path, work_dir, content_type, runtime, out_md, out_images)
+        # The payload filter derives from image_mapping's VALUES (the
+        # worker's saved image names — the pdf worker preserves ARBITRARY
+        # original extensions, so an extension whitelist would silently
+        # drop e.g. .tiff from the checkpoint and a resumed run would
+        # diverge from a fresh one).
+        saved_names = {Path(v).name for v in image_mapping.values() if v}
         image_files = ({img.name: img for img in sorted(out_images.iterdir())
-                        if img.is_file() and img.suffix.lower() in _IMAGE_EXTS_CP}
+                        if img.is_file() and img.name in saved_names}
                        if out_images.is_dir() else {})
         cp.save("convert",
                 files={"markdown.md": out_md, **image_files},
@@ -1995,14 +1997,14 @@ def _real_pipeline(
                        "page_chapter_map": page_chapter_map,
                        "marker_pagemap_max": marker_pagemap_max,
                        "cfi_entries": cfi_entries})
-        cp.mark("convert", reused=False)
+        cp.mark("convert", "computed")
 
     markdown = out_md.read_text(encoding="utf-8")
 
     if cp.resume("chunk"):
         chunk_dicts = cp.load_json("chunk", "chunks")
         enter("chunk")  # timing witness: ~0 elapsed (reused)
-        cp.mark("chunk", reused=True)
+        cp.mark("chunk", "reused")
     else:
         enter("chunk")
         from axiom_compute_worker.compute_core.chunker import Chunker
@@ -2021,7 +2023,7 @@ def _real_pipeline(
             for c in chunk_dicts:
                 _freeze_apa_fields(c.setdefault("metadata", {}), chapters)
         cp.save("chunk", jsons={"chunks": chunk_dicts})
-        cp.mark("chunk", reused=False)
+        cp.mark("chunk", "computed")
 
     # Dense embeddings via the existing heavy core if requested.
     proc_opt = request.get("processing", {}) or {}
@@ -2029,20 +2031,20 @@ def _real_pipeline(
         if cp.resume("embed"):
             chunk_dicts = cp.load_json("embed", "chunks")
             enter("embed")  # timing witness: ~0 elapsed (reused)
-            cp.mark("embed", reused=True)
+            cp.mark("embed", "reused")
         else:
             enter("embed")
             from axiom_compute_worker.compute_core.embedder import TextEmbedder
 
             TextEmbedder().embed_chunks(chunk_dicts)
             cp.save("embed", jsons={"chunks": chunk_dicts})
-            cp.mark("embed", reused=False)
+            cp.mark("embed", "computed")
     else:
         # off in profile: an EMPTY marker keeps the scan contiguous —
         # without it _scan breaks at the embed hole and downstream
         # phases (entities/relationships/captions) never resume.
         cp.save("embed", jsons={})
-        cp.mark("embed", reused=True)
+        cp.mark("embed", "skipped")
 
     # Collect Marker images and declare them as Contract artifacts (§13).
     # Build a ref-mapping: original_marker_name → image-XXXX (Contract-konform).
@@ -2093,7 +2095,7 @@ def _real_pipeline(
         if cp.resume("entities"):
             real_entities = cp.load_json("entities", "entities")
             enter("entities")  # timing witness: ~0 elapsed (reused)
-            cp.mark("entities", reused=True)
+            cp.mark("entities", "reused")
         else:
             enter("entities")
             real_entities = _extract_real_entities(
@@ -2102,7 +2104,12 @@ def _real_pipeline(
                 if set_progress is not None else None,
             )
             cp.save("entities", jsons={"entities": real_entities})
-            cp.mark("entities", reused=False)
+            cp.mark("entities", "computed")
+    else:
+        # off in profile (both flags): empty marker keeps contiguity
+        # (contextual documents clear both flags at claim time — #255)
+        cp.save("entities", jsons={})
+        cp.mark("entities", "skipped")
     # #225 early-commit: everything except relationships is done — build
     # and commit the result NOW so a late-stage abort (budget, hang, crash)
     # cannot discard chunks/embeddings/entities. The relationships stage
@@ -2150,6 +2157,12 @@ def _real_pipeline(
     if commit is not None:
         commit(result)
 
+    if not want_relationships:
+        # off in profile, entities absent, or budget-guard: empty marker
+        # keeps the prefix intact so captions stays resumable
+        cp.save("relationships", jsons={})
+        cp.mark("relationships", "skipped")
+
     if want_relationships:
         # mREBEL reads metadata['chunk_id'] as evidence — set the contract
         # ref so evidence_chunk_refs resolve without a second mapping.
@@ -2157,7 +2170,7 @@ def _real_pipeline(
             real_relationships = cp.load_json("relationships", "relationships")
             budget_exceeded = bool(cp.load_json("relationships", "budget_exceeded"))
             enter("relationships")  # timing witness: ~0 elapsed (reused)
-            cp.mark("relationships", reused=True)
+            cp.mark("relationships", "reused")
             _assign_contract_chunk_ids(chunk_dicts)
         else:
             enter("relationships")
@@ -2177,7 +2190,7 @@ def _real_pipeline(
             )
             cp.save("relationships", jsons={"relationships": real_relationships,
                                              "budget_exceeded": budget_exceeded})
-            cp.mark("relationships", reused=False)
+            cp.mark("relationships", "computed")
         if budget_exceeded:
             # #225: honest partial completion, not an eternal lease — the
             # committed result stays fetchable; force_rebuild (§19) reruns
@@ -2215,13 +2228,22 @@ def _real_pipeline(
         # plus the artifact caption attributes — without re-running the
         # captioner (the artifacts themselves are rebuilt deterministically
         # from the checkpointed image set).
-        attrs = cp.load_json("captions", "artifact_caption_attrs") or {}
+        try:
+            attrs = cp.load_json("captions", "artifact_caption_attrs") or {}
+        except (OSError, ValueError):
+            attrs = {}  # checkpoint from a zero-captioned run: no sidecar
         for art in image_artifacts:
             if art.get("ref") in attrs:
                 art.setdefault("attributes", {}).update(attrs[art["ref"]])
         chunk_dicts = cp.load_json("captions", "chunks")
         stage_completion["image_captions"] = True
-        cp.mark("captions", reused=True)
+        # The checkpoint payload is POST-re-embed (the save happened after
+        # the caption stage's dense catch-up): the loaded vectors are
+        # already caption-augmented. Marking re-embed as done prevents the
+        # catch-up below from re-running the embedder over every captioned
+        # chunk on every resume.
+        _reembed_result["called"] = True
+        cp.mark("captions", "reused")
         caption_stage_ran = True
     else:
         caption_stage_ran = _caption_images_stage(
@@ -2237,11 +2259,11 @@ def _real_pipeline(
             cp.save("captions", jsons={"chunks": chunk_dicts,
                                        "artifact_caption_attrs": attrs})
         if proc_opt.get("extract_image_captions"):
-            cp.mark("captions", reused=False)
+            cp.mark("captions", "computed")
         else:
             # off in profile: empty marker keeps contiguity (see embed)
             cp.save("captions", jsons={})
-            cp.mark("captions", reused=True)
+            cp.mark("captions", "skipped")
     figure_captions_present = any(
         (c.get("metadata", {}) or {}).get("figure_captions")
         for c in chunk_dicts
