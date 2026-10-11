@@ -3,7 +3,7 @@
 // pass per configuration in the matrix, reporting Precision@5, MRR,
 // Recall@10 and latency p50/p95 per configuration.
 //
-// Env: AXIOM_OPENSEARCH_URL, AXIOM_PROCESSOR_URL (query runner with §7a),
+// Env: AXIOM_OPENSEARCH_URL, AXIOM_COMPUTE_WORKER_URL (query runner with §7a),
 // AXIOM_TEST_DATABASE_URL (source hydration + graph expansion).
 //
 //	go run ./cmd/retrieval-bench            # human-readable table
@@ -183,7 +183,7 @@ func openStack(ctx context.Context, lg *log.Logger) (*search.Service, *db.DB) {
 	if err != nil {
 		fatal("postgres: %v", err)
 	}
-	pc, err := processor.New(processor.Options{BaseURL: envOr("AXIOM_PROCESSOR_URL", "http://127.0.0.1:8012")})
+	pc, err := processor.New(processor.Options{BaseURL: envOr("AXIOM_COMPUTE_WORKER_URL", "http://127.0.0.1:8012")})
 	if err != nil {
 		fatal("runner client: %v", err)
 	}
