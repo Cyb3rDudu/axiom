@@ -1963,11 +1963,14 @@ def _real_pipeline(
     cfi_entries: list[dict[str, Any]] = []
     if cp.resume("convert"):
         cp.load_file("convert", "markdown.md", out_md)
-        payload_dir = cp.root / "convert"
-        for img in sorted(payload_dir.iterdir()):
-            if img.is_file() and img.suffix.lower() != ".json":
-                cp.load_file("convert", img.name, out_images / img.name)
+        # Re-link EXACTLY the mapping's saved names — symmetric with the
+        # save-side filter. An extension blacklist here would drop a
+        # .json-named image (the pdf worker preserves arbitrary original
+        # extensions, so an embedded figure.json yields image_N.json):
+        # checkpointed but silently lost on resume.
         image_mapping = cp.load_json("convert", "image_mapping") or {}
+        for saved in sorted({Path(v).name for v in image_mapping.values() if v}):
+            cp.load_file("convert", saved, out_images / saved)
         page_label_map = _int_keys(cp.load_json("convert", "page_label_map") or {})
         page_source_map = _int_keys(cp.load_json("convert", "page_source_map") or {})
         page_chapter_map = _int_keys(cp.load_json("convert", "page_chapter_map") or {})
@@ -2040,11 +2043,7 @@ def _real_pipeline(
             cp.save("embed", jsons={"chunks": chunk_dicts})
             cp.mark("embed", "computed")
     else:
-        # off in profile: an EMPTY marker keeps the scan contiguous —
-        # without it _scan breaks at the embed hole and downstream
-        # phases (entities/relationships/captions) never resume.
-        cp.save("embed", jsons={})
-        cp.mark("embed", "skipped")
+        cp.skip("embed")
 
     # Collect Marker images and declare them as Contract artifacts (§13).
     # Build a ref-mapping: original_marker_name → image-XXXX (Contract-konform).
@@ -2106,10 +2105,9 @@ def _real_pipeline(
             cp.save("entities", jsons={"entities": real_entities})
             cp.mark("entities", "computed")
     else:
-        # off in profile (both flags): empty marker keeps contiguity
-        # (contextual documents clear both flags at claim time — #255)
-        cp.save("entities", jsons={})
-        cp.mark("entities", "skipped")
+        # off in profile (both flags) — contextual documents clear both
+        # flags at claim time (#255)
+        cp.skip("entities")
     # #225 early-commit: everything except relationships is done — build
     # and commit the result NOW so a late-stage abort (budget, hang, crash)
     # cannot discard chunks/embeddings/entities. The relationships stage
@@ -2158,10 +2156,8 @@ def _real_pipeline(
         commit(result)
 
     if not want_relationships:
-        # off in profile, entities absent, or budget-guard: empty marker
-        # keeps the prefix intact so captions stays resumable
-        cp.save("relationships", jsons={})
-        cp.mark("relationships", "skipped")
+        # off in profile, entities absent, or budget-guard
+        cp.skip("relationships")
 
     if want_relationships:
         # mREBEL reads metadata['chunk_id'] as evidence — set the contract
@@ -2250,6 +2246,18 @@ def _real_pipeline(
             proc_opt, image_artifacts, chunk_dicts, work_dir,
             stage_completion, set_progress, _reembed_record,
         )
+        # The dense catch-up runs BEFORE the save: the figure-only shape
+        # (captions flag on, zero extracted_image targets, figure captions
+        # present) augments vectors ONLY here — saving first would store
+        # pre-catch-up chunks, and the resume's called=True would then skip
+        # a genuinely needed re-embed (stale caption-blind vectors, #257B).
+        figure_captions_present_early = any(
+            (c.get("metadata", {}) or {}).get("figure_captions")
+            for c in chunk_dicts
+        )
+        if (caption_stage_ran or figure_captions_present_early) and proc_opt.get(
+                "compute_dense_embeddings") and not _reembed_result["called"]:
+            _reembed_record(chunk_dicts)
         if caption_stage_ran and stage_completion.get("image_captions") and not stage_completion.get("image_captions_reason"):
             attrs = {
                 a["ref"]: {k: v for k, v in (a.get("attributes") or {}).items()
@@ -2261,18 +2269,16 @@ def _real_pipeline(
         if proc_opt.get("extract_image_captions"):
             cp.mark("captions", "computed")
         else:
-            # off in profile: empty marker keeps contiguity (see embed)
-            cp.save("captions", jsons={})
-            cp.mark("captions", "skipped")
+            cp.skip("captions")
     figure_captions_present = any(
         (c.get("metadata", {}) or {}).get("figure_captions")
         for c in chunk_dicts
     )
     if caption_stage_ran or figure_captions_present:
         # #257 C: figure-only case — the caption stage's internal re-embed
-        # may not have fired (flag off, or nothing captioned while document
-        # figure captions exist); a single catch-up call, no-op without
-        # augmentation.
+        # may not have fired; the EARLY catch-up (before the captions save)
+        # normally already ran. This late call remains as the no-op-guarded
+        # belt for shapes the early pass could not see.
         if (
             proc_opt.get("compute_dense_embeddings")
             and not _reembed_result["called"]

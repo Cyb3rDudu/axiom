@@ -89,8 +89,9 @@ class TestCheckpointsUnit:
     def test_contiguity_middle_hole(self, tmp_path):
         # A marker is only resumable when every EARLIER phase is complete:
         # entities with a valid marker but a missing chunk marker must NOT
-        # resume. Mutation probe: removing the break in _scan (scanning all
-        # markers regardless of holes) makes the first assertion fail.
+        # resume. Pins the DYNAMIC prefix check in resume(): removing the
+        # all-prefix guard there (the surviving gate since the fix) makes
+        # the first assertion fail.
         req = _request(_pdf(tmp_path))
         cp = PhaseCheckpoints(req, tmp_path)
         cp.save("convert", jsons={})
@@ -122,7 +123,7 @@ class TestCheckpointsUnit:
         assert cp.load_json("embed", "vals") == [0.25]
 
     def test_force_rebuild_never_prunes_base_and_namespaces_split(self, tmp_path):
-        """Ruling (2026-10-11, #372): force-rebuild is the operator's
+        """Decision (2026-10-11, #372): force-rebuild is the operator's
         escape hatch — recompute from zero BY DESIGN, but its checkpoints
         live in a separate namespace and can never destroy the base
         key's resume basis (a dying force attempt must not cost the next
@@ -142,8 +143,7 @@ class TestCheckpointsUnit:
 
         # base prunes only its OWN superseded keys; the force namespace
         # is untouchable from base and vice versa
-        other_req = _request(_pdf(tmp_path))
-        other_req["attachment"]["attachment_id"] = "att-372"  # same id, new key
+        other_req = _request(_pdf(tmp_path))  # same attachment, new key
         other_req["processing"]["compute_dense_embeddings"] = True
         other_cp = PhaseCheckpoints(other_req, tmp_path)
         other_cp.save("convert", jsons={})
@@ -300,13 +300,101 @@ class TestResumeThroughCompute:
             settings.set(old)
 
 
-class TestWatchdogEvictionResume:
-    """#369 integration: the watchdog's orphan-compute stop cancels the
-    runner job mid-compute; the claim scan evicts; the reclaim resubmits
-    under the SAME idempotency key (the runner relaunches the cancelled
-    entry). The relaunched attempt must RESUME at the phase checkpoint,
-    not restart: the conversion that completed before the cancel is not
-    re-run."""
+
+class TestRealPipelineResume:
+    """Direct _real_pipeline resume probes on the L6-style stub harness
+    (no app, no scheduler — pure pipeline behavior)."""
+
+    def test_off_profile_writes_skip_markers_and_captions_resume(self, tmp_path, monkeypatch):
+        """End-to-end pin for the runner's off-phase behavior (the unit
+        test seeds markers by hand — it cannot see the pipeline's own
+        else-branches): a contextual-style profile (embeddings off, both
+        extractors off, captions on) must write EMPTY markers on the
+        fresh attempt (skipped in the report), and the second attempt
+        resumes captions instead of recomputing the prefix."""
+        import types
+
+        from axiom_compute_worker import runner as runner_mod
+
+        class _FakePopen:
+            def __init__(self, cmd, **_kw):
+                Path(cmd[4]).write_text("# T\n\nAlpha works at Beta Corp",
+                                        encoding="utf-8")
+                self.out = '{"image_mapping": {}}'
+                self.returncode = 0
+
+            def communicate(self):
+                return (self.out, "")
+
+        import subprocess as _sub
+
+        monkeypatch.setattr(_sub, "Popen", _FakePopen)
+        pt = types.ModuleType("axiom_compute_worker.compute_core.page_trust")
+        pt.build_page_trust = lambda p: ({}, {}, {})
+        pt.PHYSICAL_ONLY = "physical_only"
+        monkeypatch.setitem(__import__("sys").modules,
+                            "axiom_compute_worker.compute_core.page_trust", pt)
+        ch = types.ModuleType("axiom_compute_worker.compute_core.chunker")
+
+        class _Ch:
+            def __init__(self, max_chunk_tokens=1200):
+                pass
+
+            def chunk(self, md, doc_metadata):
+                return [{"text": "Alpha works at Beta Corp",
+                         "metadata": {"start_paragraph_index": 0}}]
+
+            def chapter_starts(self):
+                return []
+
+        ch.Chunker = _Ch
+        monkeypatch.setitem(__import__("sys").modules,
+                            "axiom_compute_worker.compute_core.chunker", ch)
+        ic = types.ModuleType("axiom_compute_worker.compute_core.image_captioner")
+        ic.DEFAULT_CACHE_DIR = str(tmp_path / "capcache")
+
+        class _Captioner:
+            def load(self):
+                pass
+
+            def unload(self):
+                pass
+
+        ic.resolve_captioner = lambda: _Captioner()
+        ic.caption_image = lambda *a, **k: None  # zero captions, no reason
+        monkeypatch.setitem(__import__("sys").modules,
+                            "axiom_compute_worker.compute_core.image_captioner", ic)
+
+        src = _pdf(tmp_path)
+        req = _request(src, "off-profile")
+        req["processing"].update({"compute_dense_embeddings": False,
+                                  "extract_entities": False,
+                                  "extract_relationships": False,
+                                  "extract_image_captions": True})
+        work_root = tmp_path / "wr"
+        old = settings.get()
+        settings.set(Settings(work_root=work_root,
+                              allowed_source_roots=(str(tmp_path),),
+                              compute_backend="real", warmup=False,
+                              max_concurrent_jobs=1, admission_queue_capacity=9))
+        try:
+            r1 = runner_mod._real_pipeline(req, _workdir(tmp_path, "a1"))
+            reuse1 = r1["manifest"]["phase_reuse"]
+            assert reuse1["embed"] == "skipped", reuse1
+            assert reuse1["entities"] == "skipped", reuse1
+            assert reuse1["relationships"] == "skipped", reuse1
+            assert reuse1["captions"] == "computed", reuse1
+
+            r2 = runner_mod._real_pipeline(req, _workdir(tmp_path, "a2"))
+            reuse2 = r2["manifest"]["phase_reuse"]
+            assert reuse2["convert"] == "reused", reuse2
+            assert reuse2["chunk"] == "reused", reuse2
+            assert reuse2["captions"] == "reused", reuse2
+        finally:
+            settings.set(old)
+
+    """Direct _real_pipeline resume probes on the L6-style stub harness
+    (no app, no scheduler — pure pipeline behavior)."""
 
     def test_captions_resume_skips_dense_reembed(self, tmp_path, monkeypatch):
         """The captions checkpoint payload is POST-re-embed — a resumed
@@ -333,11 +421,15 @@ class TestWatchdogEvictionResume:
         monkeypatch.setattr(_sub, "Popen", _FakePopen)
         pt = types.ModuleType("axiom_compute_worker.compute_core.page_trust")
         pt.build_page_trust = lambda p: ({}, {}, {})
+        pt.PHYSICAL_ONLY = "physical_only"
         monkeypatch.setitem(__import__("sys").modules,
                             "axiom_compute_worker.compute_core.page_trust", pt)
         ch = types.ModuleType("axiom_compute_worker.compute_core.chunker")
 
         class _Ch:
+            def __init__(self, max_chunk_tokens=1200):
+                pass
+
             def chunk(self, md, doc_metadata):
                 return [{"text": "Alpha works at Beta Corp",
                          "metadata": {"start_paragraph_index": 0}}]
@@ -391,6 +483,14 @@ class TestWatchdogEvictionResume:
             )
         finally:
             settings.set(old)
+
+class TestWatchdogEvictionResume:
+    """#369 integration: the watchdog's orphan-compute stop cancels the
+    runner job mid-compute; the claim scan evicts; the reclaim resubmits
+    under the SAME idempotency key (the runner relaunches the cancelled
+    entry). The relaunched attempt must RESUME at the phase checkpoint,
+    not restart: the conversion that completed before the cancel is not
+    re-run."""
 
     def test_cancel_then_resubmit_resumes_at_phase(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient

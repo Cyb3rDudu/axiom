@@ -6,7 +6,8 @@ hours of table/embedding/mREBEL work lost per abort). This module gives
 the compute pipelines phase-granular completion markers whose payloads
 survive the per-job work dir:
 
-* Store: ``<work_root>/checkpoints/<attachment_id>/<key>/`` where the key
+* Store: ``<work_root>/checkpoints/<attachment_id>/<ns>/<key>/``
+  (ns = base | force) where the key
   derives from (content hash, processing-profile hash, processor version).
   A retry hits the same key and resumes; a changed file, a changed
   profile or a new build invalidates cleanly (different key). A
@@ -17,13 +18,13 @@ survive the per-job work dir:
   ``os.replace`` — a kill mid-write leaves an incomplete phase (marker
   absent) that simply recomputes. Contiguity is enforced: only a
   contiguous prefix of PHASE_ORDER counts as completed.
-* Honesty: the pipeline reports per phase ``computed`` vs ``reused``
-  into ``manifest.phase_reuse`` — an operator can tell a fresh
+* Honesty: the pipeline reports per phase ``computed`` / ``reused`` /
+  ``skipped`` (off in profile) into ``manifest.phase_reuse`` — an operator can tell a fresh
   processing from a resumed one at a glance.
 * Retention: saving into a new key prunes sibling keys of the same
   attachment (content moved on — the old checkpoints are dead weight).
-  One key (one book's intermediates) per attachment is the steady-state
-  disk ceiling; no TTL machinery. Prune ceiling, documented: the prune
+  One key (one book's intermediates) per attachment per namespace is
+  the steady-state disk ceiling; no TTL machinery. Prune ceiling, documented: the prune
   is immediate — a re-keyed attempt that dies early has already pruned
   the base key, and the next plain retry recomputes from zero.
   Accepted because checkpoints are an optimization, never a
@@ -130,17 +131,28 @@ class PhaseCheckpoints:
         return all(p in self._completed for p in PHASE_ORDER[:idx])
 
     def report(self) -> dict[str, str]:
-        """Phase → computed|reused for the result manifest (only phases
-        the pipeline actually ran through)."""
+        """Phase → computed|reused|skipped for the result manifest (only
+        phases the pipeline actually ran through)."""
         return dict(self._phases_run)
 
-    def mark(self, phase: str, state: str | bool) -> None:
-        """Record the phase's outcome for the report. Accepts the
-        historical booleans (False → computed, True → reused) or the
-        explicit strings computed / reused / skipped (off in profile)."""
-        if isinstance(state, bool):
-            state = "reused" if state else "computed"
+    _STATES = ("computed", "reused", "skipped")
+
+    def mark(self, phase: str, state: str) -> None:
+        """Record the phase's outcome for the report: computed | reused |
+        skipped (off in profile). Strings only — a typo raises here
+        instead of leaking an undocumented state into manifests."""
+        if state not in self._STATES:
+            raise ValueError(f"unknown phase state {state!r}")
         self._phases_run[phase] = state
+
+    def skip(self, phase: str) -> None:
+        """Off-in-profile phase: write the EMPTY marker that keeps the
+        scan's prefix contiguous (without it, downstream phases never
+        resume) and report it as skipped. Single source for the four
+        off-branch call sites — omitting the save is exactly the bug
+        class this prevents."""
+        self.save(phase, jsons={})
+        self.mark(phase, "skipped")
 
     # -- payload IO ---------------------------------------------------------
 

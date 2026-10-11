@@ -85,7 +85,7 @@ incomplete phase instead of restarting from zero; changed content, changed
 profile or a new build re-keys cleanly. A force-rebuild recomputes from zero
 by design — its key differs (contract §19's fresh-recompute semantics). Markers land last (atomic), a kill
 mid-phase recomputes that phase wholly. `manifest.phase_reuse` names each
-phase `computed` vs `reused` — an operator can tell a fresh processing from a
+phase `computed`, `reused` or `skipped` (off in profile) — an operator can tell a fresh processing from a
 resumed one, and `stage_timings` witnesses ~0 elapsed for reused phases.
 Retention is one key (one book's intermediates) per attachment per namespace;
 saving into a new key prunes the superseded siblings within its own namespace
