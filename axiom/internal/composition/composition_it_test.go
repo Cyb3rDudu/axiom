@@ -463,7 +463,7 @@ func TestIT_FakeBindingFullRegistry(t *testing.T) {
 		t.Fatalf("ready: %v", err)
 	}
 
-	resp, err := noKeepAliveGet(fmt.Sprintf("http://127.0.0.1:%d/api/health", cfg.APIPort))
+	resp, err := noKeepAliveGet(fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", cfg.APIPort))
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}

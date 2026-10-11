@@ -87,7 +87,7 @@ func runDoctor(flags map[string]string) doctorReport {
 
 	// database: reachability + migration ledger.
 	if cfg.DatabaseURL == "" {
-		rep.Checks["database"] = checkStatus{Status: "fail", Detail: "AXIOM_DATABASE_URL not set — the store is unreachable by definition"}
+		rep.Checks["database"] = checkStatus{Status: "fail", Detail: "AXIOM_STORE_DATABASE_URL not set — the store is unreachable by definition"}
 	} else if info, err := probeDatabase(cfg.DatabaseURL); err != nil {
 		rep.Checks["database"] = checkStatus{Status: "fail", Detail: err.Error()}
 	} else {

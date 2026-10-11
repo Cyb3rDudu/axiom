@@ -33,7 +33,7 @@ func cmdMigrate(name string, args []string, flags map[string]string) int {
 		return code
 	}
 	if cfg.DatabaseURL == "" {
-		fmt.Fprintf(os.Stderr, "%s migrate: no database DSN configured (AXIOM_STORE_DATABASE_URL / AXIOM_DATABASE_URL)\n", name)
+		fmt.Fprintf(os.Stderr, "%s migrate: no database DSN configured (AXIOM_STORE_DATABASE_URL)\n", name)
 		return exitFailure
 	}
 	// Same refusal as the composition root (unknown driver = loud exit,

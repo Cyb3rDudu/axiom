@@ -179,7 +179,7 @@ type Config struct {
 	// Empty defaults to postgres — the 0.1.x-borne behavior.
 	StorageLibraryDriver string
 	// LibraryDatabaseURL is the Library component's OWN PostgreSQL DSN
-	// (F12 #306, AXIOM_LIBRARY_DATABASE_URL; empty = AXIOM_DATABASE_URL).
+	// (F12 #306, AXIOM_LIBRARY_DATABASE_URL; empty = AXIOM_STORE_DATABASE_URL).
 	// A separate pool either way — the DM cutover later points it at a
 	// separate logical database without code changes.
 	LibraryDatabaseURL string
