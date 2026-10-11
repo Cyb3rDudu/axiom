@@ -70,7 +70,7 @@ func (p *Ports) fillLocal() {
 
 // localIngestRunner is the local binding for the dispatcher→runner port:
 // the #207 ordered candidate chain. An ORDERED candidate list from
-// AXIOM_PROCESSOR_URLS (plural wins) or the legacy singular pair. A
+// AXIOM_COMPUTE_WORKER_URLS (plural wins) or the singular pair. A
 // periodic health probe keeps dead candidates out of the submit path;
 // submit-time failover stays as the safety net.
 func localIngestRunner(cfg config.Config, logger *log.Logger) (RunnerClient, error) {

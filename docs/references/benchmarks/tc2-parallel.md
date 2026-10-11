@@ -13,8 +13,9 @@ clean slate; reference = TC1 backup. Original:
 - **3 runner containers** (rootless Podman, `--network=host`) on GPU hosts:
   2× RTX-3090 class (24 GB) + 1× RTX-A3000 laptop class (12 GB).
 - **Dispatcher:** 3 independent instances, each
-  `AXIOM_PROCESSOR_RUNNER_NAME=<label>`, concurrency 1, same DB (claim
-  exclusivity via `SKIP LOCKED` + claim fencing).
+  `AXIOM_PROCESSOR_RUNNER_NAME=<label>` (historical spelling; canonical
+  since v0.2.4: `AXIOM_COMPUTE_WORKER_NAME`, #368), concurrency 1, same
+  DB (claim exclusivity via `SKIP LOCKED` + claim fencing).
 
 > Round 1 was discarded (all runners on GPU 0 — see L8 analysis, Trap 10). The
 > documented run is round 2.

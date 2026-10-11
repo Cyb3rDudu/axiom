@@ -59,7 +59,7 @@ publizierte Seiten per Platzhalter verweisen.
 | Platzhalter im Runbook | Konkreter Wert (Survey 2026-08-18) |
 | --- | --- |
 | `<user>@<runner-host>` (Runner-Host) | `dudu@192.168.1.2` („carrier": GPU-Host, host-network Podman-Runner) |
-| `<admin-host>:<port>` (axiom API für `AXIOM_PROCESSOR_SOURCE_BASE_URL`) | `192.168.1.47:8011` |
+| `<admin-host>:<port>` (axiom API für `AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL`) | `192.168.1.47:8011` |
 | Wave-Runner-Ports (`<port1>–<port3>`, aufsteigend) | `19542–19544` (19543 kollidiert bis Cutover mit dem alten Runner) |
 | Merge-Train-Mindeststand | `78558d5` (W2+W3+W4+W12) |
 | Surveyed Buchzahl | `121` aktiv (Firing-SELECT ist autoritativ; Planungsfigur war 126) |

@@ -1,7 +1,7 @@
 // Package processor — ingest failover chain (epic #130 R4, #134; generalized
 // to an ordered candidate list in #207).
 //
-// Role model: AXIOM_PROCESSOR_URLS (or the legacy singular URL plus fallback
+// Role model: AXIOM_COMPUTE_WORKER_URLS (or the singular URL plus fallback
 // variable) defines an ORDERED chain of ingest runners — Carrier GPU first
 // when present, the local always-on runner as the every-installation floor.
 // A periodic health probe keeps dead candidates out of the front of the

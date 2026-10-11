@@ -3,7 +3,7 @@
 //
 // Signature covers jobID|exp (unix seconds). The secret is shared between
 // dispatcher (signer) and server endpoint (verifier) via
-// AXIOM_PROCESSOR_SOURCE_SECRET; an empty secret disables the feature
+// AXIOM_COMPUTE_WORKER_SOURCE_SECRET; an empty secret disables the feature
 // everywhere (endpoint 404s, dispatcher sends no source_url).
 package sourceurl
 

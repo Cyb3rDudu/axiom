@@ -6,7 +6,7 @@ package search
 //
 // Run with:
 //   AXIOM_SEARCH_IT=1 \
-//   AXIOM_PROCESSOR_URL=http://127.0.0.1:8012 \
+//   AXIOM_COMPUTE_WORKER_URL=http://127.0.0.1:8012 \
 //   AXIOM_TEST_DATABASE_URL=postgresql://axiom_user@127.0.0.1:5444/axiom_test?sslmode=disable \
 //   go test ./internal/search/ -run IT -v
 //
@@ -36,7 +36,7 @@ func itEnv(t *testing.T) (osURL, procURL, dbURL string) {
 	if osURL == "" {
 		osURL = "http://127.0.0.1:9200"
 	}
-	procURL = os.Getenv("AXIOM_PROCESSOR_URL")
+	procURL = os.Getenv("AXIOM_COMPUTE_WORKER_URL")
 	if procURL == "" {
 		procURL = "http://127.0.0.1:8012"
 	}
