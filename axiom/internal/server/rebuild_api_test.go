@@ -36,7 +36,7 @@ func rebuildServer(t *testing.T, fr *fakeRebuildRepo) (*Server, *httptest.Respon
 
 func TestForceRebuildUnwired503(t *testing.T) {
 	s, rec := rebuildServer(t, nil)
-	req := httptest.NewRequest(http.MethodPost, "/api/ingest/documents/00000000-0000-0000-0000-000000000001/force-rebuild", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/documents/00000000-0000-0000-0000-000000000001/force-rebuild", nil)
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)
@@ -45,7 +45,7 @@ func TestForceRebuildUnwired503(t *testing.T) {
 
 func TestForceRebuildBadUUID400(t *testing.T) {
 	s, rec := rebuildServer(t, &fakeRebuildRepo{})
-	req := httptest.NewRequest(http.MethodPost, "/api/ingest/documents/not-a-uuid/force-rebuild", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/documents/not-a-uuid/force-rebuild", nil)
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
@@ -56,7 +56,7 @@ func TestForceRebuildAccepted(t *testing.T) {
 	docID := "00000000-0000-0000-0000-000000000001"
 	job := &repo.Job{ID: "j-1", Status: "pending", ForceRebuild: true}
 	s, rec := rebuildServer(t, &fakeRebuildRepo{job: job})
-	req := httptest.NewRequest(http.MethodPost, "/api/ingest/documents/"+docID+"/force-rebuild", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/documents/"+docID+"/force-rebuild", nil)
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202 (job enqueued, compute async)", rec.Code)
@@ -79,7 +79,7 @@ func TestForceRebuildErrorStatusMap(t *testing.T) {
 	}
 	for _, tc := range cases {
 		s, rec := rebuildServer(t, &fakeRebuildRepo{err: tc.err})
-		req := httptest.NewRequest(http.MethodPost, "/api/ingest/documents/"+docID+"/force-rebuild", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/documents/"+docID+"/force-rebuild", nil)
 		s.Handler().ServeHTTP(rec, req)
 		if rec.Code != tc.want {
 			t.Fatalf("err = %v: status = %d, want %d", tc.err, rec.Code, tc.want)

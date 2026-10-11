@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Cyb3rDudu/axiom/axiom/internal/deprecate"
 )
 
 // TestEffectiveTableCoversAllReadKeys — drift guard between the loader
@@ -45,73 +44,13 @@ func TestEffectiveTableCoversAllReadKeys(t *testing.T) {
 	}
 }
 
-// TestDualFedEnvPairsMatchTableAndLoader — drift guard for the dual-fed
-// pair table (F08 #302, F10 #304): every dualFedEnv field must own exactly
-// its two table rows (canonical + legacy spelling), and every
-// computeWorkerEnv/computeWorkerDur call-site pair in config.go must be
-// tabled under the field it feeds — a new or retyped pointing var cannot
-// silently lose its resolver truth.
-func TestDualFedEnvPairsMatchTableAndLoader(t *testing.T) {
-	// part 1: the pair table vs envRows — exactly two rows per field,
-	// and their env keys are exactly the pair.
-	for field, pair := range dualFedEnv {
-		var rows []string
-		for _, row := range envRows {
-			if row.field == field {
-				rows = append(rows, row.env)
-			}
-		}
-		if len(rows) != 2 {
-			t.Fatalf("dualFedEnv field %s has %d envRows rows, want exactly 2 (canonical+legacy)", field, len(rows))
-		}
-		if !(rows[0] == pair[0] && rows[1] == pair[1]) && !(rows[0] == pair[1] && rows[1] == pair[0]) {
-			t.Errorf("dualFedEnv field %s pair {%s,%s} != envRows {%s,%s}", field, pair[0], pair[1], rows[0], rows[1])
-		}
-	}
-
-	// part 2: computeWorkerEnv/computeWorkerDur call sites vs the table.
-	// FixerCommand (F08 repairWorkerCmd) is resolved by a different helper
-	// and stays table-only.
-	src, err := os.ReadFile("config.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	callRe := regexp.MustCompile(`(\w+):\s*(?:parseURLList\()?computeWorker(?:Env|Dur)\("([A-Z0-9_]+)", "([A-Z0-9_]+)"`)
-	calls := map[string][2]string{}
-	for _, m := range callRe.FindAllStringSubmatch(string(src), -1) {
-		field, canon, legacy := m[1], m[2], m[3]
-		if prev, dup := calls[field]; dup {
-			t.Fatalf("field %s has two computeWorker* call sites (%s/%s vs %s/%s)", field, prev[0], prev[1], canon, legacy)
-		}
-		calls[field] = [2]string{canon, legacy}
-	}
-	for field, pair := range dualFedEnv {
-		if field == "FixerCommand" {
-			continue
-		}
-		got, ok := calls[field]
-		if !ok {
-			t.Errorf("dualFedEnv field %s has no computeWorkerEnv/Dur call site in config.go", field)
-			continue
-		}
-		if got != pair {
-			t.Errorf("dualFedEnv field %s pair {%s,%s} != call site {%s,%s}", field, pair[0], pair[1], got[0], got[1])
-		}
-	}
-	for field := range calls {
-		if _, ok := dualFedEnv[field]; !ok {
-			t.Errorf("config.go feeds %s via computeWorker* but dualFedEnv has no entry — add it (Effective source annotation will lie)", field)
-		}
-	}
-}
-
 // TestEffectiveMarksSourcesAndRedacts — source annotation follows
 // LookupEnv (set-but-empty counts as env), secrets never carry values,
 // the DSN is projected credential-free.
 func TestEffectiveMarksSourcesAndRedacts(t *testing.T) {
 	t.Setenv("AXIOM_API_PORT", "8123")
 	t.Setenv("AXIOM_OPENSEARCH_URL", "") // set-empty = the disabled state = source env
-	t.Setenv("AXIOM_DATABASE_URL", "postgresql://u:topsecret@db.example:5432/axiom?sslmode=disable")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "postgresql://u:topsecret@db.example:5432/axiom?sslmode=disable")
 	t.Setenv("AXIOM_WS_SECRET", "wssecret")
 
 	entries := Effective(Load())
@@ -131,7 +70,7 @@ func TestEffectiveMarksSourcesAndRedacts(t *testing.T) {
 	if e := byEnv["AXIOM_WS_SECRET"]; e.Value != RedactedValue {
 		t.Fatalf("ws secret leaked: %+v", e)
 	}
-	e := byEnv["AXIOM_DATABASE_URL"]
+	e := byEnv["AXIOM_STORE_DATABASE_URL"]
 	if e.Value != "postgresql://db.example:5432/axiom?sslmode=disable" {
 		t.Fatalf("DSN must be credential-free, got %v", e.Value)
 	}
@@ -336,94 +275,28 @@ func TestURLRowsRedactQueryCredentials(t *testing.T) {
 	}
 }
 
-// A command path is not a credential (F08 review round 2): the legacy
-// AXIOM_FIXER_CMD envRow must NOT be flagged secret — flipping its
-// redaction flag back to true turns this test red, so operators keep
+// A command path is not a credential (F08 review round 2): the
+// AXIOM_REPAIR_WORKER_CMD envRow must NOT be flagged secret — flipping
+// its redaction flag back to true turns this test red, so operators keep
 // seeing the actual worker path in `axiom config get --effective`.
+// (#368: the legacy AXIOM_FIXER_CMD row is gone; the property is pinned
+// on the canonical row.)
 func TestEffectiveWorkerCommandRowNotRedacted(t *testing.T) {
-	deprecate.SetSilent(true)
-	t.Cleanup(func() { deprecate.SetSilent(false) })
-	t.Setenv("AXIOM_REPAIR_WORKER_CMD", "") // neutral: the legacy row is what we assert
-	t.Setenv("AXIOM_FIXER_CMD", "/opt/axiom/bin/some-worker")
+	t.Setenv("AXIOM_REPAIR_WORKER_CMD", "/opt/axiom/bin/some-worker")
 
 	for _, e := range Effective(Load()) {
-		if e.Env != "AXIOM_FIXER_CMD" {
+		if e.Env != "AXIOM_REPAIR_WORKER_CMD" {
 			continue
 		}
 		if e.Source != "env" {
-			t.Fatalf("AXIOM_FIXER_CMD source = %q, want env", e.Source)
+			t.Fatalf("AXIOM_REPAIR_WORKER_CMD source = %q, want env", e.Source)
 		}
 		if e.Value != "/opt/axiom/bin/some-worker" {
 			t.Fatalf("worker command path must show its value, got %v (redacted? %v)", e.Value, RedactedValue)
 		}
 		return
 	}
-	t.Fatal("AXIOM_FIXER_CMD missing from effective view")
-}
-
-// TestEffectiveWorkerCommandShadowingMatrix — F08 review round 3: the two
-// worker-command rows must tell the resolver's (repairWorkerCmd's) truth
-// about WHO fed the effective value. Pre-round the view lied twice: with
-// both vars set the legacy row rendered the canonical value under
-// source=env; with only legacy set the canonical row rendered the legacy
-// value under source=default.
-func TestEffectiveWorkerCommandShadowingMatrix(t *testing.T) {
-	deprecate.SetSilent(true)
-	t.Cleanup(func() { deprecate.SetSilent(false) })
-	row := func() (canonical, legacy Entry) {
-		for _, e := range Effective(Load()) {
-			switch e.Env {
-			case "AXIOM_REPAIR_WORKER_CMD":
-				canonical = e
-			case "AXIOM_FIXER_CMD":
-				legacy = e
-			}
-		}
-		if canonical.Env == "" || legacy.Env == "" {
-			t.Fatal("worker command rows missing from effective view")
-		}
-		return
-	}
-
-	t.Run("both set: canonical wins, legacy shadowed", func(t *testing.T) {
-		t.Setenv("AXIOM_REPAIR_WORKER_CMD", "/opt/canonical/worker")
-		t.Setenv("AXIOM_FIXER_CMD", "/opt/legacy/fixer")
-		canonical, legacy := row()
-		if canonical.Source != "env" || canonical.Value != "/opt/canonical/worker" {
-			t.Fatalf("canonical row = %v/%v, want env + canonical value", canonical.Source, canonical.Value)
-		}
-		if legacy.Source != "default" {
-			t.Fatalf("shadowed legacy row source = %q, want default (it fed nothing)", legacy.Source)
-		}
-		if legacy.Value != "/opt/canonical/worker" {
-			t.Fatalf("legacy row value = %v, want the effective (canonical) value", legacy.Value)
-		}
-	})
-	t.Run("legacy only: legacy feeds, canonical row stays default", func(t *testing.T) {
-		t.Setenv("AXIOM_REPAIR_WORKER_CMD", "")
-		t.Setenv("AXIOM_FIXER_CMD", "/opt/legacy/fixer")
-		canonical, legacy := row()
-		if legacy.Source != "env" || legacy.Value != "/opt/legacy/fixer" {
-			t.Fatalf("legacy row = %v/%v, want env + legacy value", legacy.Source, legacy.Value)
-		}
-		if canonical.Source != "default" {
-			t.Fatalf("canonical row source = %q, want default (canonical var fed nothing)", canonical.Source)
-		}
-		if canonical.Value != "/opt/legacy/fixer" {
-			t.Fatalf("canonical row value = %v, want the effective (legacy-fed) value", canonical.Value)
-		}
-	})
-	t.Run("nothing set: both default, canonical default value", func(t *testing.T) {
-		t.Setenv("AXIOM_REPAIR_WORKER_CMD", "")
-		t.Setenv("AXIOM_FIXER_CMD", "")
-		canonical, legacy := row()
-		if canonical.Source != "default" || legacy.Source != "default" {
-			t.Fatalf("sources = %v/%v, want default/default", canonical.Source, legacy.Source)
-		}
-		if canonical.Value != "/opt/axiom/bin/axiom-repair-worker" {
-			t.Fatalf("canonical row value = %v, want the canonical default", canonical.Value)
-		}
-	})
+	t.Fatal("AXIOM_REPAIR_WORKER_CMD missing from effective view")
 }
 
 // Percent-encoded credential keys (review round 3 minor): pgconn decodes

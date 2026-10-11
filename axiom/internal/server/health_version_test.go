@@ -12,7 +12,7 @@ import (
 func TestHealthReportsVersionBanner(t *testing.T) {
 	s := New("127.0.0.1:0", nil)
 	rec := httptest.NewRecorder()
-	s.handleHealth(rec, httptest.NewRequest("GET", "/api/health", nil))
+	s.handleHealth(rec, httptest.NewRequest("GET", "/api/v1/health", nil))
 	var body struct {
 		Build string `json:"build"`
 	}
@@ -32,7 +32,7 @@ func TestHealthReportsContextualState(t *testing.T) {
 	s := New("127.0.0.1:0", nil)
 	s.SetContextualState(func() string { return "degraded_no_sync" })
 	rec := httptest.NewRecorder()
-	s.handleHealth(rec, httptest.NewRequest("GET", "/api/health", nil))
+	s.handleHealth(rec, httptest.NewRequest("GET", "/api/v1/health", nil))
 	var body struct {
 		Contextual string `json:"contextual"`
 	}

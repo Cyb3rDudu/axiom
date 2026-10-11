@@ -1,9 +1,8 @@
-// Package cli is the shared command surface of the runtime binaries
-// (F05, #299): `axiom` is the canonical entrypoint, `axiom-ng` the
-// functional compatibility alias (ADR 0001 §3) delegating to the same
-// Run. The subcommand surface is the role-CLI contract F06–F10 dock
-// onto; the legacy KG mode flags (#244) stay accepted through both
-// names — one binary family, one dispatch.
+// Package cli is the command surface of the runtime binary (F05 #299;
+// #368: the axiom-ng alias binary is gone — only `axiom` dispatches
+// here). The subcommand surface is the role-CLI contract F06–F10 dock
+// onto; the legacy KG mode flags (#244) stay accepted — one binary,
+// one dispatch.
 //
 // Exit-code contract (documented, tested):
 //
@@ -28,19 +27,14 @@ import (
 	"github.com/Cyb3rDudu/axiom/axiom/internal/composition"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/config"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
-	"github.com/Cyb3rDudu/axiom/axiom/internal/statehome"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/version"
 )
 
 // Run dispatches argv (including argv[0]) and returns the process exit
-// code. name is the invocation identity ("axiom" canonical, "axiom-ng"
-// alias): it prefixes serve log lines and error messages. Alias-output
-// contract: the legacy serve log lines (prefix "axiom-ng: ") and the KG
-// mode flag surface behave as pre-F05. Deliberate deltas on the alias:
-// exactly one deprecation warning line per process (emitted once in
-// cmd/axiom-ng), -help gained the canonical command block ahead of the
-// legacy mode text, and unknown argv is now a usage error (exit 2)
-// instead of falling through to a server boot.
+// code. name is the invocation identity ("axiom"): it prefixes serve
+// log lines and error messages. The KG mode flag surface behaves as
+// pre-F05; unknown argv is a usage error (exit 2) instead of falling
+// through to a server boot.
 //
 // --set KEY=VALUE (repeatable) is the CLI-flag stage of the F13 #307
 // resolution chain (flag > env > config.sqlite > default), honored by
@@ -48,11 +42,6 @@ import (
 // vocabulary (unknown key / bad value / secret key = loud exit). The
 // legacy KG mode flags never see it (their own flag surface is frozen).
 func Run(name string, args []string) int {
-	// #352: one-time legacy state migration at process start, before any
-	// path resolution; best-effort — a failure logs, never blocks boot.
-	if err := statehome.Migrate(); err != nil {
-		log.Printf("statehome: legacy state migration failed (legacy root untouched): %v", err)
-	}
 	if len(args) < 2 {
 		cfg, code := loadRuntime(name, nil)
 		if code != exitOK {

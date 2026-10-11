@@ -40,7 +40,7 @@ func fingerprintDSN() string {
 	if d := os.Getenv("AXIOM_BASELINE_DSN"); d != "" {
 		return d
 	}
-	return os.Getenv("AXIOM_DATABASE_URL")
+	return os.Getenv("AXIOM_STORE_DATABASE_URL")
 }
 
 // withScratchDB rewrites the DSN to <db>_baseline_scratch, recreates that
@@ -212,7 +212,7 @@ func fingerprintArtifact(block, major string) string {
 func TestSchemaFingerprintFrozen(t *testing.T) {
 	dsn := fingerprintDSN()
 	if dsn == "" {
-		t.Skip("no AXIOM_BASELINE_DSN / AXIOM_DATABASE_URL — schema fingerprint needs a database")
+		t.Skip("no AXIOM_BASELINE_DSN / AXIOM_STORE_DATABASE_URL — schema fingerprint needs a database")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
@@ -334,7 +334,7 @@ func TestSchemaFingerprintDevLive(t *testing.T) {
 	liveEnabled(t)
 	dsn := fingerprintDSN()
 	if dsn == "" {
-		t.Fatal("live mode without AXIOM_DATABASE_URL (source scripts/dev/env.sh)")
+		t.Fatal("live mode without AXIOM_STORE_DATABASE_URL (source scripts/dev/env.sh)")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
@@ -478,7 +478,7 @@ func liveRowCounts(ctx context.Context, d *db.DB) ([]string, error) {
 func TestSchemaFingerprintAllowlistExact(t *testing.T) {
 	dsn := fingerprintDSN()
 	if dsn == "" {
-		t.Skip("no AXIOM_BASELINE_DSN / AXIOM_DATABASE_URL — allowlist derivation needs a database")
+		t.Skip("no AXIOM_BASELINE_DSN / AXIOM_STORE_DATABASE_URL — allowlist derivation needs a database")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()

@@ -32,7 +32,7 @@ func TestJobsEndpointReturnsFailedJobWithNullHash(t *testing.T) {
 	s.SetJobRepo(fakeJobRepo{jobs})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/ingest/jobs", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ingest/jobs", nil)
 	s.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

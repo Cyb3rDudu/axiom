@@ -72,7 +72,7 @@ sys.path.insert(0, str(_HERE.parents[1]))
 RUNS_DIR = Path("/tmp/axiom_runs")  # feste Repo-Konvention (Runbooks, Shell-Skripte)
 BACKUP_DIR = RUNS_DIR / "backups" / "pdf_labels"
 DSN = os.environ.get(
-    "AXIOM_DATABASE_URL",
+    "AXIOM_STORE_DATABASE_URL",
     "postgresql://axiom_user:axiom_password@127.0.0.1:5432/axiom_db",
 )
 STORAGE = Path.home() / "Zotero" / "storage"

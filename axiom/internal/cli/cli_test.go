@@ -59,14 +59,14 @@ func TestServeRefusesUnextractedRoles(t *testing.T) {
 // loudly on the unstartable store port (exit 1, a diagnosis — never the
 // F05 "not yet extracted" usage refusal).
 func TestServeLibraryBootsTheLibrarySlice(t *testing.T) {
-	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "")
 	t.Setenv("AXIOM_ALLOW_DEBUG_BIND", "1") // the test env's port pin must not hit the #205 debug-bind guard first
 	var buf strings.Builder
 	exit := serveTo(&buf, []string{"serve", "library"})
 	if exit == exitUsage {
 		t.Fatalf("serve library must not be a usage refusal anymore: %s", buf.String())
 	}
-	if !strings.Contains(buf.String(), "AXIOM_DATABASE_URL") {
+	if !strings.Contains(buf.String(), "AXIOM_STORE_DATABASE_URL") {
 		t.Fatalf("serve library without a store port must fail with the store diagnosis, got exit=%d: %s", exit, buf.String())
 	}
 }
@@ -78,14 +78,14 @@ func TestServeLibraryBootsTheLibrarySlice(t *testing.T) {
 // This is the CI-runnable half of the independence witness (the dev E2E
 // proves the full topology against real runner/OpenSearch).
 func TestServeStoreBootsTheStoreSlice(t *testing.T) {
-	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "")
 	t.Setenv("AXIOM_ALLOW_DEBUG_BIND", "1") // the test env's port pin must not hit the #205 debug-bind guard first
 	var buf strings.Builder
 	exit := serveTo(&buf, []string{"serve", "store"})
 	if exit == exitUsage {
 		t.Fatalf("serve store must not be a usage refusal anymore: %s", buf.String())
 	}
-	if !strings.Contains(buf.String(), "AXIOM_DATABASE_URL") {
+	if !strings.Contains(buf.String(), "AXIOM_STORE_DATABASE_URL") {
 		t.Fatalf("serve store without a store port must fail with the store diagnosis, got exit=%d: %s", exit, buf.String())
 	}
 }
@@ -169,7 +169,7 @@ func TestAPIRolesSelection(t *testing.T) {
 	}
 
 	t.Run("db wiring selects every api-serving role", func(t *testing.T) {
-		t.Setenv("AXIOM_DATABASE_URL", "postgresql://u:pw@127.0.0.1:5432/db?sslmode=disable")
+		t.Setenv("AXIOM_STORE_DATABASE_URL", "postgresql://u:pw@127.0.0.1:5432/db?sslmode=disable")
 		cfg := config.Load()
 		roles := apiRoles(cfg)
 		if !reflect.DeepEqual(roles, want) {
@@ -194,7 +194,7 @@ func TestAPIRolesSelection(t *testing.T) {
 	})
 
 	t.Run("db-less degrades to api-only", func(t *testing.T) {
-		t.Setenv("AXIOM_DATABASE_URL", "")
+		t.Setenv("AXIOM_STORE_DATABASE_URL", "")
 		if got := apiRoles(config.Load()); !reflect.DeepEqual(got, []composition.Role{composition.RoleAPI}) {
 			t.Fatalf("db-less apiRoles = %v, want [api]", got)
 		}
@@ -266,7 +266,7 @@ func TestMigrateSurface(t *testing.T) {
 	if exit := serveTo(&buf, []string{"migrate", "extra"}); exit != exitUsage {
 		t.Fatalf("migrate with stray args exit = %d, want 2", exit)
 	}
-	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "")
 	t.Setenv("AXIOM_STORE_DATABASE_URL", "")
 	buf.Reset()
 	if exit := serveTo(&buf, []string{"migrate"}); exit != exitFailure {
@@ -304,7 +304,7 @@ func TestMigrateSurface(t *testing.T) {
 }
 
 func TestConfigGetEffectiveRedactsSecrets(t *testing.T) {
-	t.Setenv("AXIOM_DATABASE_URL", "postgresql://u:secretpw@127.0.0.1:5432/axiom_dev?sslmode=disable")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "postgresql://u:secretpw@127.0.0.1:5432/axiom_dev?sslmode=disable")
 	t.Setenv("AXIOM_OPENSEARCH_PASSWORD", "hunter2")
 	t.Setenv("AXIOM_API_PORT", "8123")
 
@@ -320,7 +320,7 @@ func TestConfigGetEffectiveRedactsSecrets(t *testing.T) {
 // the combined output.
 func TestNoSecretValuesInAnyOutput(t *testing.T) {
 	const dsnPW = "k9xJc2VjcmV0pw"
-	t.Setenv("AXIOM_DATABASE_URL", "postgresql://u:"+dsnPW+"@127.0.0.1:5432/db?sslmode=disable")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "postgresql://u:"+dsnPW+"@127.0.0.1:5432/db?sslmode=disable")
 	t.Setenv("AXIOM_OPENSEARCH_PASSWORD", "opensearch-hunter2")
 	t.Setenv("AXIOM_WS_SECRET", "ws-hunter3")
 	t.Setenv("AXIOM_PROCESSOR_SOURCE_SECRET", "src-hunter4")
@@ -369,7 +369,7 @@ func TestConfigValidateCatchesBadEnv(t *testing.T) {
 }
 
 func TestConfigValidateCatchesHalfWiring(t *testing.T) {
-	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "")
 	t.Setenv("AXIOM_DISPATCHER_ENABLED", "1")
 	if exit := Run("axiom", []string{"axiom", "config", "validate"}); exit != exitFailure {
 		t.Fatalf("dispatcher without store must exit 1, got %d", exit)
@@ -385,7 +385,7 @@ func TestDoctorChecksLogic(t *testing.T) {
 	dir := t.TempDir()
 
 	t.Run("healthy without db is still a failure (store unreachable)", func(t *testing.T) {
-		t.Setenv("AXIOM_DATABASE_URL", "")
+		t.Setenv("AXIOM_STORE_DATABASE_URL", "")
 		t.Setenv("AXIOM_OPENSEARCH_URL", ossrv.URL)
 		t.Setenv("AXIOM_ARTIFACT_ROOT", dir)
 		rep := runDoctor(nil)
@@ -401,7 +401,7 @@ func TestDoctorChecksLogic(t *testing.T) {
 	})
 
 	t.Run("broken dsn fails database check", func(t *testing.T) {
-		t.Setenv("AXIOM_DATABASE_URL", "postgresql://nope@127.0.0.1:1/db?sslmode=disable&connect_timeout=1")
+		t.Setenv("AXIOM_STORE_DATABASE_URL", "postgresql://nope@127.0.0.1:1/db?sslmode=disable&connect_timeout=1")
 		t.Setenv("AXIOM_OPENSEARCH_URL", ossrv.URL)
 		t.Setenv("AXIOM_ARTIFACT_ROOT", dir)
 		rep := runDoctor(nil)
@@ -444,7 +444,7 @@ func TestDoctorChecksLogic(t *testing.T) {
 // would find no schema_migrations and turn the suite red (the round-3 CI
 // failure: go-db-it, run 35941862473).
 func TestDoctorExitCodes(t *testing.T) {
-	t.Setenv("AXIOM_DATABASE_URL", "")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "")
 	t.Setenv("AXIOM_ARTIFACT_ROOT", "")
 	if code, _ := runTo(&strings.Builder{}, []string{"doctor"}); code != exitFailure {
 		t.Fatalf("unhealthy doctor must exit 1, got %d", code)
@@ -455,7 +455,7 @@ func TestDoctorExitCodes(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer osSrv.Close()
-	t.Setenv("AXIOM_DATABASE_URL", dsn)
+	t.Setenv("AXIOM_STORE_DATABASE_URL", dsn)
 	t.Setenv("AXIOM_OPENSEARCH_URL", osSrv.URL)
 	t.Setenv("AXIOM_ARTIFACT_ROOT", t.TempDir())
 	if code, _ := runTo(&strings.Builder{}, []string{"doctor"}); code != exitOK {

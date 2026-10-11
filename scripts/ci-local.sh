@@ -283,8 +283,6 @@ leg_docs() {
     } |
         grep -v '_inventory.md' |
         grep -vF 'was known as *axiom-ng*' |
-        grep -vE '(go run|go build).*cmd/axiom-ng' |
-        grep -vE '(\./)?axiom-ng +-' |
         grep -vF 'axiom-ng-<version>' |
         grep -vF 'axiom-ng, axiom-compute-worker' |
         grep -vE "$ADRROWS" |
@@ -437,23 +435,17 @@ scratch_setup() { # derive DSNs, clean scratch, create the bases fresh
             return 1
         }
         # subshell: the source DSN (and its variables) must never leak
-        # into the environment. Precedence inside the env file:
-        # AXIOM_STORE_DATABASE_URL (component-split store plane — the
-        # binary's canonical spelling), else the legacy pre-split
-        # AXIOM_DATABASE_URL (same cluster).
+        # into the environment. The env file carries the canonical
+        # AXIOM_STORE_DATABASE_URL (legacy spellings are gone, #368).
         base_dsn="$(
             set -a
             # shellcheck disable=SC1090
             . "$RAG_ENV"
             set +a
-            if [ -n "${AXIOM_STORE_DATABASE_URL:-}" ]; then
-                printf '%s' "$AXIOM_STORE_DATABASE_URL"
-            else
-                printf '%s' "${AXIOM_DATABASE_URL:-}"
-            fi
+            printf '%s' "${AXIOM_STORE_DATABASE_URL:-}"
         )"
         [ -n "$base_dsn" ] || {
-            echo "ci-local: $RAG_ENV defines neither AXIOM_STORE_DATABASE_URL nor AXIOM_DATABASE_URL" >&2
+            echo "ci-local: $RAG_ENV defines no AXIOM_STORE_DATABASE_URL" >&2
             return 1
         }
         IT_DSN="$(dsn_with_db "$base_dsn" "$RUN_BASE")" || {

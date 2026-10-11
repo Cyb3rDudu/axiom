@@ -140,7 +140,7 @@ func TestF09StoreIndependenceE2E(t *testing.T) {
 	env := []string{
 		"HOME=" + os.Getenv("HOME"),
 		"PATH=" + os.Getenv("PATH"),
-		"AXIOM_DATABASE_URL=" + e.dsn,
+		"AXIOM_STORE_DATABASE_URL=" + e.dsn,
 		fmt.Sprintf("AXIOM_API_PORT=%d", e.apiPort),
 		"AXIOM_BIND_ADDR=127.0.0.1",
 		"AXIOM_OS_URL=" + osURL,
@@ -182,7 +182,7 @@ func TestF09StoreIndependenceE2E(t *testing.T) {
 	// Wait for readiness (the server migrates core + both component
 	// ledgers on start — the store slice owns that here).
 	waitFor(t, 60*time.Second, "store api up", func() error {
-		resp, err := http.Get(e.apiURL + "/api/health")
+		resp, err := http.Get(e.apiURL + "/api/v1/health")
 		if err != nil {
 			return err
 		}

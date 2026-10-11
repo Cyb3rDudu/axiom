@@ -68,31 +68,29 @@ confirm_install() {
 
 case "$component" in
 rag)
-    bin=$(find_artifact "axiom-ng-$version-*") || {
-        echo "no rag artifact for $version in $DIST/ — run: make rag"
-        exit 1
-    }
-    # F05 (#299): the canonical binary ships alongside the alias — same
-    # build generation, both installed under /opt/axiom/bin.
-    cbin=$(find_artifact "axiom-$version-*") || {
+    bin=$(find_artifact "axiom-$version-*") || {
         echo "no axiom artifact for $version in $DIST/ — run: make rag"
         exit 1
     }
     target="$ROOT/rag/$version"
     confirm_install rag "$bin" \
-        "target:   $target/axiom-ng" \
-        "target:   $target/axiom (canonical, F05)" \
+        "target:   $target/axiom" \
         "current:  $ROOT/rag/current -> $version" \
-        "shim:     $ROOT/bin/axiom-ng" \
         "shim:     $ROOT/bin/axiom"
     mkdir -p "$target" "$ROOT/bin"
-    cp "$bin" "$target/axiom-ng"
-    cp "$cbin" "$target/axiom"
-    chmod 0755 "$target/axiom-ng" "$target/axiom"
+    cp "$bin" "$target/axiom"
+    chmod 0755 "$target/axiom"
     ln -sfn "$version" "$ROOT/rag/current"
-    ln -sfn "$ROOT/rag/current/axiom-ng" "$ROOT/bin/axiom-ng"
     ln -sfn "$ROOT/rag/current/axiom" "$ROOT/bin/axiom"
-    echo "installed: $ROOT/bin/axiom + $ROOT/bin/axiom-ng ($version)"
+    # #368: the axiom-ng alias generation is gone — an installed alias
+    # link from a 0.2.x install is removed (never silently recreated).
+    for legacy in "$ROOT/bin/axiom-ng" "$ROOT/rag/current/axiom-ng"; do
+        if [ -e "$legacy" ] || [ -L "$legacy" ]; then
+            rm -f "$legacy"
+            echo "removed legacy alias: $legacy (v0.2.4, #368 — use 'axiom')"
+        fi
+    done
+    echo "installed: $ROOT/bin/axiom ($version)"
     ;;
 compute-worker | runner)
     # canonical component name is compute-worker (F10 #304, ADR 0001

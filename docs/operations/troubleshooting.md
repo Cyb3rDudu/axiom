@@ -64,7 +64,7 @@ job; its frozen idempotency key can never be reused by design), re-ingest goes
 through the force-rebuild API — never through job-row surgery:
 
 ```sh
-curl -X POST http://<rag>:8011/api/ingest/documents/<document-uuid>/force-rebuild
+curl -X POST http://<rag>:8011/api/v1/ingest/documents/<document-uuid>/force-rebuild
 ```
 
 The call enqueues a NEW pending job with `force_rebuild=true` for the

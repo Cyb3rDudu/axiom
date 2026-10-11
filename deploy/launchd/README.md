@@ -14,7 +14,7 @@ G3's install script copies these and substitutes placeholders.
   fail-closed (`. "…/env" || exit 1`) so a malformed/partial env file
   aborts the service start instead of running with a half-parsed env.
   Services that require a database also guard
-  `: "${AXIOM_DATABASE_URL:?...}"` after sourcing so a missing DB setting
+  `: "${AXIOM_STORE_DATABASE_URL:?...}"` after sourcing so a missing DB setting
   aborts rather than defaulting. Env files live in `~/.config/axiom/*.env`,
   mode 0700, secrets ONLY there — never in `/tmp`, never inline in the
   plist (reboot survival + no secret in launchd-visible config).

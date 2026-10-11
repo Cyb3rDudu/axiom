@@ -32,7 +32,7 @@ idempotent — re-run). Long mutating passes log a heartbeat line every 30s
 Use the same binary and database URL that the server uses.
 
 ```bash
-export AXIOM_DATABASE_URL='postgresql://...'
+export AXIOM_STORE_DATABASE_URL='postgresql://...'
 
 # 1. Type role/group nouns as CONCEPT. Dry-run first.
 axiom -normalize-entity-types

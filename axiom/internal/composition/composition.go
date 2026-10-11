@@ -247,7 +247,7 @@ func Select(cfg config.Config, logger *log.Logger, ports Ports, roles ...Role) (
 		}
 	}
 	if set[RoleStore] && cfg.DatabaseURL == "" {
-		return nil, fmt.Errorf("composition: role %q selected but AXIOM_DATABASE_URL is empty — the store port is not startable; set the DSN or serve api-only", RoleStore)
+		return nil, fmt.Errorf("composition: role %q selected but AXIOM_STORE_DATABASE_URL is empty — the store port is not startable; set the DSN or serve api-only", RoleStore)
 	}
 	// The loud half-wiring guard (deliberate F04 delta, documented in #298):
 	// an enabled worker without its storage used to degrade silently
@@ -255,10 +255,10 @@ func Select(cfg config.Config, logger *log.Logger, ports Ports, roles ...Role) (
 	// start half-wired is the operator-facing contract for role starts.
 	if !set[RoleStore] {
 		if cfg.DispatcherEnabled {
-			return nil, fmt.Errorf("composition: AXIOM_DISPATCHER_ENABLED is set but the store port is not startable (AXIOM_DATABASE_URL empty) — refusing to start half-wired: set the DSN or disable the worker")
+			return nil, fmt.Errorf("composition: AXIOM_DISPATCHER_ENABLED is set but the store port is not startable (AXIOM_STORE_DATABASE_URL empty) — refusing to start half-wired: set the DSN or disable the worker")
 		}
 		if cfg.FixerInvokerEnabled {
-			return nil, fmt.Errorf("composition: AXIOM_FIXER_INVOKER_ENABLED is set but the store port is not startable (AXIOM_DATABASE_URL empty) — refusing to start half-wired: set the DSN or disable the worker")
+			return nil, fmt.Errorf("composition: AXIOM_FIXER_INVOKER_ENABLED is set but the store port is not startable (AXIOM_STORE_DATABASE_URL empty) — refusing to start half-wired: set the DSN or disable the worker")
 		}
 	}
 	// F11 #305: the internal library edge needs a Library service to
@@ -327,7 +327,7 @@ func checkPoolRole(ctx context.Context, pool *pgxpool.Pool, component, wrongRole
 		return fmt.Errorf("%s pool: reading current_user: %w", component, err)
 	}
 	if user == wrongRole {
-		return fmt.Errorf("%s pool connected as role %q — the other component's role; the pools are credential-separated (#316): check the component DSNs (AXIOM_STORE_DATABASE_URL store / AXIOM_LIBRARY_DATABASE_URL library, legacy single-DSN AXIOM_DATABASE_URL)", component, user)
+		return fmt.Errorf("%s pool connected as role %q — the other component's role; the pools are credential-separated (#316): check the component DSNs (AXIOM_STORE_DATABASE_URL store / AXIOM_LIBRARY_DATABASE_URL library, removed legacy single-DSN spelling)", component, user)
 	}
 	return nil
 }
@@ -595,7 +595,7 @@ func (r *Root) buildComponents() {
 	// selected the sync role (a store-slice process never even probes
 	// Zotero; its health has no zotero field to degrade).
 	if r.cfg.DatabaseURL == "" {
-		r.logger.Printf("WARNING: AXIOM_DATABASE_URL not set; running without Postgres")
+		r.logger.Printf("WARNING: AXIOM_STORE_DATABASE_URL not set; running without Postgres")
 	}
 	r.srv = server.New(net.JoinHostPort(r.cfg.BindAddr, strconv.Itoa(r.cfg.APIPort)), r.logger)
 	if r.roles[RoleSync] {
@@ -1235,8 +1235,8 @@ func (r *Root) componentsFor() []Component {
 				if r.cfg.ComponentTimeout > 0 && r.cfg.ComponentTimeout < budget {
 					budget = r.cfg.ComponentTimeout
 				}
-				r.srv.RegisterCheck("library", server.CheckHTTP("library", r.cfg.LibraryURL+"/api/health", budget))
-				r.srv.RegisterCheck("store", server.CheckHTTP("store", r.cfg.StoreURL+"/api/health", budget))
+				r.srv.RegisterCheck("library", server.CheckHTTP("library", r.cfg.LibraryURL+"/api/v1/health", budget))
+				r.srv.RegisterCheck("store", server.CheckHTTP("store", r.cfg.StoreURL+"/api/v1/health", budget))
 				r.logger.Printf("split edge: dependency checks proxy the library/store component health (credential-free, #316)")
 			}
 			r.httpSrv = &http.Server{
@@ -1314,7 +1314,7 @@ type internalEdge struct {
 // contract routes are untouched underneath.
 func edgeWithHealth(contract http.Handler, srv *server.Server) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/api/health", srv.HealthEndpoint())
+	mux.Handle("/api/v1/health", srv.HealthEndpoint())
 	mux.Handle("/", contract)
 	return mux
 }

@@ -72,8 +72,8 @@ func TestOpenSearchURLUnsetGoesDefault(t *testing.T) {
 func TestProcessorSourceDefaults(t *testing.T) {
 	// Source delivery off by default: empty secret disables the endpoint and
 	// the dispatcher signs nothing; the base falls back to the local API port.
-	os.Unsetenv("AXIOM_PROCESSOR_SOURCE_BASE_URL")
-	os.Unsetenv("AXIOM_PROCESSOR_SOURCE_SECRET")
+	os.Unsetenv("AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL")
+	os.Unsetenv("AXIOM_COMPUTE_WORKER_SOURCE_SECRET")
 	os.Unsetenv("AXIOM_API_PORT")
 	if c := Load(); c.ProcessorSourceSecret != "" {
 		t.Errorf("ProcessorSourceSecret = %q, want empty default", c.ProcessorSourceSecret)
@@ -83,8 +83,8 @@ func TestProcessorSourceDefaults(t *testing.T) {
 }
 
 func TestProcessorSourceOverrides(t *testing.T) {
-	t.Setenv("AXIOM_PROCESSOR_SOURCE_BASE_URL", "http://100.79.104.120:8011")
-	t.Setenv("AXIOM_PROCESSOR_SOURCE_SECRET", "shared-secret")
+	t.Setenv("AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL", "http://100.79.104.120:8011")
+	t.Setenv("AXIOM_COMPUTE_WORKER_SOURCE_SECRET", "shared-secret")
 	c := Load()
 	if c.ProcessorSourceBaseURL != "http://100.79.104.120:8011" {
 		t.Errorf("ProcessorSourceBaseURL = %q, want tailnet override", c.ProcessorSourceBaseURL)
@@ -95,12 +95,12 @@ func TestProcessorSourceOverrides(t *testing.T) {
 }
 
 func TestProcessorRequestTimeoutOverride(t *testing.T) {
-	t.Setenv("AXIOM_PROCESSOR_TIMEOUT", "300s")
+	t.Setenv("AXIOM_COMPUTE_WORKER_TIMEOUT", "300s")
 	if c := Load(); c.ProcessorRequestTimeout != 5*time.Minute {
 		t.Errorf("ProcessorRequestTimeout = %v, want 5m", c.ProcessorRequestTimeout)
 	}
 	// Default matches the result-budget table (300s) when unset.
-	os.Unsetenv("AXIOM_PROCESSOR_TIMEOUT")
+	os.Unsetenv("AXIOM_COMPUTE_WORKER_TIMEOUT")
 	if c := Load(); c.ProcessorRequestTimeout != 300*time.Second {
 		t.Errorf("ProcessorRequestTimeout = %v, want default 300s", c.ProcessorRequestTimeout)
 	}
@@ -143,20 +143,20 @@ func TestDefaultProfileEnablesAllFeatures(t *testing.T) {
 }
 
 func TestProcessorRunnerName(t *testing.T) {
-	t.Setenv("AXIOM_PROCESSOR_RUNNER_NAME", "carrier-gpu0")
+	t.Setenv("AXIOM_COMPUTE_WORKER_NAME", "carrier-gpu0")
 	if got := Load().ProcessorRunnerName; got != "carrier-gpu0" {
 		t.Fatalf("explicit runner name = %q, want carrier-gpu0", got)
 	}
 	// Unset derives from the processor URL host (G4: fallback lives in
 	// Load, testable) so a bare single-runner deployment still gets a
 	// usable identity; an explicit env always wins.
-	t.Setenv("AXIOM_PROCESSOR_RUNNER_NAME", "")
-	t.Setenv("AXIOM_PROCESSOR_URL", "http://192.168.1.2:19542")
+	t.Setenv("AXIOM_COMPUTE_WORKER_NAME", "")
+	t.Setenv("AXIOM_COMPUTE_WORKER_URL", "http://192.168.1.2:19542")
 	if got := Load().ProcessorRunnerName; got != "192.168.1.2:19542" {
 		t.Fatalf("URL-host fallback = %q, want 192.168.1.2:19542", got)
 	}
 	// Unparseable URL keeps the name empty (no invented identity).
-	t.Setenv("AXIOM_PROCESSOR_URL", "://bad")
+	t.Setenv("AXIOM_COMPUTE_WORKER_URL", "://bad")
 	if got := Load().ProcessorRunnerName; got != "" {
 		t.Fatalf("bad URL fallback = %q, want empty", got)
 	}

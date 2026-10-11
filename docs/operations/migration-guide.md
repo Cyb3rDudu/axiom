@@ -25,8 +25,9 @@ end proves the guide carries a fresh system from zero to a search hit.
 and workers behind one role-based binary — without changing behavior on the
 public edge:
 
-- **Unchanged:** every public HTTP route (the unversioned compat routes and
-  the versioned `/api/v1/{health,search,passage/{id}}` edge) behaves
+- **Changed in v0.2.4 (#368):** the 13 unversioned compat routes are GONE —
+  the versioned `/api/v1/*` edge is the only public API (every former
+  compat path has its canonical twin under `/api/v1/`)
   byte-identically through 0.2.x. The F01 golden suite (#295) froze the
   0.1.18 baseline as the witness — the frozen route inventory lives at
   `axiom/internal/baseline/fixtures/api_inventory.txt` in the repository;
@@ -112,7 +113,7 @@ launchd) and which CI witness proves each form — is the
 The binding decision is [ADR 0001](../adr/0001-canonical-naming.md); this
 is the operator view. Legacy names keep working through all of 0.2.x —
 every use warns once per process and increments a counter exported in
-`/api/health` (`deprecations`) and `/v1/capabilities` (`deprecations`).
+`/api/v1/health` (`deprecations`) and `/v1/capabilities` (`deprecations`).
 Removal happens earliest in an **announced major**, never silently, on
 counter evidence — the [criteria](deprecations.md) page carries the
 schedule.
@@ -121,13 +122,13 @@ schedule.
 
 | Old (0.1.x) | Canonical (0.2.0) | Alias behavior through 0.2.x |
 | --- | --- | --- |
-| `axiom-ng` | `axiom` (`axiom serve …`) | alias binary of the same build generation; delegates, warns once, counts |
+| `axiom-ng` | `axiom` (`axiom serve …`) | **removed v0.2.4 (#368)** — invocations fail; use `axiom` |
 | `axiom_ng_runner` module, service "axiom-runner" | `axiom-compute-worker` (module `axiom_compute_worker`) | legacy module entrypoint keeps working; warns once, counts |
 | `axiom-fixer` (`pdf_repair_agent`) | `axiom-repair-worker` | shim delegates to the canonical worker; warns once, counts |
 | `axiom_ng` Go module/directory | `axiom` module/directory (#352) | import paths moved mechanically; no alias — code-path fact |
-| state directory `~/.axiom-ng/` | `~/.axiom/` (#352) | one-time startup migration moves contents and leaves the legacy path as a symlink (rollback-safe, no dual state) |
+| state directory `~/.axiom-ng/` | `~/.axiom/` (#352) | migration ran through 0.2.x and is removed with the alias generation (v0.2.4, #368); a leftover symlink is inert |
 | version banner `axiom-ng v…` | `axiom v…` (#352) | no alias — the alias binary prints its own deprecation witness line |
-| release assets `axiom-ng-<version>-<os>-<arch>`, `axiom-runner-<gen>-*` | `axiom-<version>-<os>-<arch>`, `axiom-compute-worker-<gen>-*` | releases ship the alias names alongside the canonical ones |
+| release assets `axiom-ng-<version>-<os>-<arch>`, `axiom-runner-<gen>-*` | `axiom-<version>-<os>-<arch>`, `axiom-compute-worker-<gen>-*` | the `axiom-ng` asset is gone since v0.2.4 (#368); pre-F10 runner assets remain downloadable from their old releases |
 | launchd label `com.axiom.runner` | `com.axiom.compute-worker` | **operator-side switch** — see [deployment](#launchd-macos) below |
 | Make target `make runner` | `make compute-worker` | warns and still builds |
 | default index `axiom-ng-chunks-v1` | `axiom-chunks-v1` (#352) | byte-preserving `_reindex` via `scripts/reindex_index_rename.sh` (no re-chunking, no re-embedding; RAG **and backfill/rescan tools** stopped, boot the canonical default only after the script reported DONE); rollback = `AXIOM_OS_INDEX` + restart; terminal outbox rows from a premature boot recover via `UPDATE opensearch_outbox SET status='pending', attempts=0, next_attempt_at=now(), last_error=NULL WHERE id='…';`; old index deleted after soak |
@@ -135,7 +136,10 @@ schedule.
 ### Environment variables
 
 Dispatcher-side spellings moved to the canonical `AXIOM_COMPUTE_WORKER_*`
-block (F10 #304); the legacy spellings feed them through the witness:
+block (F10 #304). **End note (v0.2.4, #368): the alias era is over —
+every spelling in the left column is REMOVED.** A set legacy name feeds
+nothing; `axiom config validate`, `--set` and `config.sqlite` rows refuse
+it loudly and name the canonical successor:
 
 | Legacy (0.1.x) | Canonical (0.2.0) |
 | --- | --- |
@@ -186,7 +190,7 @@ starting anything).
   [Services & Releases](services.md) for the install layout and staging
   rules).
 
-`axiom version` prints the identity banner (agrees with `/api/health`);
+`axiom version` prints the identity banner (agrees with `/api/v1/health`);
 `axiom version --json` for automation.
 
 ### 3. Move from bare boot to role start
@@ -296,13 +300,10 @@ export AXIOM_STORE_DATABASE_URL=postgresql://axiom_store:<pass>@<host>:5432/<db>
 export AXIOM_LIBRARY_DATABASE_URL=postgresql://axiom_library:<pass>@<host>:5432/<db>
 ```
 
-**The single DSN stays supported until the cutover.** An installation
-running on `AXIOM_DATABASE_URL` alone keeps working unchanged (its use
-shows on the deprecation witness in `/api/health` — that counter is the
-cutover-readiness telemetry). Two rules have teeth:
-
-- Both spellings set with **different** values is a hard error at boot —
-  resolve to one. Identical values (the mid-migration overlap) pass.
+**The single-DSN era ended with v0.2.4 (#368).** The legacy
+`AXIOM_DATABASE_URL` spelling is removed: it feeds nothing, `axiom
+config validate` names `AXIOM_STORE_DATABASE_URL` in its report. The
+remaining teeth:
 - All three DSN keys are **secret rows** in `config.sqlite`:
   references only, never values (`axiom config set` refuses them). The
   credential lives in the environment / the OS secret store;
@@ -343,10 +344,10 @@ environment carries a known credential variable, naming the key, never
 the value. `axiom serve api` in the split topology opens **no** database
 pool and holds **no** DSN in its configuration — a DSN present in its
 environment is ignored with a loud note instead of silently booting a
-local stack (its `/api/health` dependency checks proxy the library/store
+local stack (its `/api/v1/health` dependency checks proxy the library/store
 component health over the split edges). For full environment hygiene,
 feed the api deployment no DSN at all: the shipped compose and K8s
-examples keep `AXIOM_DATABASE_URL` out of the api service (a
+examples keep `AXIOM_STORE_DATABASE_URL` out of the api service (a
 compromised edge process cannot leak what its environment never
 carried).
 
@@ -359,7 +360,7 @@ split-credentials shape is drilled, not deployed.
 
 **Rollback** (from the split-credentials shape back to single-DSN):
 unset `AXIOM_STORE_DATABASE_URL`/`AXIOM_LIBRARY_DATABASE_URL`, restore
-`AXIOM_DATABASE_URL`, restart — the table grants and the roles
+`AXIOM_STORE_DATABASE_URL`, restart — the table grants and the roles
 themselves are inert without the DSNs pointing at them. ONE step of
 the script is NOT inert, though: `roles.sql` revoked `CONNECT` from
 `PUBLIC` on the databases it ran against. If the legacy single-DSN
@@ -477,7 +478,7 @@ frozen since the cutover. After deploying v0.2.3, run ONE full
 reconcile:
 
 ```bash
-curl -X POST http://127.0.0.1:8011/api/zotero/sync \
+curl -X POST http://127.0.0.1:8011/api/v1/zotero/sync \
   -H 'Content-Type: application/json' -d '{"full": true}'
 ```
 
@@ -856,7 +857,7 @@ mkdir -p "$HOME/axiom-guide-state"
 WORKER_HOST="$(hostname -f)"                       # Linux: hostname/FQDN
 [ "$(uname -s)" = "Darwin" ] && WORKER_HOST="$(scutil --get LocalHostName).local"
 cat > "$HOME/axiom-guide-state/axiom.env" <<EOF
-export AXIOM_DATABASE_URL=postgresql://axiom:axiom@127.0.0.1:55432/axiom
+export AXIOM_STORE_DATABASE_URL=postgresql://axiom:axiom@127.0.0.1:55432/axiom
 export AXIOM_OPENSEARCH_URL=http://127.0.0.1:9201
 export AXIOM_OS_INDEX=axiom-guide-chunks-v1
 export AXIOM_ZOTERO_BASE=http://127.0.0.1:23119/api
@@ -885,7 +886,7 @@ bind the specific interface instead). The write-key path deliberately does
 not exist: the Zotero write surface stays off. The first boot migrates
 the schema; watch for the startup banner, then `ok:true` with the four
 dependency checks (postgres, zotero, query-runner, ingest-runner) at
-`http://127.0.0.1:8111/api/health`.
+`http://127.0.0.1:8111/api/v1/health`.
 
 ### 4. Doctor, green
 
@@ -895,7 +896,7 @@ In a second terminal:
 cd <repo> && AXIOM="$(ls dist/axiom-v* | grep -v '\.sha256$' | head -1)"
 set -a; . "$HOME/axiom-guide-state/axiom.env"; set +a
 "$AXIOM" doctor && echo "doctor exit 0"
-curl -fsS http://127.0.0.1:8111/api/health | jq '{ok, checks, deprecations}'
+curl -fsS http://127.0.0.1:8111/api/v1/health | jq '{ok, checks, deprecations}'
 ```
 
 Every check reads `ok`; the `deprecations` map is empty — the guide used

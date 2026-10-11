@@ -25,8 +25,8 @@ stringData:
   # #358 (ADR 0002): optionally set AXIOM_LIBRARY_DATABASE_URL to a second
   # database for the two-plane split (the Zotero mirror lives there);
   # unset = single-database topology (both planes on this DB, supported).
-  AXIOM_DATABASE_URL: postgresql://user:pass@postgres:5432/axiom
-  AXIOM_PROCESSOR_SOURCE_SECRET: change-me
+  AXIOM_STORE_DATABASE_URL: postgresql://user:pass@postgres:5432/axiom
+  AXIOM_COMPUTE_WORKER_SOURCE_SECRET: change-me
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -39,8 +39,8 @@ data:
   # own database, search, and Zotero hosts.
   AXIOM_OPENSEARCH_URL: http://opensearch:9200
   AXIOM_OS_INDEX: axiom-chunks
-  AXIOM_PROCESSOR_URLS: http://axiom-compute-worker:8112
-  AXIOM_PROCESSOR_URL: http://axiom-compute-worker:8112
+  AXIOM_COMPUTE_WORKER_URLS: http://axiom-compute-worker:8112
+  AXIOM_COMPUTE_WORKER_URL: http://axiom-compute-worker:8112
   AXIOM_QUERY_RUNNER_URL: http://axiom-compute-worker:8112
   AXIOM_ZOTERO_BASE: http://zotero:23119/api
   AXIOM_COMPONENT_TIMEOUT: 45s
@@ -182,7 +182,7 @@ spec:
               value: "1"
             - name: AXIOM_DISPATCHER_WORKER_ID
               value: axiom-store
-            - name: AXIOM_PROCESSOR_SOURCE_BASE_URL
+            - name: AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL
               value: http://axiom-store:8114
             - name: AXIOM_INTERNAL_STORE_ADDR
               value: "0.0.0.0:8212"

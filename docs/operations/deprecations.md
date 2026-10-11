@@ -1,5 +1,19 @@
 # Deprecation schedule
 
+> **Executed: the 0.2.x alias generation was removed in v0.2.4 (#368,
+> ADR 0001 executed).** Gone: the `axiom-ng` alias binary (build,
+> release asset, install shim), the dispatcher-side legacy env
+> spellings (`AXIOM_DATABASE_URL`, `AXIOM_PROCESSOR_*` dispatcher-side,
+> `AXIOM_RUNNER_HEALTH_INTERVAL`, `AXIOM_FIXER_CMD`,
+> `AXIOM_FIX_SH_TIMEOUT`), the `~/.axiom-ng` state-dir migration, and
+> the 13 unversioned `/api/*` compat routes next to the canonical
+> `/api/v1/*` surface (the versioned edge is the only public API; the
+> operational surfaces `/api/ws`, `/api/runners/live`,
+> `/api/processor/source/*`, `/api/kg/consolidate`, `/api/repair/*`
+> stay unversioned — they were never public client contract). Every
+> refusal names the canonical successor. What remains aliased is
+> listed below.
+
 Policy and removal criteria for legacy names — the data basis is usage
 counters, not gut feeling. Companion page: [Operator Guide: Migrating to
 0.2.0](migration-guide.md) · binding decision: [ADR 0001](../adr/0001-canonical-naming.md).
@@ -24,7 +38,7 @@ repair.Quarantine path the fixer integration tests exercise).
 - Every use of a legacy name **warns exactly once per process** (not per
   call) and **increments a counter**.
 - The counters are exported in the running system: `deprecations` in
-  `/api/health` (the runtime binary) and in `/v1/capabilities` (the compute
+  `/api/v1/health` (the runtime binary) and in `/v1/capabilities` (the compute
   worker).
 - Removal happens **earliest in an announced major release**, never
   silently, and only on counter evidence.
@@ -53,7 +67,7 @@ it must fall below.
 ## Reading your own counters
 
 ```bash
-curl -fsS http://<api-host>:<port>/api/health | jq .deprecations
+curl -fsS http://<api-host>:<port>/api/v1/health | jq .deprecations
 curl -fsS http://<worker-host>:<port>/v1/capabilities | jq .deprecations
 ```
 
@@ -63,18 +77,27 @@ how often it has been read since process start.
 
 ## Current legacy names
 
+## Removed in v0.2.4 (#368)
+
+| Removed name | Canonical successor | Refusal behavior |
+| --- | --- | --- |
+| `axiom-ng` binary | `axiom` | no build, no release asset; invocation fails (command not found) |
+| `AXIOM_DATABASE_URL` | `AXIOM_STORE_DATABASE_URL` | validate/`--set`/config.sqlite name the successor |
+| `AXIOM_PROCESSOR_URL` / `_URLS` / `_RUNNER_NAME` / `_TIMEOUT` / `_SOURCE_SECRET` / `_SOURCE_BASE_URL` (dispatcher-side) | the `AXIOM_COMPUTE_WORKER_*` spelling | same |
+| `AXIOM_RUNNER_HEALTH_INTERVAL` | `AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL` | same |
+| `AXIOM_FIXER_CMD` | `AXIOM_REPAIR_WORKER_CMD` | same |
+| `AXIOM_FIX_SH_TIMEOUT` pass-through | `AXIOM_FIXER_SH_TIMEOUT` | not handed down anymore |
+| state-dir migration `~/.axiom-ng` | `~/.axiom` | migration code removed; a leftover symlink is inert |
+| 13 unversioned `/api/*` compat routes | `/api/v1/*` twins | 404 |
+
+## Still aliased (remaining legacy names)
+
 | Legacy name | Kind | Witness | Horizon |
 | --- | --- | --- | --- |
-| `axiom-ng` | binary | counter (alias warns + counts) | removal candidate per criteria above |
-| `axiom_ng_runner` module entrypoint, "axiom-runner" service | compute worker module | counter | same criteria |
+| `axiom_ng_runner` module entrypoint, "axiom-runner" service | compute worker module | counter | removal candidate per criteria above |
 | `axiom_ng` Go module/directory (#352) | code path | none — internal import paths moved mechanically; rebuild from source | n/a (not a runtime name) |
-| state directory `~/.axiom-ng/` (#352) | filesystem | startup migration symlink (no counter) | symlink stays through 0.2.x; removal with the alias generation |
 | default index `axiom-ng-chunks-v1` (#352) | OpenSearch index | none — byte-preserving `_reindex` (`scripts/reindex_index_rename.sh`); rollback = `AXIOM_OS_INDEX` | old index deleted after soak; the in-code rename guard (`LegacyIndexName`) is removed together with it |
-| `axiom-fixer` shim | repair worker binary | counter | same criteria |
-| `AXIOM_PROCESSOR_URL`, `AXIOM_PROCESSOR_URLS`, `AXIOM_PROCESSOR_RUNNER_NAME`, `AXIOM_PROCESSOR_TIMEOUT`, `AXIOM_PROCESSOR_SOURCE_SECRET`, `AXIOM_PROCESSOR_SOURCE_BASE_URL` | dispatcher-side env | counter | same criteria |
-| `AXIOM_RUNNER_HEALTH_INTERVAL` | dispatcher-side env | counter | same criteria |
-| `AXIOM_FIXER_CMD` | repair env | counter | same criteria |
-| `AXIOM_FIX_SH_TIMEOUT` | repair env | fix.sh warns once per run (shell-side; no Go counter — the invoker deliberately emits both spellings through the transition) | same criteria |
+| `axiom-fixer` shim | repair worker binary | counter (executor fallback) | same criteria |
 | `make runner` | Make target | warns, still builds | same criteria |
 
 **Not legacy** (do not migrate these): the compute worker's own env

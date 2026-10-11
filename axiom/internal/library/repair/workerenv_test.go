@@ -90,7 +90,7 @@ func sortedAsc(env []string) bool {
 // pins that the denied vocabulary itself carries no values through
 // workerEnv (name-only witness).
 func TestWorkerEnvNeverEchoesValues(t *testing.T) {
-	t.Setenv("AXIOM_DATABASE_URL", "postgresql://u:fixture-secret@h/db")
+	t.Setenv("AXIOM_STORE_DATABASE_URL", "postgresql://u:fixture-secret@h/db")
 	env := workerEnv()
 	for _, kv := range env {
 		if strings.Contains(kv, "fixture-secret") {

@@ -22,7 +22,7 @@ func TestHealthZoteroOK(t *testing.T) {
 	s := New(":0", log.Default())
 	s.RegisterCheck("zotero", fakeChecker{nil})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	s.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -44,7 +44,7 @@ func TestHealthZoteroUnreachable(t *testing.T) {
 	s := New(":0", log.Default())
 	s.RegisterCheck("zotero", fakeChecker{errors.New("zotero local api unreachable")})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	s.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -64,7 +64,7 @@ func TestHealthChecksAllRegistered(t *testing.T) {
 	s.RegisterCheck("zotero", fakeChecker{nil})
 	s.RegisterCheck("postgres", fakeChecker{nil})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	s.Handler().ServeHTTP(rec, req)
 
 	var body healthResponse
@@ -98,13 +98,13 @@ func TestSyncRouteIsSinglePublicPath(t *testing.T) {
 
 	// The single public writer: POST /api/zotero/sync must call the service.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/zotero/sync", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/zotero/sync", nil)
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("/api/zotero/sync status = %d, want 200", rec.Code)
+		t.Fatalf("/api/v1/zotero/sync status = %d, want 200", rec.Code)
 	}
 	if !svc.called {
-		t.Fatal("/api/zotero/sync must invoke the sync service")
+		t.Fatal("/api/v1/zotero/sync must invoke the sync service")
 	}
 	var body map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -116,9 +116,9 @@ func TestSyncRouteIsSinglePublicPath(t *testing.T) {
 
 	// The legacy consolidated route must be gone: 404.
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "/api/zotero/canonical-sync", nil)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/zotero/canonical-sync", nil)
 	s.Handler().ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusNotFound {
-		t.Errorf("/api/zotero/canonical-sync status = %d, want 404 (route removed)", rec2.Code)
+		t.Errorf("/api/v1/zotero/canonical-sync status = %d, want 404 (route removed)", rec2.Code)
 	}
 }

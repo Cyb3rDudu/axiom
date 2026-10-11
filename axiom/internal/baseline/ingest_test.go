@@ -99,7 +99,7 @@ func TestLiveIngestGolden(t *testing.T) {
 	}
 	for attempt := 0; ; attempt++ {
 		code := httpJSON(t, "POST",
-			ragBase()+"/api/ingest/documents/"+f.DocumentID+"/force-rebuild", nil, &job)
+			ragBase()+"/api/v1/ingest/documents/"+f.DocumentID+"/force-rebuild", nil, &job)
 		if code == 202 {
 			break
 		}
@@ -120,7 +120,7 @@ func TestLiveIngestGolden(t *testing.T) {
 				Status string `json:"Status"`
 			} `json:"jobs"`
 		}
-		if code := httpJSON(t, "GET", ragBase()+"/api/ingest/jobs?limit=20", nil, &jobs); code != 200 {
+		if code := httpJSON(t, "GET", ragBase()+"/api/v1/ingest/jobs?limit=20", nil, &jobs); code != 200 {
 			t.Fatalf("jobs status %d", code)
 		}
 		for _, j := range jobs.Jobs {
@@ -204,7 +204,7 @@ func waitForDocJobTerminal(t *testing.T, documentID string, timeout time.Duratio
 				Status     string `json:"Status"`
 			} `json:"jobs"`
 		}
-		if code := httpJSON(t, "GET", ragBase()+"/api/ingest/jobs?limit=50", nil, &listing); code == 200 {
+		if code := httpJSON(t, "GET", ragBase()+"/api/v1/ingest/jobs?limit=50", nil, &listing); code == 200 {
 			// newest first (ListJobs ORDER BY enqueued_at DESC): the document's
 			// first listing entry IS the in-flight job — only ITS terminal state
 			// counts (old completed jobs must not short-circuit the wait)

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Cyb3rDudu/axiom/axiom/internal/deprecate"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/statehome"
 )
 
@@ -266,29 +265,28 @@ func Load() Config {
 	cfg := Config{
 		ZoteroBaseURL:   env("AXIOM_ZOTERO_BASE", defaultZoteroBase),
 		ZoteroLibraryID: env("AXIOM_ZOTERO_LIBRARY", defaultLibraryID),
-		// DM07 #316: the store DSN — canonical AXIOM_STORE_DATABASE_URL
-		// over the legacy single-DSN AXIOM_DATABASE_URL (witness). The
-		// both-set-and-different conflict refuses in LoadResolved
-		// (chain.go), never resolves by precedence.
-		DatabaseURL:             computeWorkerEnv("AXIOM_STORE_DATABASE_URL", "AXIOM_DATABASE_URL", ""),
+		// DM07 #316 / #368: the store DSN — canonical AXIOM_STORE_DATABASE_URL
+		// only (the legacy AXIOM_DATABASE_URL fallback is gone; an unknown
+		// key is refused loudly with its canonical successor).
+		DatabaseURL:             env("AXIOM_STORE_DATABASE_URL", ""),
 		OpenSearchURL:           envEmptyDisables("AXIOM_OPENSEARCH_URL", "http://127.0.0.1:9200"),
 		OpenSearchUsername:      env("AXIOM_OPENSEARCH_USERNAME", ""),
 		OpenSearchPassword:      env("AXIOM_OPENSEARCH_PASSWORD", ""),
-		ProcessorSourceSecret:   computeWorkerEnv("AXIOM_COMPUTE_WORKER_SOURCE_SECRET", "AXIOM_PROCESSOR_SOURCE_SECRET", ""),
+		ProcessorSourceSecret:   env("AXIOM_COMPUTE_WORKER_SOURCE_SECRET", ""),
 		WSSecret:                env("AXIOM_WS_SECRET", ""),
-		ProcessorSourceBaseURL:  computeWorkerEnv("AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL", "AXIOM_PROCESSOR_SOURCE_BASE_URL", ""),
-		ProcessorURL:            computeWorkerEnv("AXIOM_COMPUTE_WORKER_URL", "AXIOM_PROCESSOR_URL", defaultLocalRunner),
+		ProcessorSourceBaseURL:  env("AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL", ""),
+		ProcessorURL:            env("AXIOM_COMPUTE_WORKER_URL", defaultLocalRunner),
 		QueryRunnerURL:          env("AXIOM_QUERY_RUNNER_URL", defaultLocalRunner),
 		IngestFallbackURL:       env("AXIOM_INGEST_FALLBACK_URL", defaultLocalRunner),
-		ProcessorURLs:           parseURLList(computeWorkerEnv("AXIOM_COMPUTE_WORKER_URLS", "AXIOM_PROCESSOR_URLS", "")),
-		RunnerHealthInterval:    computeWorkerDur("AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL", "AXIOM_RUNNER_HEALTH_INTERVAL", 60*time.Second),
+		ProcessorURLs:           parseURLList(env("AXIOM_COMPUTE_WORKER_URLS", "")),
+		RunnerHealthInterval:    envDur("AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL", 60*time.Second),
 		SearchSparseArm:         envBoolDefault("AXIOM_SEARCH_SPARSE_ARM", false),
 		SearchGraphArm:          envBoolDefault("AXIOM_SEARCH_GRAPH_ARM", false),
 		SearchRerank:            envBoolDefault("AXIOM_SEARCH_RERANK", true),
 		SearchFrontmatterFilter: envBoolDefault("AXIOM_SEARCH_FRONTMATTER_FILTER", true),
 		SearchMaxPerBook:        envInt("AXIOM_SEARCH_MAX_PER_BOOK", 2),
-		ProcessorRequestTimeout: computeWorkerDur("AXIOM_COMPUTE_WORKER_TIMEOUT", "AXIOM_PROCESSOR_TIMEOUT", 300*time.Second),
-		ProcessorRunnerName:     computeWorkerEnv("AXIOM_COMPUTE_WORKER_NAME", "AXIOM_PROCESSOR_RUNNER_NAME", ""),
+		ProcessorRequestTimeout: envDur("AXIOM_COMPUTE_WORKER_TIMEOUT", 300*time.Second),
+		ProcessorRunnerName:     env("AXIOM_COMPUTE_WORKER_NAME", ""),
 		DispatcherEnabled:       envBool("AXIOM_DISPATCHER_ENABLED"),
 		DispatcherWorkerID:      env("AXIOM_DISPATCHER_WORKER_ID", "axiom"),
 		DispatcherConcurrency:   envInt("AXIOM_DISPATCHER_CONCURRENCY", 0), // 0 = derive from Σ live runner capacities (#248)
@@ -342,60 +340,14 @@ func Load() Config {
 }
 
 // repairWorkerCmd resolves the axiom-repair-worker command (F08 #302,
-// ADR 0001 §4): the canonical AXIOM_REPAIR_WORKER_CMD wins; the legacy
-// AXIOM_FIXER_CMD keeps the 0.1.x contract working through the
-// deprecation witness; the default is the canonical binary path (the
-// local executor falls back to the legacy shim while an install has not
-// re-run install_dist.sh — operators change nothing during 0.2.x).
-// The literal mirrors repair.CanonicalWorkerCommand (config stays
-// import-light in production; TestRepairWorkerCommandDefault in this
-// package imports repair test-only and pins the equality).
+// ADR 0001 §4): canonical AXIOM_REPAIR_WORKER_CMD only — the legacy
+// AXIOM_FIXER_CMD fallback is gone (#368; an unknown key is refused
+// loudly with its canonical successor). The default is the canonical
+// binary path. The literal mirrors repair.CanonicalWorkerCommand
+// (config stays import-light in production; TestRepairWorkerCommandDefault
+// in this package imports repair test-only and pins the equality).
 func repairWorkerCmd() string {
-	if v := os.Getenv("AXIOM_REPAIR_WORKER_CMD"); v != "" {
-		return v
-	}
-	if v := os.Getenv("AXIOM_FIXER_CMD"); v != "" {
-		deprecate.Use("AXIOM_FIXER_CMD")
-		return v
-	}
-	return "/opt/axiom/bin/axiom-repair-worker"
-}
-
-// computeWorkerEnv resolves a dispatcher-side compute-worker setting
-// (F10 #304, ADR 0001 §4, the F08 repairWorkerCmd schema): the canonical
-// AXIOM_COMPUTE_WORKER_* spelling wins; the legacy spelling (mostly
-// AXIOM_PROCESSOR_*) keeps the 0.1.x contract working through the
-// deprecation witness — remote carrier deployments change nothing during
-// 0.2.x. The worker's OWN env contract (AXIOM_PROCESSOR_* read by the
-// Python service) is deliberately NOT renamed: frozen per #304.
-func computeWorkerEnv(canonical, legacy, fallback string) string {
-	if v := os.Getenv(canonical); v != "" {
-		return v
-	}
-	if v := os.Getenv(legacy); v != "" {
-		deprecate.Use(legacy)
-		return v
-	}
-	return fallback
-}
-
-// computeWorkerDur is computeWorkerEnv for duration-valued settings; an
-// unparseable legacy value falls through to the default (envDur
-// semantics), the canonical value is held to the same tolerance.
-func computeWorkerDur(canonical, legacy string, fallback time.Duration) time.Duration {
-	if v := os.Getenv(canonical); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
-		return fallback
-	}
-	if v := os.Getenv(legacy); v != "" {
-		deprecate.Use(legacy)
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
-	}
-	return fallback
+	return env("AXIOM_REPAIR_WORKER_CMD", "/opt/axiom/bin/axiom-repair-worker")
 }
 
 // writeKeyDefault resolves the Zotero write-key default inside the

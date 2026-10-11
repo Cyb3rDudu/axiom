@@ -2,7 +2,7 @@
 // dependency visibility by PROXYING it over the component edges: the
 // api-only process registers one HTTP health probe per configured
 // component (library/store), each aggregating that component's own
-// dependency checks (its /api/health folds postgres, zotero, the
+// dependency checks (its /api/v1/health folds postgres, zotero, the
 // runners…). The edge opens no pool and holds no DSN — it answers the
 // operator's "is the topology alive" question transitively.
 package server
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// HTTPHealthChecker probes one component's /api/health over HTTP.
+// HTTPHealthChecker probes one component's /api/v1/health over HTTP.
 type HTTPHealthChecker struct {
 	url       string
 	client    *http.Client

@@ -106,7 +106,7 @@ func assertFreezeBits(t *testing.T) {
 		Checks     map[string]any `json:"checks"`
 		Contextual string         `json:"contextual"`
 	}
-	if code := httpJSON(t, "GET", ragBase()+"/api/health", nil, &health); code != 200 {
+	if code := httpJSON(t, "GET", ragBase()+"/api/v1/health", nil, &health); code != 200 {
 		t.Fatalf("health status %d", code)
 	}
 	if health.Build != want {
@@ -143,7 +143,7 @@ func TestLiveGoldenHealth(t *testing.T) {
 		var probe struct {
 			Contextual string `json:"contextual"`
 		}
-		if code := httpJSON(t, "GET", ragBase()+"/api/health", nil, &probe); code == 200 && probe.Contextual == "active" {
+		if code := httpJSON(t, "GET", ragBase()+"/api/v1/health", nil, &probe); code == 200 && probe.Contextual == "active" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -153,7 +153,7 @@ func TestLiveGoldenHealth(t *testing.T) {
 	}
 
 	var health map[string]any
-	if code := httpJSON(t, "GET", ragBase()+"/api/health", nil, &health); code != 200 {
+	if code := httpJSON(t, "GET", ragBase()+"/api/v1/health", nil, &health); code != 200 {
 		t.Fatalf("health status %d", code)
 	}
 	// BASELINE_UPDATE (F11): under AXIOM_BASELINE_EXPECT_BUILD the banner

@@ -14,13 +14,13 @@
 name: axiom-topology
 
 x-rag-env: &rag-env
-  # DM07 #316: AXIOM_DATABASE_URL deliberately NOT in the shared anchor —
+  # DM07 #316: AXIOM_STORE_DATABASE_URL deliberately NOT in the shared anchor —
   # only the library/store services get it below; the api edge and the
   # compute worker run credential-free by contract.
   AXIOM_OPENSEARCH_URL: http://opensearch:9200
   AXIOM_OS_INDEX: topology-chunks-v1
-  AXIOM_PROCESSOR_URLS: http://worker:8112
-  AXIOM_PROCESSOR_URL: http://worker:8112
+  AXIOM_COMPUTE_WORKER_URLS: http://worker:8112
+  AXIOM_COMPUTE_WORKER_URL: http://worker:8112
   AXIOM_QUERY_RUNNER_URL: http://worker:8112
   AXIOM_ZOTERO_BASE: http://zotero:23119/api
   AXIOM_ZOTERO_WRITE_KEY_FILE: /run/axiom/no-write-key
@@ -90,7 +90,7 @@ services:
     command: ["serve", "library"]
     environment:
       <<: *rag-env
-      AXIOM_DATABASE_URL: postgresql://axiom:axiom@pg:5432/axiom
+      AXIOM_STORE_DATABASE_URL: postgresql://axiom:axiom@pg:5432/axiom
       AXIOM_API_PORT: "8113"
       AXIOM_BIND_ADDR: "0.0.0.0"
       AXIOM_LIBRARY_IMPORT_PROVIDERS: fake
@@ -111,13 +111,13 @@ services:
     command: ["serve", "store"]
     environment:
       <<: *rag-env
-      AXIOM_DATABASE_URL: postgresql://axiom:axiom@pg:5432/axiom
+      AXIOM_STORE_DATABASE_URL: postgresql://axiom:axiom@pg:5432/axiom
       AXIOM_API_PORT: "8114"
       AXIOM_BIND_ADDR: "0.0.0.0"
       AXIOM_DISPATCHER_ENABLED: "1"
       AXIOM_DISPATCHER_WORKER_ID: topology-store
-      AXIOM_PROCESSOR_SOURCE_SECRET: topology-secret
-      AXIOM_PROCESSOR_SOURCE_BASE_URL: http://store:8114
+      AXIOM_COMPUTE_WORKER_SOURCE_SECRET: topology-secret
+      AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL: http://store:8114
       AXIOM_INTERNAL_STORE_ADDR: "0.0.0.0:8212"
     volumes:
       # the seeded fixture the mirror row points at (read-only)
