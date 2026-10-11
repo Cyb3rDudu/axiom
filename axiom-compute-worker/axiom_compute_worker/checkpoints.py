@@ -24,11 +24,12 @@ survive the per-job work dir:
 * Retention: saving into a new key prunes sibling keys of the same
   attachment (content moved on — the old checkpoints are dead weight).
   One key (one book's intermediates) per attachment per namespace is
-  the steady-state disk ceiling; no TTL machinery. Prune ceiling, documented: the prune
-  is immediate — a re-keyed attempt that dies early has already pruned
-  the base key, and the next plain retry recomputes from zero.
-  Accepted because checkpoints are an optimization, never a
-  correctness dependency.
+  the steady-state disk ceiling; no TTL machinery. Prune ceiling,
+  documented: the prune is immediate — a re-keyed attempt that dies
+  early has already pruned the previous key in the SAME namespace, and
+  the next retry in that namespace recomputes from zero. Accepted
+  because checkpoints are an optimization, never a correctness
+  dependency.
 
 Boundary (documented non-goal): phase granularity only — a phase that
 died halfway recomputes wholly; page-level resume inside a phase stays
