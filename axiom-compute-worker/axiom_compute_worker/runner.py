@@ -1961,21 +1961,30 @@ def _real_pipeline(
     page_chapter_map: dict[int, int] = {}
     marker_pagemap_max: int | None = None
     cfi_entries: list[dict[str, Any]] = []
+    resumed_convert = False
     if cp.resume("convert"):
-        cp.load_file("convert", "markdown.md", out_md)
         # Re-link EXACTLY the mapping's saved names — symmetric with the
         # save-side filter. An extension blacklist here would drop a
         # .json-named image (the pdf worker preserves arbitrary original
         # extensions, so an embedded figure.json yields image_N.json):
-        # checkpointed but silently lost on resume.
-        image_mapping = cp.load_json("convert", "image_mapping") or {}
-        for saved in sorted({Path(v).name for v in image_mapping.values() if v}):
-            cp.load_file("convert", saved, out_images / saved)
-        page_label_map = _int_keys(cp.load_json("convert", "page_label_map") or {})
-        page_source_map = _int_keys(cp.load_json("convert", "page_source_map") or {})
-        page_chapter_map = _int_keys(cp.load_json("convert", "page_chapter_map") or {})
-        marker_pagemap_max = cp.load_json("convert", "marker_pagemap_max")
-        cfi_entries = cp.load_json("convert", "cfi_entries") or []
+        # checkpointed but silently lost on resume. A missing payload
+        # (mapping/worker inconsistency, or a store pruned mid-load)
+        # degrades the WHOLE PHASE to recompute — never a partial resume.
+        try:
+            cp.load_file("convert", "markdown.md", out_md)
+            image_mapping = cp.load_json("convert", "image_mapping") or {}
+            for saved in sorted({Path(v).name for v in image_mapping.values() if v}):
+                cp.load_file("convert", saved, out_images / saved)
+            page_label_map = _int_keys(cp.load_json("convert", "page_label_map") or {})
+            page_source_map = _int_keys(cp.load_json("convert", "page_source_map") or {})
+            page_chapter_map = _int_keys(cp.load_json("convert", "page_chapter_map") or {})
+            marker_pagemap_max = cp.load_json("convert", "marker_pagemap_max")
+            cfi_entries = cp.load_json("convert", "cfi_entries") or []
+            resumed_convert = True
+        except (OSError, ValueError) as cp_err:
+            log.warning("convert checkpoint payload unreadable (%s) — "
+                        "recomputing the phase", cp_err)
+    if resumed_convert:
         enter("convert")  # timing witness: ~0 elapsed (reused)
         cp.mark("convert", "reused")
     else:
