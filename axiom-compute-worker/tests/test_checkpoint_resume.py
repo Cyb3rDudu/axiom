@@ -121,6 +121,76 @@ class TestCheckpointsUnit:
         cp.save("embed", jsons={"vals": [numpy.float32(0.25)]})
         assert cp.load_json("embed", "vals") == [0.25]
 
+    def test_force_rebuild_never_prunes_base_and_namespaces_split(self, tmp_path):
+        """Ruling (2026-10-11, #372): force-rebuild is the operator's
+        escape hatch — recompute from zero BY DESIGN, but its checkpoints
+        live in a separate namespace and can never destroy the base
+        key's resume basis (a dying force attempt must not cost the next
+        plain retry its resume)."""
+        req = _request(_pdf(tmp_path))
+        base_cp = PhaseCheckpoints(req, tmp_path)
+        base_cp.save("convert", jsons={})
+        base_root = base_cp.root
+        assert base_root.parent.name == "base"
+
+        force_req = _request(_pdf(tmp_path))
+        force_req["processing"]["force_rebuild"] = True
+        force_cp = PhaseCheckpoints(force_req, tmp_path)
+        force_cp.save("convert", jsons={})
+        assert force_cp.root.parent.name == "force"
+        assert base_root.exists(), "force attempt pruned the base key"
+
+        # base prunes only its OWN superseded keys; the force namespace
+        # is untouchable from base and vice versa
+        other_req = _request(_pdf(tmp_path))
+        other_req["attachment"]["attachment_id"] = "att-372"  # same id, new key
+        other_req["processing"]["compute_dense_embeddings"] = True
+        other_cp = PhaseCheckpoints(other_req, tmp_path)
+        other_cp.save("convert", jsons={})
+        assert not base_root.exists()  # base pruned its superseded sibling
+        assert force_cp.root.exists(), "base prune reached into the force namespace"
+
+    def test_off_profile_full_prefix_resumes_captions(self, tmp_path):
+        """Contextual documents clear entities+relationships at claim time
+        (#255) while captions stay on — the off phases must leave empty
+        markers so the captions prefix stays complete."""
+        req = _request(_pdf(tmp_path))
+        req["processing"].update({"compute_dense_embeddings": False,
+                                  "extract_entities": False,
+                                  "extract_relationships": False,
+                                  "extract_image_captions": True})
+        cp = PhaseCheckpoints(req, tmp_path)
+        for ph in ("convert", "chunk", "embed", "entities", "relationships", "captions"):
+            cp.save(ph, jsons={})  # the empty-marker shape the off-branches write
+        assert cp.resume("captions") is True
+
+    def test_image_payload_follows_mapping_not_whitelist(self, tmp_path):
+        """The pdf worker preserves arbitrary original extensions (.tiff,
+        …): the convert payload derives from image_mapping's saved names,
+        not an extension whitelist — a .tiff image must survive the
+        checkpoint round-trip. Pinned at the PhaseCheckpoints level with
+        the runner's mapping-derived save shape mirrored."""
+        import inspect
+
+        from axiom_compute_worker import runner as _r
+
+        src = inspect.getsource(_r._real_pipeline)
+        assert "saved_names = {Path(v).name" in src, (
+            "convert payload filter must derive from image_mapping values"
+        )
+        assert "_IMAGE_EXTS_CP" not in src, "extension whitelist still in use"
+        # round-trip: a non-whitelist payload file stores and re-links
+        req = _request(_pdf(tmp_path))
+        work = tmp_path / "w"
+        work.mkdir()
+        odd = work / "image_0.tiff"
+        odd.write_bytes(b"II*\x00tiff-bytes")
+        cp = PhaseCheckpoints(req, tmp_path)
+        cp.save("convert", files={"markdown.md": _pdf(tmp_path), "image_0.tiff": odd},
+                jsons={"image_mapping": {"fig.png": "image_0.tiff"}})
+        dest = cp.load_file("convert", "image_0.tiff", tmp_path / "out" / "image_0.tiff")
+        assert dest.read_bytes() == b"II*\x00tiff-bytes"
+
     def test_sibling_prune_on_new_key(self, tmp_path):
         req_a = _request(_pdf(tmp_path, "a.pdf", "one"))
         cp = PhaseCheckpoints(req_a, tmp_path)
@@ -237,6 +307,90 @@ class TestWatchdogEvictionResume:
     entry). The relaunched attempt must RESUME at the phase checkpoint,
     not restart: the conversion that completed before the cancel is not
     re-run."""
+
+    def test_captions_resume_skips_dense_reembed(self, tmp_path, monkeypatch):
+        """The captions checkpoint payload is POST-re-embed — a resumed
+        captions phase must not re-run the embedder over every captioned
+        chunk (the pre-fix catch-up re-paid the model pass on every
+        resume while phase_reuse claimed 'reused')."""
+        import types
+
+        from axiom_compute_worker import runner as runner_mod
+
+        # L6-style heavy stubs: fake conversion, no models
+        class _FakePopen:
+            def __init__(self, cmd, **_kw):
+                Path(cmd[4]).write_text("# T\n\nAlpha works at Beta Corp",
+                                        encoding="utf-8")
+                self.out = '{"image_mapping": {}}'
+                self.returncode = 0
+
+            def communicate(self):
+                return (self.out, "")
+
+        import subprocess as _sub
+
+        monkeypatch.setattr(_sub, "Popen", _FakePopen)
+        pt = types.ModuleType("axiom_compute_worker.compute_core.page_trust")
+        pt.build_page_trust = lambda p: ({}, {}, {})
+        monkeypatch.setitem(__import__("sys").modules,
+                            "axiom_compute_worker.compute_core.page_trust", pt)
+        ch = types.ModuleType("axiom_compute_worker.compute_core.chunker")
+
+        class _Ch:
+            def chunk(self, md, doc_metadata):
+                return [{"text": "Alpha works at Beta Corp",
+                         "metadata": {"start_paragraph_index": 0}}]
+
+            def chapter_starts(self):
+                return []
+
+        ch.Chunker = _Ch
+        monkeypatch.setitem(__import__("sys").modules,
+                            "axiom_compute_worker.compute_core.chunker", ch)
+        reembed_calls = []
+        monkeypatch.setattr(runner_mod, "_reembed_captioned",
+                            lambda chunks: reembed_calls.append(len(chunks)) or True)
+
+        src = _pdf(tmp_path)
+        req = _request(src, "cap-resume")
+        req["processing"].update({"compute_dense_embeddings": True,
+                                  "extract_entities": False,
+                                  "extract_relationships": False,
+                                  "extract_image_captions": True})
+        work_root = tmp_path / "wr"
+        old = settings.get()
+        settings.set(Settings(work_root=work_root,
+                              allowed_source_roots=(str(tmp_path),),
+                              compute_backend="real", warmup=False,
+                              max_concurrent_jobs=1, admission_queue_capacity=9))
+        try:
+            # Seed the checkpoint prefix through captions exactly as a
+            # completed first attempt would have (captions payload is
+            # post-re-embed by construction).
+            from axiom_compute_worker.checkpoints import PhaseCheckpoints
+
+            seed_md = tmp_path / "seed.md"
+            seed_md.write_text("# T\n\nAlpha works at Beta Corp", encoding="utf-8")
+            cp0 = PhaseCheckpoints(req, work_root)
+            cp0.save("convert", files={"markdown.md": seed_md},
+                     jsons={"image_mapping": {}, "page_label_map": {},
+                            "page_source_map": {}, "page_chapter_map": {},
+                            "marker_pagemap_max": None, "cfi_entries": []})
+            for ph in ("chunk", "embed", "entities", "relationships", "captions"):
+                # captions seed mirrors a real zero-captioned save: chunks
+                # only, no artifact-attrs sidecar
+                cp0.save(ph, jsons={"chunks": []} if ph in ("chunk", "embed", "captions") else {})
+
+            work = _workdir(tmp_path, "resume")
+            result = runner_mod._real_pipeline(req, work)
+            reuse = (result.get("manifest") or {}).get("phase_reuse") or {}
+            assert reuse.get("captions") == "reused", reuse
+            assert not reembed_calls, (
+                f"captions resume re-ran the dense re-embed: {reembed_calls}"
+            )
+        finally:
+            settings.set(old)
 
     def test_cancel_then_resubmit_resumes_at_phase(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
