@@ -141,7 +141,6 @@ func LoadResolved(flags map[string]string) (Config, Chain, error) {
 	return Load(), ch, nil
 }
 
-
 // snapshotEnvStages records which keys the environment feeds BEFORE any
 // materialization: present AND meaningful (non-empty, or the set-empty
 // disable state). A set-but-empty var on any other key is unset

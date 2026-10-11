@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
 )
 
 // TestEffectiveTableCoversAllReadKeys — drift guard between the loader
