@@ -59,6 +59,7 @@ ALLOW_STDLIB = {
     "string",
     "subprocess",
     "sys",
+    "threading",
     "tempfile",
     "textwrap",
     "time",
