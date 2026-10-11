@@ -26,8 +26,8 @@ LOG "4.0 W7 terminal + projection sync"
 OPEN=$(DB "SELECT count(*) FROM repair_cases WHERE status IN ('queued','in_repair','rejected')")
 [ "$OPEN" = "0" ] || DIE "4.5 W7 not terminal ($OPEN open cases incl. rejected) — NO FIRE"
 DB "SELECT status||'='||count(*) FROM repair_cases GROUP BY status ORDER BY 1"
-echo "[MUTATES] POST /api/zotero/sync (idempotent projection; -f: HTTP 500 aborts)"
-SYNC_JSON=$(curl -sf --max-time 300 -X POST http://127.0.0.1:8011/api/zotero/sync) ||
+echo "[MUTATES] POST /api/v1/zotero/sync (idempotent projection; -f: HTTP 500 aborts)"
+SYNC_JSON=$(curl -sf --max-time 300 -X POST http://127.0.0.1:8011/api/v1/zotero/sync) ||
   DIE "4.0 projection sync FAILED — old attachments would be enqueued instead of healed bytes"
 echo "sync: $SYNC_JSON" | head -c 300
 echo

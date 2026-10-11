@@ -80,16 +80,19 @@ rag)
     mkdir -p "$target" "$ROOT/bin"
     cp "$bin" "$target/axiom"
     chmod 0755 "$target/axiom"
-    ln -sfn "$version" "$ROOT/rag/current"
-    ln -sfn "$ROOT/rag/current/axiom" "$ROOT/bin/axiom"
-    # #368: the axiom-ng alias generation is gone — an installed alias
-    # link from a 0.2.x install is removed (never silently recreated).
-    for legacy in "$ROOT/bin/axiom-ng" "$ROOT/rag/current/axiom-ng"; do
+    # #368: the axiom-ng alias generation is gone. Cleanup runs BEFORE the
+    # current-pointer moves — after the re-point, $ROOT/rag/current no
+    # longer names the old generation, and the sweep below must still see
+    # the previous generation's directory. Every installed alias binary
+    # from any 0.2.x generation goes (never silently recreated).
+    for legacy in "$ROOT/bin/axiom-ng" "$ROOT"/rag/*/axiom-ng; do
         if [ -e "$legacy" ] || [ -L "$legacy" ]; then
             rm -f "$legacy"
             echo "removed legacy alias: $legacy (v0.2.4, #368 — use 'axiom')"
         fi
     done
+    ln -sfn "$version" "$ROOT/rag/current"
+    ln -sfn "$ROOT/rag/current/axiom" "$ROOT/bin/axiom"
     echo "installed: $ROOT/bin/axiom ($version)"
     ;;
 compute-worker | runner)

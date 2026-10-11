@@ -145,10 +145,10 @@ func TestF09StoreIndependenceE2E(t *testing.T) {
 		"AXIOM_BIND_ADDR=127.0.0.1",
 		"AXIOM_OS_URL=" + osURL,
 		"AXIOM_OS_INDEX=" + e.osIndex,
-		"AXIOM_PROCESSOR_URLS=" + runner,
-		"AXIOM_PROCESSOR_URL=" + runner,
+		"AXIOM_COMPUTE_WORKER_URLS=" + runner,
+		"AXIOM_COMPUTE_WORKER_URL=" + runner,
 		"AXIOM_QUERY_RUNNER_URL=" + runner,
-		"AXIOM_PROCESSOR_SOURCE_BASE_URL=" + e.apiURL,
+		"AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL=" + e.apiURL,
 		"AXIOM_ARTIFACT_ROOT=" + filepath.Join(e.work, "artifacts"),
 		"AXIOM_DISPATCHER_ENABLED=1",
 		"AXIOM_DISPATCHER_WORKER_ID=f09-e2e",
@@ -158,7 +158,7 @@ func TestF09StoreIndependenceE2E(t *testing.T) {
 		// arbitrary local paths — the signed source URL over THIS api is
 		// the sanctioned delivery path (and exercises the revision job's
 		// ProcessorSource serving end to end).
-		"AXIOM_PROCESSOR_SOURCE_SECRET=f09-e2e-secret",
+		"AXIOM_COMPUTE_WORKER_SOURCE_SECRET=f09-e2e-secret",
 		"TMPDIR=" + os.Getenv("TMPDIR"),
 	}
 	proc.Env = env

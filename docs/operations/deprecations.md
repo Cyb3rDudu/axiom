@@ -1,18 +1,14 @@
 # Deprecation schedule
 
 > **Executed: the 0.2.x alias generation was removed in v0.2.4 (#368,
-> ADR 0001 executed).** Gone: the `axiom-ng` alias binary (build,
-> release asset, install shim), the dispatcher-side legacy env
-> spellings (`AXIOM_DATABASE_URL`, `AXIOM_PROCESSOR_*` dispatcher-side,
-> `AXIOM_RUNNER_HEALTH_INTERVAL`, `AXIOM_FIXER_CMD`,
-> `AXIOM_FIX_SH_TIMEOUT`), the `~/.axiom-ng` state-dir migration, and
-> the 13 unversioned `/api/*` compat routes next to the canonical
-> `/api/v1/*` surface (the versioned edge is the only public API; the
-> operational surfaces `/api/ws`, `/api/runners/live`,
-> `/api/processor/source/*`, `/api/kg/consolidate`, `/api/repair/*`
-> stay unversioned — they were never public client contract). Every
-> refusal names the canonical successor. What remains aliased is
-> listed below.
+> ADR 0001 executed).** Gone: the alias binary (build, release asset,
+> install shim), the dispatcher-side legacy env spellings, the legacy
+> state-dir migration, and the 13 unversioned public compat routes next
+> to the canonical versioned surface (the `/api/v1/*` edge is the only
+> public API; the operational event/repair/consolidation surfaces stay
+> unversioned — they were never public client contract). Every refusal
+> names the canonical successor. The removed names and their successors
+> are listed verbatim in the table below; what remains aliased follows.
 
 Policy and removal criteria for legacy names — the data basis is usage
 counters, not gut feeling. Companion page: [Operator Guide: Migrating to

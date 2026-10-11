@@ -6,7 +6,7 @@
 #
 # Why this exists: the Python-side OpenSearch writers (locator_rescan.py,
 # test_query_endpoints_it.py) honor AXIOM_OS_INDEX but nothing forces a fresh
-# shell to set it. Run against the dev DB with only AXIOM_DATABASE_URL
+# shell to set it. Run against the dev DB with only AXIOM_STORE_DATABASE_URL
 # exported and those tools _bulk-write into the PRODUCTION index — the last
 # open prod-write path in the dev workflow. Sourcing this file closes it.
 #
@@ -35,15 +35,16 @@ set -a
 . "$RAG_ENV"
 set +a
 
-AXIOM_DATABASE_URL="$(printf '%s' "$AXIOM_DATABASE_URL" | sed -E "s#/axiom_db([?]|$)#/$DEV_DB\1#")"
-export AXIOM_DATABASE_URL
+AXIOM_STORE_DATABASE_URL="$(printf '%s' "${AXIOM_STORE_DATABASE_URL:-${AXIOM_DATABASE_URL:-}}" | sed -E "s#/axiom_db([?]|$)#/$DEV_DB\1#")"
+unset AXIOM_DATABASE_URL
+export AXIOM_STORE_DATABASE_URL
 export AXIOM_OS_INDEX="$DEV_INDEX"
 
 # same hard assert as dev-up: refuse to point tools at prod
-case "$AXIOM_DATABASE_URL" in
+case "$AXIOM_STORE_DATABASE_URL" in
 *"/$DEV_DB" | *"/$DEV_DB"[?]*) ;;
 *)
-    echo "env.sh: DATABASE_URL derivation failed (got: ${AXIOM_DATABASE_URL##*@})" >&2
+    echo "env.sh: STORE_DATABASE_URL derivation failed (got: ${AXIOM_STORE_DATABASE_URL##*@})" >&2
     return 1 2>/dev/null || exit 1
     ;;
 esac

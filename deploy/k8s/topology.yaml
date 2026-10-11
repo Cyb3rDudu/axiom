@@ -141,7 +141,7 @@ spec:
               value: "0.0.0.0:8211"
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /api/v1/health
               port: 8113
             initialDelaySeconds: 5
             periodSeconds: 5
@@ -188,7 +188,7 @@ spec:
               value: "0.0.0.0:8212"
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /api/v1/health
               port: 8114
             initialDelaySeconds: 5
             periodSeconds: 5
@@ -232,7 +232,7 @@ spec:
               value: http://axiom-store:8212
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /api/v1/health
               port: 8111
             initialDelaySeconds: 5
             periodSeconds: 5

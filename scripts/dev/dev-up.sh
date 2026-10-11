@@ -51,7 +51,7 @@ STATE="$HOME/.local/state/axiom-dev"
 RELEASE_TAG="v0.1.18"
 RELEASE_REPO="${AXIOM_RELEASE_REPO:-Cyb3rDudu/axiom}"
 RELEASE_GEN="v0.1.17-59-gbf77410"
-RAG_ASSET="axiom-ng-$RELEASE_GEN-darwin-arm64" # prod asset name (darwin, not uname)
+RAG_ASSET="axiom-ng-$RELEASE_GEN-darwin-arm64" # freeze-generation asset name (v0.1.18 predates the #368 rename; the repo builds canonical assets only)
 RUNNER_ASSET="axiom-compute-worker-$RELEASE_GEN-macos-arm64.tar.zst"
 
 RAG_ENV="${AXIOM_DEV_RAG_ENV:-/run/agenix/axiom-rag.env}"
@@ -257,16 +257,36 @@ note "starting dev RAG on :$RAG_PORT …"
     # shellcheck disable=SC1090
     . "$RAG_API_ENV"
     set +a
-    # isolation overrides (every boundary prod shares with dev gets its own)
-    AXIOM_DATABASE_URL="$(printf '%s' "$AXIOM_DATABASE_URL" | sed -E 's#/axiom_db([?]|$)#/'"$DEV_DB"'\1#')"
+    # isolation overrides (every boundary prod shares with dev gets its own).
+    # #368: the WORKING TREE (source mode) speaks canonical names and serves
+    # the versioned health edge; release mode stays on the freeze
+    # generation (v0.1.18), which predates the rename and still reads the
+    # legacy spellings — the mode switch below keeps both eras bootable.
+    if [ "$MODE" = source ]; then
+        DSN_KEY=AXIOM_STORE_DATABASE_URL
+        URLS_KEY=AXIOM_COMPUTE_WORKER_URLS
+        URL_KEY=AXIOM_COMPUTE_WORKER_URL
+        SRCBASE_KEY=AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL
+        NAME_KEY=AXIOM_COMPUTE_WORKER_NAME
+        HEALTH_PATH=/api/v1/health
+    else
+        DSN_KEY=AXIOM_DATABASE_URL
+        URLS_KEY=AXIOM_PROCESSOR_URLS
+        URL_KEY=AXIOM_PROCESSOR_URL
+        SRCBASE_KEY=AXIOM_PROCESSOR_SOURCE_BASE_URL
+        NAME_KEY=AXIOM_PROCESSOR_RUNNER_NAME
+        HEALTH_PATH=/api/health
+    fi
+    dsn_val="$(printf '%s' "${AXIOM_STORE_DATABASE_URL:-${AXIOM_DATABASE_URL:-}}" | sed -E 's#/axiom_db([?]|$)#/'"$DEV_DB"'\1#')"
+    export "$DSN_KEY=$dsn_val"
     AXIOM_API_PORT="$RAG_PORT"
     AXIOM_BIND_ADDR=127.0.0.1
     AXIOM_OS_INDEX="$DEV_INDEX"
-    AXIOM_PROCESSOR_URLS="http://127.0.0.1:$RUNNER_PORT"
-    AXIOM_PROCESSOR_URL="http://127.0.0.1:$RUNNER_PORT"
+    export "$URLS_KEY=http://127.0.0.1:$RUNNER_PORT"
+    export "$URL_KEY=http://127.0.0.1:$RUNNER_PORT"
     AXIOM_QUERY_RUNNER_URL="http://127.0.0.1:$RUNNER_PORT"
-    AXIOM_PROCESSOR_SOURCE_BASE_URL="http://127.0.0.1:$RAG_PORT"
-    AXIOM_PROCESSOR_RUNNER_NAME=axiom-dev-local
+    export "$SRCBASE_KEY=http://127.0.0.1:$RAG_PORT"
+    export "$NAME_KEY=axiom-dev-local"
     AXIOM_ARTIFACT_ROOT="$STATE/artifacts"
     AXIOM_QUARANTINE_ROOT="$STATE/quarantine"
     # F06 #300: the Library import contract runs on FAKE providers in dev
@@ -279,16 +299,15 @@ note "starting dev RAG on :$RAG_PORT …"
     AXIOM_ZOTERO_WRITE_KEY_FILE="$STATE/no-write-key"
     AXIOM_DISPATCHER_ENABLED=1
     AXIOM_DISPATCHER_WORKER_ID=axiom-dev
-    export AXIOM_DATABASE_URL AXIOM_API_PORT AXIOM_BIND_ADDR AXIOM_OS_INDEX \
-        AXIOM_PROCESSOR_URLS AXIOM_PROCESSOR_URL AXIOM_QUERY_RUNNER_URL \
-        AXIOM_PROCESSOR_SOURCE_BASE_URL AXIOM_PROCESSOR_RUNNER_NAME \
+    export AXIOM_API_PORT AXIOM_BIND_ADDR AXIOM_OS_INDEX \
+        AXIOM_QUERY_RUNNER_URL \
         AXIOM_ARTIFACT_ROOT AXIOM_QUARANTINE_ROOT \
         AXIOM_FIXER_INVOKER_ENABLED AXIOM_ZOTERO_WRITE_KEY_FILE \
         AXIOM_DISPATCHER_ENABLED AXIOM_DISPATCHER_WORKER_ID \
         AXIOM_LIBRARY_IMPORT_PROVIDERS
 
     # hard asserts: an override that silently did not stick would aim dev at prod
-    case "$AXIOM_DATABASE_URL" in
+    case "$dsn_val" in
     *"/$DEV_DB" | *"/$DEV_DB"[?]*) ;;
     *"/axiom_db"*)
         echo "dev-up: DATABASE_URL still points at prod (axiom_db) — sed rewrite failed" >&2
@@ -323,7 +342,7 @@ trap 'kill -TERM -- "-$RUNNER_PID" "-$RAG_PID" 2>/dev/null || true' EXIT
 
 note "waiting for RAG health on :$RAG_PORT …"
 for i in $(seq 1 90); do
-    if curl -fsS "http://127.0.0.1:$RAG_PORT/api/health" 2>/dev/null | grep -q '"ok":true'; then break; fi
+    if curl -fsS "http://127.0.0.1:$RAG_PORT$HEALTH_PATH" 2>/dev/null | grep -q '"ok":true'; then break; fi
     kill -0 "$RAG_PID" 2>/dev/null || {
         tail -5 "$STATE/logs/rag.log" >&2
         die "RAG died during startup"
@@ -341,7 +360,7 @@ trap - EXIT # success: both services stay up, dev-down.sh owns them from here
 # release mode must prove the freeze bits are what serves: the build banner
 # is the observable identity of the binary (see health_version_test.go).
 if [ "$MODE" = release ]; then
-    health="$(curl -fsS "http://127.0.0.1:$RAG_PORT/api/health")"
+    health="$(curl -fsS "http://127.0.0.1:$RAG_PORT$HEALTH_PATH")"
     echo "$health" | jq -e '.build' >/dev/null ||
         {
             echo "$health" >&2

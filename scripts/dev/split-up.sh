@@ -83,14 +83,17 @@ start_proc() {
         # shellcheck disable=SC1090
         . "$RAG_API_ENV"
         set +a
-        AXIOM_DATABASE_URL="$(printf '%s' "${AXIOM_DATABASE_URL:-${AXIOM_STORE_DATABASE_URL:-}}" | sed -E 's#/axiom_db([?]|$)#/'"$DEV_DB"'\1#')"
+        # #368: canonical DSN spelling only — derive from whatever the
+        # operator env carries, then drop the removed spelling.
+        AXIOM_STORE_DATABASE_URL="$(printf '%s' "${AXIOM_STORE_DATABASE_URL:-${AXIOM_DATABASE_URL:-}}" | sed -E 's#/axiom_db([?]|$)#/'"$DEV_DB"'\1#')"
+        unset AXIOM_DATABASE_URL
         # same hard assert as env.sh/dev-up: refuse to point the split at
         # anything but the dev database (leak-safe: print after the @)
-        case "$AXIOM_DATABASE_URL" in
+        case "$AXIOM_STORE_DATABASE_URL" in
         *"/$DEV_DB" | *"/$DEV_DB"[?]*)
             ;;
         *)
-            echo "split-up: DATABASE_URL derivation failed (got: ${AXIOM_DATABASE_URL##*@})" >&2
+            echo "split-up: DATABASE_URL derivation failed (got: ${AXIOM_STORE_DATABASE_URL##*@})" >&2
             exit 1
             ;;
         esac
@@ -98,10 +101,6 @@ start_proc() {
         # DSN — never let the dev split reach it. Unset = single-database
         # topology (both planes on the dev store DB, the supported shape).
         unset AXIOM_LIBRARY_DATABASE_URL
-        # one DSN spelling only: the binary refuses mixed forms — when the
-        # dev DSN was derived from the store-plane spelling, drop the
-        # original so only AXIOM_DATABASE_URL remains set
-        unset AXIOM_STORE_DATABASE_URL
         AXIOM_API_PORT="$port"
         AXIOM_BIND_ADDR=127.0.0.1
         AXIOM_OS_INDEX="$DEV_INDEX"
@@ -125,16 +124,16 @@ start_proc() {
             AXIOM_DISPATCHER_WORKER_ID=axiom-split-store
             # the dispatcher signs processor-source URLs; the runner must
             # fetch them from THIS process (it owns the claim loop)
-            AXIOM_PROCESSOR_SOURCE_BASE_URL="http://127.0.0.1:$STORE_PORT"
+            AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL="http://127.0.0.1:$STORE_PORT"
             ;;
         api)
             AXIOM_LIBRARY_URL="http://127.0.0.1:$LIB_EDGE"
             AXIOM_STORE_URL="http://127.0.0.1:$STORE_EDGE"
             ;;
         esac
-        export AXIOM_DATABASE_URL AXIOM_API_PORT AXIOM_BIND_ADDR AXIOM_OS_INDEX \
-            AXIOM_PROCESSOR_URLS AXIOM_PROCESSOR_URL AXIOM_QUERY_RUNNER_URL \
-            AXIOM_PROCESSOR_RUNNER_NAME AXIOM_ARTIFACT_ROOT AXIOM_QUARANTINE_ROOT \
+        export AXIOM_STORE_DATABASE_URL AXIOM_API_PORT AXIOM_BIND_ADDR AXIOM_OS_INDEX \
+            AXIOM_COMPUTE_WORKER_URLS AXIOM_COMPUTE_WORKER_URL AXIOM_QUERY_RUNNER_URL \
+            AXIOM_COMPUTE_WORKER_NAME AXIOM_ARTIFACT_ROOT AXIOM_QUARANTINE_ROOT \
             AXIOM_FIXER_INVOKER_ENABLED AXIOM_ZOTERO_WRITE_KEY_FILE \
             AXIOM_DISPATCHER_ENABLED AXIOM_LIBRARY_IMPORT_PROVIDERS \
             AXIOM_INTERNAL_LIBRARY_ADDR AXIOM_INTERNAL_STORE_ADDR \
@@ -200,7 +199,7 @@ for spec in "library $LIB_PORT" "store $STORE_PORT" "api $API_PORT"; do
     PIDS="-$2 $PIDS"
     # wait for the process's own health before the next binds to it
     for i in $(seq 1 60); do
-        curl -fsS -o /dev/null "http://127.0.0.1:$port/api/health" 2>/dev/null && break
+        curl -fsS -o /dev/null "http://127.0.0.1:$port/api/v1/health" 2>/dev/null && break
         kill -0 "$2" 2>/dev/null || { tail -5 "$STATE/logs/split-$name.log" >&2; die "$name died during startup"; }
         sleep 1
         [ "$i" = 60 ] && { tail -5 "$STATE/logs/split-$name.log" >&2; die "$name health timeout (Zotero running?)"; }

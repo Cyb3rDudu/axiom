@@ -52,7 +52,7 @@ Wait for `Uvicorn running on http://127.0.0.1:8537`.
 
 ```bash
 export AXIOM_ZOTERO_BASE=http://localhost:23119/api
-export AXIOM_DATABASE_URL=postgres://<user>:<pass>@localhost:5432/<db>
+export AXIOM_STORE_DATABASE_URL=postgres://<user>:<pass>@localhost:5432/<db>
 export AXIOM_OPENSEARCH_URL=http://localhost:9200
 export AXIOM_COMPUTE_WORKER_URL=http://127.0.0.1:8537
 export AXIOM_DISPATCHER_ENABLED=true
@@ -65,8 +65,8 @@ The dispatcher checks Zotero is reachable and the runner is contract-compatible.
 ## 3. Sync, then watch the pipeline
 
 ```bash
-curl -X POST http://127.0.0.1:8011/api/zotero/sync   # mirror Zotero → ingest jobs
-curl     http://127.0.0.1:8011/api/ingest/jobs       # watch pending → completed
+curl -X POST http://127.0.0.1:8011/api/v1/zotero/sync   # mirror Zotero → ingest jobs
+curl     http://127.0.0.1:8011/api/v1/ingest/jobs       # watch pending → completed
 ```
 
 A document that finishes shows `completed`; its chunks land in the searchable

@@ -64,6 +64,7 @@ var workerEnvAllowPrefix = []string{"LC_", "AXIOM_FIXER_"}
 // credential variables only. Review the sibling list when extending
 // either side.
 var workerEnvDeniedNames = []string{
+	"AXIOM_DATABASE_URL", // removed spelling (#368) — denied for witness parity with the Python boot guard
 	"AXIOM_STORE_DATABASE_URL",
 	"AXIOM_LIBRARY_DATABASE_URL",
 	"AXIOM_WS_SECRET",

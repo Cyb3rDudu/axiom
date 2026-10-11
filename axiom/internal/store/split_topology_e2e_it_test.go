@@ -170,10 +170,10 @@ func startSplitProc(t *testing.T, e *splitE2EEnv, role string, port, edge int) *
 		"AXIOM_BIND_ADDR=127.0.0.1",
 		"AXIOM_OPENSEARCH_URL=" + e.osURL,
 		"AXIOM_OS_INDEX=" + e.osIndex,
-		"AXIOM_PROCESSOR_URLS=" + e.runner,
-		"AXIOM_PROCESSOR_URL=" + e.runner,
+		"AXIOM_COMPUTE_WORKER_URLS=" + e.runner,
+		"AXIOM_COMPUTE_WORKER_URL=" + e.runner,
 		"AXIOM_QUERY_RUNNER_URL=" + e.runner,
-		"AXIOM_PROCESSOR_SOURCE_SECRET=f14-split-e2e-secret",
+		"AXIOM_COMPUTE_WORKER_SOURCE_SECRET=f14-split-e2e-secret",
 		"AXIOM_ARTIFACT_ROOT=" + filepath.Join(e.work, "artifacts"),
 		"AXIOM_QUARANTINE_ROOT=" + filepath.Join(e.work, "quarantine"),
 		"AXIOM_FIXER_INVOKER_ENABLED=0",
@@ -196,7 +196,7 @@ func startSplitProc(t *testing.T, e *splitE2EEnv, role string, port, edge int) *
 			"AXIOM_DISPATCHER_WORKER_ID=f14-split-store",
 			// the dispatcher signs processor-source URLs; the worker fetches
 			// them from THIS process (it owns the claim loop)
-			fmt.Sprintf("AXIOM_PROCESSOR_SOURCE_BASE_URL=http://127.0.0.1:%d", port),
+			fmt.Sprintf("AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL=http://127.0.0.1:%d", port),
 			fmt.Sprintf("AXIOM_INTERNAL_STORE_ADDR=127.0.0.1:%d", edge),
 		)
 	case "api":
