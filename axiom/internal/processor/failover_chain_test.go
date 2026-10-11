@@ -262,7 +262,7 @@ func TestChain_Capabilities4xxDoesNotFailOver(t *testing.T) {
 // time.NewTicker would panic on a non-positive interval): a probed-down head
 // stays in the submit path because nothing demotes it. With the monitor
 // disabled, liveness only changes via submit-time failover, as documented
-// for AXIOM_RUNNER_HEALTH_INTERVAL<=0.
+// for AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL<=0 (#368: canonical only).
 func TestChain_HealthMonitorDisabledInterval(t *testing.T) {
 	carrier := newScriptRunner(t, "carrier")
 	local := newScriptRunner(t, "local")
