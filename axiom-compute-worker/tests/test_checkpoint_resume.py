@@ -305,6 +305,81 @@ class TestRealPipelineResume:
     """Direct _real_pipeline resume probes on the L6-style stub harness
     (no app, no scheduler — pure pipeline behavior)."""
 
+    def test_unreadable_convert_payload_recomputes_phase(self, tmp_path, monkeypatch):
+        """Degradation pin: a convert marker whose payload cannot be fully
+        re-linked (mapping references a file the store never saved) must
+        degrade the WHOLE phase to recompute — never a crash, never a
+        partial resume. phase_reuse honestly reports computed."""
+        import types
+
+        from axiom_compute_worker import runner as runner_mod
+        from axiom_compute_worker.checkpoints import PhaseCheckpoints
+
+        src = _pdf(tmp_path)
+        req = _request(src, "degraded")
+        work_root = tmp_path / "wr"
+        old = settings.get()
+        settings.set(Settings(work_root=work_root,
+                              allowed_source_roots=(str(tmp_path),),
+                              compute_backend="real", warmup=False,
+                              max_concurrent_jobs=1, admission_queue_capacity=9))
+        try:
+            # Seed a checkpoint whose marker validates (all listed files
+            # exist) but whose image_mapping names a file the payload
+            # never carried — the worker/mapping inconsistency shape.
+            seed_md = tmp_path / "seed.md"
+            seed_md.write_text("# T\n\nAlpha works at Beta Corp", encoding="utf-8")
+            cp0 = PhaseCheckpoints(req, work_root)
+            cp0.save("convert", files={"markdown.md": seed_md},
+                     jsons={"image_mapping": {"fig.png": "image_0.tiff"},
+                            "page_label_map": {}, "page_source_map": {},
+                            "page_chapter_map": {}, "marker_pagemap_max": None,
+                            "cfi_entries": []})
+
+            # L6-style stubs so the recompute path runs hermetically
+            class _FakePopen:
+                def __init__(self, cmd, **_kw):
+                    Path(cmd[4]).write_text("# T\n\nAlpha works at Beta Corp",
+                                            encoding="utf-8")
+                    self.out = '{"image_mapping": {}}'
+                    self.returncode = 0
+
+                def communicate(self):
+                    return (self.out, "")
+
+            import subprocess as _sub
+
+            monkeypatch.setattr(_sub, "Popen", _FakePopen)
+            pt = types.ModuleType("axiom_compute_worker.compute_core.page_trust")
+            pt.build_page_trust = lambda p: ({}, {}, {})
+            pt.PHYSICAL_ONLY = "physical_only"
+            monkeypatch.setitem(__import__("sys").modules,
+                                "axiom_compute_worker.compute_core.page_trust", pt)
+            ch = types.ModuleType("axiom_compute_worker.compute_core.chunker")
+
+            class _Ch:
+                def __init__(self, max_chunk_tokens=1200):
+                    pass
+
+                def chunk(self, md, doc_metadata):
+                    return [{"text": "Alpha works at Beta Corp",
+                             "metadata": {"start_paragraph_index": 0}}]
+
+                def chapter_starts(self):
+                    return []
+
+            ch.Chunker = _Ch
+            monkeypatch.setitem(__import__("sys").modules,
+                                "axiom_compute_worker.compute_core.chunker", ch)
+
+            result = runner_mod._real_pipeline(req, _workdir(tmp_path, "deg"))
+            reuse = result["manifest"]["phase_reuse"]
+            assert reuse["convert"] == "computed", (
+                f"unreadable payload must degrade to recompute: {reuse}"
+            )
+        finally:
+            settings.set(old)
+
     def test_off_profile_writes_skip_markers_and_captions_resume(self, tmp_path, monkeypatch):
         """End-to-end pin for the runner's off-phase behavior (the unit
         test seeds markers by hand — it cannot see the pipeline's own
