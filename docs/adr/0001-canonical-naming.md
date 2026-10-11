@@ -2,9 +2,10 @@
 
 - Status: Accepted (F02, #296; part of the 0.2.0 epic #342) —
   **executed at v0.2.4 (#368)**: the scheduled alias-generation removal
-  (axiom-ng binary, legacy dispatcher/repair env spellings, the
-  unversioned compat routes) shipped as the final 0.2.x release
-  (decision update 2026-10-10, dudu); 0.3.0 develops on the clean base
+  (the alias binary of mapping table row 1, the legacy dispatcher/repair
+  env spellings, the unversioned compat routes) shipped as the final
+  0.2.x release (decision update 2026-10-10, dudu); 0.3.0 develops on
+  the clean base
 - Date: 2026-09-22
 - Baseline reference: F01 suite e7425f0 (#295); frozen tag v0.1.18,
   deployed binary generation bf77410 (suite ≠ deployed generation)
@@ -59,9 +60,9 @@ The previous binary name was a functional **compatibility alias**
 through 0.2.x (wired with F05; it delegated to `axiom` and reported
 through the deprecation witness below — mapping table row 1). The alias
 binary, its build/install/release surfaces and the legacy env
-spellings are **removed in v0.2.4** (#368): `axiom-ng` invocations fail
-with command-not-found, and removed env names are refused loudly with
-their canonical successor.
+spellings are **removed in v0.2.4** (#368): alias-binary invocations
+fail with command-not-found, and removed env names are refused loudly
+with their canonical successor.
 
 ### 4. Mapping table (old → canonical → alias → removal horizon)
 

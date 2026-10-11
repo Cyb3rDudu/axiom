@@ -6,11 +6,11 @@
 //
 // Mechanism: the file layer and the flag layer are MATERIALIZED into
 // the process environment (os.Setenv) before Load() runs — every typed
-// reader in config.go (envInt, envDur, the dual-fed compute-worker
-// resolvers, the deprecation witnesses on legacy spellings) then
-// resolves exactly as if the operator had exported the value, and the
-// chain order is the materialization order: env keys the environment
-// already owns are never overwritten by the file; flags overwrite both.
+// reader in config.go (envInt, envDur, the single-fed canonical
+// resolvers) then resolves exactly as if the operator had exported the
+// value, and the chain order is the materialization order: env keys the
+// environment already owns are never overwritten by the file; flags
+// overwrite both.
 // Materialization is deliberate process state, not a leak: after boot
 // the process environment IS the resolved configuration (child
 // processes and the legacy mode surface inherit the same truth).
@@ -74,14 +74,10 @@ var rowsByKey = func() map[string]envRow {
 // tables, secret VALUES, unknown keys, unparseable values — is a loud
 // error, never a silent fall-back-to-defaults.
 //
-// Field-level decision (dual-fed pairs): the chain binds the LOGICAL
-// knob — flag > env > file holds per FIELD, and the resolver's
-// canonical-over-legacy spelling precedence breaks ties WITHIN one
-// stage, never across stages. Materialization is therefore pair-aware:
-// a file row on either spelling of a pair is skipped when the
-// environment owns the other spelling (env beats file per field), and
-// a --set naming either spelling materializes onto the CANONICAL key
-// (the flag beats env and file per field).
+// #368: resolution is single-fed (canonical keys only) — the pair-aware
+// materialization of the dual-fed era is gone with the legacy
+// spellings; a removed name in file or flags is refused by
+// ValidateSettings/ValidateFlags (naming the canonical successor).
 //
 // An unresolvable DEFAULT path (no home dir, no override) degrades to
 // the env-only bootstrap instead of aborting — the pre-F13 boot worked

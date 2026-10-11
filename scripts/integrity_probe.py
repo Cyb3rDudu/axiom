@@ -7,7 +7,7 @@ template-derived note (blueprint VBFLCQLA, surgical slot replacement),
 then compare three readings:
 
     annotation pageLabel == chunk exact page (paragraph_pages
-    via /api/passage/{id}/page?at=N) == PDF embedded label
+    via /api/v1/passage/{id}/page?at=N) == PDF embedded label
 
 Measurement only — no heals, no re-chunks, no deletions. Everything tagged
 `integritäts-check`.
@@ -86,7 +86,7 @@ def rag_search(query, doc_id=None, top_n=5):
     if doc_id:
         body["filters"] = {"document_ids": [doc_id]}
     req = urllib.request.Request(
-        RAG + "/api/search",
+        RAG + "/api/v1/search",
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -96,7 +96,7 @@ def rag_search(query, doc_id=None, top_n=5):
 
 
 def rag_passage_page(chunk_id, at):
-    url = f"{RAG}/api/passage/{chunk_id}/page?at={at}"
+    url = f"{RAG}/api/v1/passage/{chunk_id}/page?at={at}"
     with urllib.request.urlopen(url, timeout=30) as r:
         return json.loads(r.read().decode())
 
@@ -107,7 +107,7 @@ def norm(s: str) -> str:
 
 
 def doc_map():
-    req = urllib.request.Request(RAG + "/api/zotero/documents")
+    req = urllib.request.Request(RAG + "/api/v1/zotero/documents")
     with urllib.request.urlopen(req, timeout=60) as r:
         docs = json.loads(r.read().decode())["documents"]
     return {

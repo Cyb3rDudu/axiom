@@ -1,4 +1,4 @@
-// /api/passage/{chunk_id} — the A1 context primitive (#165). Degradation
+// /api/v1/passage/{chunk_id} — the A1 context primitive (#165). Degradation
 // pattern as everywhere: search not configured → 503; unknown chunk → 404;
 // inactive-snapshot chunk → 404 WITH hint payload.
 //
@@ -59,7 +59,7 @@ func (s *Server) handlePassage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
-// handlePassageAt — GET /api/passage/{id}?at=N: exact print page of the
+// handlePassageAt — GET /api/v1/passage/{id}/page?at=N: exact print page of the
 // character position N within the chunk text (#194).
 func (s *Server) handlePassageAt(w http.ResponseWriter, r *http.Request) {
 	if s.passageSvc == nil {

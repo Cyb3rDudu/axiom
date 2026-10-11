@@ -195,7 +195,7 @@ frozen (the F01 baseline suite and the contract suite are the witnesses).
 | Install | `/opt/axiom/compute-worker/<version>/`, shim `bin/axiom-compute-worker` | wrapper `bin/axiom-runner` (warns once, delegates) |
 | make target | `make compute-worker` | `make runner` (deprecation echo) |
 | launchd | `com.axiom.compute-worker` | old label retires with the operator switch |
-| Dispatcher env | `AXIOM_COMPUTE_WORKER_{URL,URLS,NAME,TIMEOUT,SOURCE_SECRET,SOURCE_BASE_URL,HEALTH_INTERVAL}` | the `AXIOM_PROCESSOR_*` / `AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL` spellings (witnessed via `/api/health/deprecations`) |
+| Dispatcher env | `AXIOM_COMPUTE_WORKER_{URL,URLS,NAME,TIMEOUT,SOURCE_SECRET,SOURCE_BASE_URL,HEALTH_INTERVAL}` | canonical-only since v0.2.4 (#368); refusals name the successor |
 | Worker env | `AXIOM_PROCESSOR_*` (unchanged) | — (frozen per #304; NOT renamed) |
 
 **Alias runtime:** aliases are functional through all of 0.2.x; removal

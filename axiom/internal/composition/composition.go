@@ -1308,7 +1308,7 @@ type internalEdge struct {
 // a successful bind only log (clients degrade to typed 503s — the
 // fault-parity contract).
 // edgeWithHealth mounts the process's health endpoint on an internal
-// component edge (DM07 #316): GET /api/health answers from the SAME
+// component edge (DM07 #316, #368): GET /api/v1/health answers from the SAME
 // checker registry as the public surface, so the credential-free api
 // edge can proxy dependency visibility over the component edges. The
 // contract routes are untouched underneath.

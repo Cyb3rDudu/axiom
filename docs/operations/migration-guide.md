@@ -27,9 +27,9 @@ public edge:
 
 - **Changed in v0.2.4 (#368):** the 13 unversioned compat routes are GONE —
   the versioned `/api/v1/*` edge is the only public API (every former
-  compat path has its canonical twin under `/api/v1/`)
-  byte-identically through 0.2.x. The F01 golden suite (#295) froze the
-  0.1.18 baseline as the witness — the frozen route inventory lives at
+  compat path has its canonical twin under `/api/v1/`). Through 0.2.x
+  both edges answered byte-identically; the F01 golden suite (#295)
+  froze the 0.1.18 baseline as the witness — the frozen route inventory lives at
   `axiom/internal/baseline/fixtures/api_inventory.txt` in the repository;
   the same suite runs green against the new
   binary in all-in-one **and** split-process form.
@@ -111,12 +111,12 @@ launchd) and which CI witness proves each form — is the
 ## Name mapping: 0.1.x → 0.2.0 {#name-mapping}
 
 The binding decision is [ADR 0001](../adr/0001-canonical-naming.md); this
-is the operator view. Legacy names keep working through all of 0.2.x —
-every use warns once per process and increments a counter exported in
-`/api/v1/health` (`deprecations`) and `/v1/capabilities` (`deprecations`).
-Removal happens earliest in an **announced major**, never silently, on
-counter evidence — the [criteria](deprecations.md) page carries the
-schedule.
+is the operator view. Legacy names kept working through all of 0.2.x —
+every use warned once per process and incremented a counter exported in
+`/api/v1/health` (`deprecations`) and `/v1/capabilities`
+(`deprecations`). The removal executed with v0.2.4 (#368) on counter
+evidence — the [criteria](deprecations.md) page carries what went and
+what remains aliased.
 
 ### Binaries, processes, artifacts
 

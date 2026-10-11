@@ -277,9 +277,13 @@ leg_docs() {
     ADRROWS='^docs/adr/0001[^:]*\.md:\|'
     MIG='^docs/operations/migration-g[^:]*\.md:\|'
     OPSROWS='^docs/operations/deprecations\.md:\|'
+    # `|| true` on the optional mkdocs.yml source: with pipefail, a
+    # no-match grep here would make the pipeline status non-zero
+    # INDEPENDENT of the filter chain — the if-branch never ran and the
+    # gate passed on violations (false green, #368 review).
     if {
-        grep -riH 'axiom-ng' docs/ --include='*.md'
-        grep -iH 'axiom-ng' mkdocs.yml
+        grep -riH 'axiom-ng' docs/ --include='*.md' || true
+        grep -iH 'axiom-ng' mkdocs.yml || true
     } |
         grep -v '_inventory.md' |
         grep -vF 'was known as *axiom-ng*' |

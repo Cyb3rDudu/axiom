@@ -304,7 +304,7 @@ def h_probe(step: dict, ctx: dict) -> dict:
     # grund; nur UNMESSBARES Signal (Stelle 1) eskaliert. Der Lauf kann
     # deshalb mit forensischer M-Quelle (Stelle 1) weiterarbeiten.
     try:
-        r = httpx.get(f"{base}/api/zotero/documents", timeout=5.0)
+        r = httpx.get(f"{base}/api/v1/zotero/documents", timeout=5.0)
         reachable = r.status_code == 200
         detail = f"HTTP {r.status_code}"
     except Exception as exc:  # noqa: BLE001 — Beweis, kein Crash

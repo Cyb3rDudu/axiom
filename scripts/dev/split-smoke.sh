@@ -6,7 +6,7 @@
 # release-only (`make golden-baseline` is untouched by this).
 #
 # What this proves:
-#   1. /api/health answers healthy with the four dependency checks
+#   1. /api/v1/health answers healthy with the four dependency checks
 #   2. /api/v1/search answers with the typed hit shape (chunk_id,
 #      doc_id, locator.kind — field names, not frozen values)
 #   3. /api/v1/passage/{id} answers with attachment_id + neighbors
@@ -38,7 +38,7 @@ command -v lsof >/dev/null || die "lsof required (teardown completeness check)"
 
 # --- 1. health ---------------------------------------------------------------
 
-health="$(curl -fsS -m 60 "$API/api/health")"
+health="$(curl -fsS -m 60 "$API/api/v1/health")"
 echo "$health" | jq -e '.ok == true' >/dev/null || die "health not ok: $health"
 for check in postgres zotero query-runner ingest-runner; do
     echo "$health" | jq -e --arg c "$check" '.checks[$c] == "ok"' >/dev/null ||

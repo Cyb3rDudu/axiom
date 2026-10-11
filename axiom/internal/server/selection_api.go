@@ -1,5 +1,5 @@
-// A2 #166: selection API (GET/PUT /api/zotero/selection) and the client's
-// sync-state listing (GET /api/zotero/documents?sync_state=…).
+// A2 #166: selection API (GET/PUT /api/v1/zotero/selection) and the
+// client's sync-state listing (GET /api/v1/zotero/documents?sync_state=…).
 package server
 
 import (

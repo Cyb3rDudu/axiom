@@ -30,7 +30,7 @@ flowchart LR
     GO -->|outbox drain| OS
     GO --> |persist snapshots| PG
 
-    %% Retrieval arms on POST /api/search
+    %% Retrieval arms on POST /api/v1/search
     GO --> ARMS[retrieval arms]
     ARMS --> D[dense]
     ARMS --> B[bm25 / hybrid]
@@ -262,13 +262,13 @@ flowchart LR
 The runner's page-trust pipeline chooses a label and trust level for each
 physical page. The chunker carries those labels into the locator and records a
 new boundary whenever the page changes inside a chunk. Consequently,
-`GET /api/passage/{id}/page?at=N` can resolve a hit position to one exact page
+`GET /api/v1/passage/{id}/page?at=N` can resolve a hit position to one exact page
 rather than returning only the chunk's page envelope. Older generations without
 `paragraph_pages` return the broader span and do not fabricate precision.
 
 ## Retrieval flow and the recall arms
 
-`POST /api/search` composes up to five recall arms and returns ranked hits with
+`POST /api/v1/search` composes up to five recall arms and returns ranked hits with
 source locators:
 
 - **dense** (semantic embeddings) and **bm25** (exact-term) form the **hybrid**

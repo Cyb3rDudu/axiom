@@ -1,6 +1,10 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -36,19 +40,63 @@ func TestLegacyEnvSuccessorTableComplete(t *testing.T) {
 	}
 }
 
-// TestLegacyEnvDoesNotFeedLoader: a set legacy name changes nothing — the
-// canonical key (or the default) owns the field.
+// TestLegacyEnvDoesNotFeedLoader: with ONLY the legacy name set (canonical
+// unset), every affected field keeps its documented default/empty value —
+// the probe has teeth per name, not just against canonical precedence.
 func TestLegacyEnvDoesNotFeedLoader(t *testing.T) {
-	for name := range legacyProbeNames {
-		t.Run(name, func(t *testing.T) {
-			t.Setenv(name, "legacy-value")
-			t.Setenv("AXIOM_COMPUTE_WORKER_URL", "http://carrier:19542")
-			cfg := Load()
-			if cfg.ProcessorURL != "http://carrier:19542" {
-				t.Fatalf("legacy %s must not feed the loader (ProcessorURL = %q)", name, cfg.ProcessorURL)
-			}
-		})
+	// the runner-name default derives from the default runner URL's host
+	var defaultRunnerHost string
+	if u, err := url.Parse(defaultLocalRunner); err == nil {
+		defaultRunnerHost = u.Host
 	}
+	defaultSourceBase := "http://127.0.0.1:" + strconv.Itoa(defaultAPIPort)
+	asserts := map[string]func(Config) string{
+		"AXIOM_DATABASE_URL":              func(c Config) string { return c.DatabaseURL },
+		"AXIOM_FIXER_CMD":                 func(c Config) string { return c.FixerCommand },
+		"AXIOM_PROCESSOR_URL":             func(c Config) string { return c.ProcessorURL },
+		"AXIOM_PROCESSOR_URLS":            func(c Config) string { return fmt.Sprint(c.ProcessorURLs) },
+		"AXIOM_PROCESSOR_RUNNER_NAME":     func(c Config) string { return c.ProcessorRunnerName },
+		"AXIOM_PROCESSOR_TIMEOUT":         func(c Config) string { return c.ProcessorRequestTimeout.String() },
+		"AXIOM_PROCESSOR_SOURCE_SECRET":   func(c Config) string { return c.ProcessorSourceSecret },
+		"AXIOM_PROCESSOR_SOURCE_BASE_URL": func(c Config) string { return c.ProcessorSourceBaseURL },
+		"AXIOM_RUNNER_HEALTH_INTERVAL":    func(c Config) string { return c.RunnerHealthInterval.String() },
+	}
+	defaults := map[string]string{
+		"AXIOM_DATABASE_URL":              "",
+		"AXIOM_FIXER_CMD":                 "/opt/axiom/bin/axiom-repair-worker",
+		"AXIOM_PROCESSOR_URL":             defaultLocalRunner,
+		"AXIOM_PROCESSOR_URLS":            "[]",
+		"AXIOM_PROCESSOR_RUNNER_NAME":     defaultRunnerHost, // derives from the URL host post-load
+		"AXIOM_PROCESSOR_TIMEOUT":         "5m0s",
+		"AXIOM_PROCESSOR_SOURCE_SECRET":   "",
+		"AXIOM_PROCESSOR_SOURCE_BASE_URL": defaultSourceBase,
+		"AXIOM_RUNNER_HEALTH_INTERVAL":    "1m0s",
+	}
+	// ambient process env (chain tests materialize os.Setenv rows) must
+	// not skew the defaults: clear the canonical siblings and the port.
+	withRestoredEnv(t, func() {
+		for _, k := range []string{
+			"AXIOM_API_PORT", "AXIOM_STORE_DATABASE_URL", "AXIOM_REPAIR_WORKER_CMD",
+			"AXIOM_COMPUTE_WORKER_URL", "AXIOM_COMPUTE_WORKER_URLS", "AXIOM_COMPUTE_WORKER_NAME",
+			"AXIOM_COMPUTE_WORKER_TIMEOUT", "AXIOM_COMPUTE_WORKER_SOURCE_SECRET",
+			"AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL", "AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL",
+			"AXIOM_QUERY_RUNNER_URL", "AXIOM_INGEST_FALLBACK_URL",
+		} {
+			os.Unsetenv(k)
+		}
+		for name := range legacyProbeNames {
+			t.Run(name, func(t *testing.T) {
+				t.Setenv(name, "legacy-value")
+				if _, ok := asserts[name]; !ok {
+					t.Fatalf("probe table missing assertion for %s — add field+default", name)
+				}
+				got := asserts[name](Load())
+				if got != defaults[name] {
+					t.Fatalf("legacy %s must leave the default in place (got %q, want %q)", name, got, defaults[name])
+				}
+			})
+		}
+	})
 }
 
 // TestLegacyEnvValidateEnvNamesSuccessor: `axiom config validate` reports

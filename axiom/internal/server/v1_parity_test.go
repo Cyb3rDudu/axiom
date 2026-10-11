@@ -16,9 +16,19 @@ import (
 	"os"
 	"testing"
 
+	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
 	"github.com/Cyb3rDudu/axiom/axiom/internal/search"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
 	"github.com/go-chi/chi/v5"
 )
+
+// noopConsolidator satisfies ConsolidateService for route registration
+// only (handlers are never invoked by the walk).
+type noopConsolidator struct{}
+
+func (noopConsolidator) ConsolidateEntitiesReport(context.Context) (repo.ConsolidationReport, error) {
+	return repo.ConsolidationReport{}, nil
+}
 
 func (f paritySearch) Search(ctx context.Context, req search.Request) (*search.Response, error) {
 	if f.err != nil {
@@ -40,7 +50,9 @@ func (f parityPassage) GetPassage(ctx context.Context, id string) (*search.Passa
 }
 
 // removedCompatRoutes is the complete 13-path set: the unversioned
-// sisters of the canonical /api/v1 public surface.
+// sisters of the canonical /api/v1 public surface (health, zotero
+// sync/selection×3/documents, ingest jobs/force-rebuild, search,
+// passage×2, kg entities/neighbors/relations).
 var removedCompatRoutes = []struct{ method, path string }{
 	{http.MethodGet, "/api/health"},
 	{http.MethodPost, "/api/zotero/sync"},
@@ -55,6 +67,7 @@ var removedCompatRoutes = []struct{ method, path string }{
 	{http.MethodGet, "/api/passage/0b8f6c6e-6d4a-4a1f-9c6d-1e2f3a4b5c6d/page"},
 	{http.MethodGet, "/api/kg/entities"},
 	{http.MethodGet, "/api/kg/entities/0b8f6c6e-6d4a-4a1f-9c6d-1e2f3a4b5c6d/neighbors"},
+	{http.MethodGet, "/api/kg/relations"},
 }
 
 // TestRemovedCompatRoutesAreGone: every unversioned compat path 404s —
@@ -108,14 +121,28 @@ func TestCanonicalV1SurfaceAnswers(t *testing.T) {
 // baseline).
 func TestOperationalSurfacesStayUnversioned(t *testing.T) {
 	srv := newParityServer(paritySearch{}, parityPassage{})
+	// full operational inventory: the nil-gated groups (consolidate,
+	// repair) are wired like the baseline scaffolding does, so the walk
+	// sees every registered route.
+	srv.SetRepairAPI(nil,
+		zoteroprovider.NewWriteClient("http://127.0.0.1:1", "", "v1-parity-sonde"), "", nil)
+	srv.SetConsolidateService(noopConsolidator{})
 	want := map[string]bool{
-		"/api/ws":                       false,
-		"/api/runners/live":             false,
-		"/api/processor/source/{jobID}": false,
+		"/api/ws":                                      false,
+		"/api/runners/live":                            false,
+		"/api/processor/source/{jobID}":                false,
+		"/api/kg/consolidate":                          false,
+		"/api/repair/queue":                            false,
+		"/api/repair/cases":                            false,
+		"/api/repair/cases/{id}/claim":                 false,
+		"/api/repair/cases/{id}/requeue":               false,
+		"/api/repair/cases/{id}/verdict":               false,
+		"/api/repair/custody":                          false,
+		"/api/repair/docs/{documentKey}/locator-stats": false,
 	}
 	if err := chi.Walk(srv.Handler().(*chi.Mux), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		if _, ok := want[route]; ok && method == http.MethodGet {
-			want[route] = true
+		if _, ok := want[route]; ok {
+			want[route] = want[route] || method == http.MethodGet || method == http.MethodPost || method == http.MethodPut
 		}
 		return nil
 	}); err != nil {

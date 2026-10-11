@@ -103,7 +103,7 @@ services:
       zotero:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8113/api/health')\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8113/api/v1/health')\""]
       <<: *healthcheck
 
   store:
@@ -131,7 +131,7 @@ services:
       opensearch:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8114/api/health')\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8114/api/v1/health')\""]
       <<: *healthcheck
 
   api:
@@ -155,7 +155,7 @@ services:
       store:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8111/api/health')\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8111/api/v1/health')\""]
       <<: *healthcheck
 
   # The compute worker: same image, worker role — a separate network

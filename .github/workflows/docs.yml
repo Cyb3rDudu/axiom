@@ -66,7 +66,7 @@ jobs:
               # 3) release artifact names (`axiom-ng-<version>…`) and the
               #    alias list (`axiom-ng, axiom-compute-worker,
               #    axiom-repair-worker`) — shipped names are facts;
-              # 5) mapping-table rows: ADR 0001 (the binding decision
+              # 4) mapping-table rows: ADR 0001 (the binding decision
               #    names what it maps) plus the operator pages whose
               #    old-name columns quote legacy identifiers verbatim
               #    (migration guide, deprecations: state dir, index,

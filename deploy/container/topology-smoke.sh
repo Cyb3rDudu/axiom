@@ -35,9 +35,9 @@ command -v curl >/dev/null || die "curl required"
 # --- 1. health (component-edge checks over the public edge) --------------
 # DM07 #316: the api process holds no DB credentials — its dependency
 # visibility proxies the library/store component health (each component's
-# own /api/health folds its postgres/zotero/runner checks).
+# own /api/v1/health folds its postgres/zotero/runner checks).
 
-health="$(curl -fsS -m 60 "$API/api/health")"
+health="$(curl -fsS -m 60 "$API/api/v1/health")"
 echo "$health" | jq -e '.ok == true' >/dev/null || die "health not ok: $health"
 for check in library store; do
     echo "$health" | jq -e --arg c "$check" '.checks[$c] == "ok"' >/dev/null ||
@@ -171,7 +171,7 @@ ok "kill probe: 503 typed library/unavailable envelope, leak-free"
 
 cc down -v >/dev/null
 for _ in $(seq 1 20); do
-    if ! curl -s -m 2 -o /dev/null "$API/api/health" 2>/dev/null; then
+    if ! curl -s -m 2 -o /dev/null "$API/api/v1/health" 2>/dev/null; then
         ok "teardown: compose down -v, public edge gone"
         echo
         echo "topology-smoke: ALL GREEN — container split proven (health, remote-class"
