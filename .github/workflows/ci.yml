@@ -168,6 +168,13 @@ jobs:
       - name: ci path-gate classifier probe
         working-directory: .
         run: python3 scripts/test_ci_path_gate.py
+      # v0.2.4-RC test round: dev-up sources PROD env files and overrides
+      # every lever — the four RC contracts (credential scrub, models_warmed
+      # gate, name-family wiring, dev-DB stub probe) are asserted against
+      # the worker/config sources, not trusted.
+      - name: dev-up contract probe
+        working-directory: .
+        run: python3 scripts/test_dev_up_contracts.py
 
   go-unit:
     runs-on: ubuntu-latest

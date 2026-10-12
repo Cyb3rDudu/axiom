@@ -198,6 +198,25 @@ else
     note "dev index ready: $dev_n docs (count-verified against $PROD_INDEX)"
 fi
 
+# --- dev-DB legacy stub probe (v0.2.4-RC test round, finding 4) -----------
+# A dev DB from the reference-backend era can carry 3-dim stub dense
+# embeddings alongside real 1024-dim rows. They predate the real compute
+# backend and poison dimension-sensitive reads; recognize them LOUDLY at
+# start and offer the documented reset paths instead of failing silently.
+# Read-only, best-effort: no podman/no table → silent skip (fresh hosts).
+DB_CONTAINER="${AXIOM_CI_DB_CONTAINER:-postgres}"
+DB_USER="${AXIOM_DEV_DB_USER:-axiom_user}"
+if stub_n="$(podman exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DEV_DB" -tAc \
+    'SELECT count(*) FROM processing_chunk_dense_embeddings WHERE dimensions <= 8' 2>/dev/null)" \
+    && [ "$stub_n" -gt 0 ] 2>/dev/null; then
+    note "WARNING: $stub_n stub dense embeddings (<=8-dim, reference-backend era) found in $DEV_DB"
+    note "  reset path A (surgical): delete the stub rows AND drop the dev index"
+    note "    podman exec $DB_CONTAINER psql -U $DB_USER -d $DEV_DB -c \\\n      \"DELETE FROM processing_chunk_dense_embeddings WHERE dimensions <= 8\""
+    note "    curl -fsS -XDELETE \"$OS_URL/$DEV_INDEX\" && $0 re-bootstraps the index"
+    note "  reset path B (established pattern, AGENT.md): drop $DEV_DB and re-clone"
+    note "    it from axiom_db (pg_dump -Fc | pg_restore) — prod stays untouched"
+fi
+
 # --- start the runner (source venv, :8112) ----------------------------------
 # Own session/process group (python setsid helper — macOS has no setsid(1)),
 # so dev-down can kill the whole group by PGID.
@@ -209,9 +228,24 @@ note "starting dev runner on :$RUNNER_PORT …"
     . "$RUNNER_ENV"
     set +a
     # the bootstrap section above sourced the PROD rag env (set -a) into this
-    # shell — the runner service never reads a DSN, but the inherited prod
-    # value is a latent trap for anything ever run inside this environment
-    unset AXIOM_DATABASE_URL
+    # shell, and the runner env itself may carry legacy secrets: the worker
+    # is credential-free by contract (#316 — assert_credential_free_env in
+    # axiom_compute_worker/config.py refuses to boot on ANY of these names;
+    # values are never echoed here either). dev-up must honor that contract
+    # and scrub the whole family explicitly, not just the DSN.
+    # Keep this list in sync with worker-side CREDENTIAL_ENV_NAMES (review
+    # the sibling list when extending either side).
+    unset AXIOM_DATABASE_URL AXIOM_STORE_DATABASE_URL AXIOM_LIBRARY_DATABASE_URL \
+        AXIOM_WS_SECRET AXIOM_OPENSEARCH_PASSWORD \
+        AXIOM_PROCESSOR_SOURCE_SECRET AXIOM_COMPUTE_WORKER_SOURCE_SECRET
+    # F3 (RC test round): the worker-side contract is AXIOM_PROCESSOR_*
+    # only. The RAG-side family (AXIOM_COMPUTE_WORKER_*) inherited from the
+    # sourced prod rag env has no meaning to the worker — strip it so each
+    # name family stays on its own side of the wire (a leaked
+    # SOURCE_BASE_URL would even point source fetches at the PROD RAG).
+    unset AXIOM_COMPUTE_WORKER_URL AXIOM_COMPUTE_WORKER_URLS \
+        AXIOM_COMPUTE_WORKER_SOURCE_BASE_URL AXIOM_COMPUTE_WORKER_NAME \
+        AXIOM_COMPUTE_WORKER_HEALTH_INTERVAL AXIOM_COMPUTE_WORKER_TIMEOUT
     AXIOM_PROCESSOR_PORT="$RUNNER_PORT"
     AXIOM_PROCESSOR_BIND_ADDR=127.0.0.1
     AXIOM_PROCESSOR_WORK_ROOT="$STATE/runner"
@@ -234,7 +268,16 @@ trap 'kill -TERM -- "-$RUNNER_PID" 2>/dev/null || true' EXIT
 
 note "waiting for runner warmup (MPS model load, up to 4 min)…"
 for i in $(seq 1 240); do
-    curl -fsS -o /dev/null "http://127.0.0.1:$RUNNER_PORT/v1/health" 2>/dev/null && break
+    # F2 (RC test round): a 200 on /v1/health is NOT enough — health goes
+    # green even when the real-model preload FAILED (models_warmed stays
+    # false). Honest readiness per #216: wait for models_warmed:true on
+    # /v1/capabilities (the only edge that also carries warmup_enabled),
+    # with the reference backend (nothing to warm, warmup_enabled:false)
+    # and freeze-generation workers (fields absent) exempt.
+    if curl -fsS "http://127.0.0.1:$RUNNER_PORT/v1/capabilities" 2>/dev/null \
+        | jq -e 'if .warmup_enabled == true then .models_warmed == true else true end' >/dev/null 2>&1; then
+        break
+    fi
     kill -0 "$RUNNER_PID" 2>/dev/null || {
         tail -5 "$STATE/logs/runner.log" >&2
         die "runner died during warmup"
@@ -245,7 +288,8 @@ for i in $(seq 1 240); do
         die "runner warmup timeout"
     }
 done
-note "runner warm (pid $RUNNER_PID)"
+warmed="$(curl -fsS "http://127.0.0.1:$RUNNER_PORT/v1/health" | jq -r '.models_warmed // "n/a"')"
+note "runner warm (pid $RUNNER_PID, models_warmed: $warmed)"
 
 # --- start the RAG (:8111) ---------------------------------------------------
 
@@ -285,7 +329,9 @@ note "starting dev RAG on :$RAG_PORT …"
     export "$URLS_KEY=http://127.0.0.1:$RUNNER_PORT"
     export "$URL_KEY=http://127.0.0.1:$RUNNER_PORT"
     AXIOM_QUERY_RUNNER_URL="http://127.0.0.1:$RUNNER_PORT"
-    export "$SRCBASE_KEY=http://127.0.0.1:$RAG_PORT"
+    export "$SRCBASE_KEY=http://127.0.0.1:$RAG_PORT" # own dev RAG, NOT the
+    # inherited prod base URL: the dispatcher signs source_urls against it —
+    # a prod-pointing base made the RC-round stack 404 on source fetches
     export "$NAME_KEY=axiom-dev-local"
     AXIOM_ARTIFACT_ROOT="$STATE/artifacts"
     AXIOM_QUARANTINE_ROOT="$STATE/quarantine"
