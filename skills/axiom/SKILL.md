@@ -10,16 +10,18 @@ The axiom RAG indexes the local Zotero library (books, PDFs, EPUBs) and serves c
 ## Access
 
 ```
-Base URL:  http://127.0.0.1:8011   (LAN: http://192.168.0.107:8011)
-Health:    GET /api/health         → {"status":"ok","build":"axiom v…"}
+Base URL:  http://127.0.0.1:8011   (loopback only — never address the service via a LAN IP)
+Health:    GET /api/v1/health      → {"ok":true,"build":"axiom v…"}
 ```
+
+All routes live under `/api/v1/`; the pre-0.2.4 `/api/…` paths answer 404.
 
 ## Endpoints
 
 ### Search (the main tool)
 
 ```
-POST /api/search
+POST /api/v1/search
 {"query": "VAUDE Nachhaltigkeit Vorbildfunktion", "top_n": 5}
 optional: {"filters": {"document_ids": ["<uuid>"]}}
 ```
@@ -45,10 +47,10 @@ Response:
 ### Passage / Knowledge Graph
 
 ```
-GET /api/passage/{chunk_id}         → full chunk with source + locator
-GET /api/kg/entities                → knowledge-graph entities
-GET /api/kg/relations               → extracted relations
-GET /api/kg/entities/{id}/neighbors → entity neighborhood
+GET /api/v1/passage/{chunk_id}         → full chunk with source + locator
+GET /api/v1/kg/entities                → knowledge-graph entities
+GET /api/v1/kg/relations               → extracted relations
+GET /api/v1/kg/entities/{id}/neighbors → entity neighborhood
 ```
 
 ## The two voices (source classes, #255)
@@ -82,10 +84,13 @@ Cite from the APA fields on the locator (`chapter_number`, `section_title`, `par
 
 | page_source | meaning | citation rule |
 |---|---|---|
-| `folio_verified` | Printed folio read from the text layer and verified in a run | Cite the printed page |
-| `pdf_label_sane` | Page label plausible | Page cite acceptable |
+| `folio_verified` | Printed folio read from the text layer and verified in a run — the only level citable as a printed page without annotation | Cite the printed page |
+| `folio_interpolated` | Folio derived/interpolated rather than read | Citable with its origin label |
+| `pdf_label_sane` | Page label plausible but not a verified print folio | Page cite acceptable — name the label you used |
 | `physical_only` | Only a PDF index exists — label renders as **"PDF-S. N"**, never a print page | Cite as PDF page explicitly, or the section |
 | `blind` | Scanned, no text layer (needs OCR rebuild) | Treat locator as unreliable; prefer section |
+| `none` | No stable page data at all | Cite **section only** — never assert a page, even if the book's index prints one |
+| `print_unverified` | Legacy 0.1.x level still present in older chunks | Treat like `pdf_label_sane`: cite with reservation |
 
 ### Worked example (real case, 2026-08-31)
 
@@ -99,4 +104,4 @@ Query for the Lakehouse definition returned the section "What Is a Lakehouse?" w
 - Treating `PDF-S. 12` (physical index) as a print page
 - Quoting the query-snippet instead of reading the full `text`
 - Inferring "the book says X" from one chunk — check `section` context and, when in doubt, the passage endpoint
-- Hammering /api/search in a tight loop (CPU-bound; one good query beats five lazy ones)
+- Hammering /api/v1/search in a tight loop (CPU-bound; one good query beats five lazy ones)
