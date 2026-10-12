@@ -18,6 +18,8 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from posixpath import dirname as _posix_dirname
+from urllib.parse import unquote
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -75,18 +77,44 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
 
     # 1) zip/container/OPF/spine — structural presence
     opf_ok = False
+    manifest: dict[str, str] = {}
+    opf_dir = ""
+    spine_idrefs: list[str] = []
     try:
         container = epub.read("META-INF/container.xml").decode("utf-8", "replace")
         m = re.search(r'full-path="([^"]+)"', container)
         if m and m.group(1) in names:
-            opf = epub.read(m.group(1)).decode("utf-8", "replace")
+            opf_path = m.group(1)
+            opf_dir = _posix_dirname(opf_path)
+            opf = epub.read(opf_path).decode("utf-8", "replace")
             opf_ok = bool(re.search(r"<spine", opf))
+            # #378 — derive spine docs from the OPF itself instead of
+            # guessing by extension: Wiley & co. legally use .htm filenames
+            # that the old .xhtml/.html filter missed entirely.
+            for item in re.findall(r"<item\b[^>]*/?>", opf):
+                i_id = re.search(r'id="([^"]+)"', item)
+                i_href = re.search(r'href="([^"]+)"', item)
+                if i_id and i_href:
+                    manifest[i_id.group(1)] = unquote(i_href.group(1))
+            for ref in re.findall(r"<itemref\b[^>]*/?>", opf):
+                r_id = re.search(r'idref="([^"]+)"', ref)
+                if r_id:
+                    spine_idrefs.append(r_id.group(1))
     except KeyError:
         pass
-    spine_docs = [
-        n for n in names
-        if n.lower().endswith((".xhtml", ".html")) and not n.startswith("META-INF/")
-    ]
+    if spine_idrefs and manifest:
+        base = f"{opf_dir}/" if opf_dir else ""
+        spine_docs = [href for rid in spine_idrefs
+                      if (href := manifest.get(rid))]
+        spine_docs = [f"{base}{h}" for h in spine_docs]
+    else:
+        # Fallback for OPFs we could not fully parse (missing manifest or
+        # spine idrefs): extension heuristic, .htm included (#378).
+        spine_docs = [
+            n for n in names
+            if n.lower().endswith((".xhtml", ".html", ".htm"))
+            and not n.startswith("META-INF/")
+        ]
     if not opf_ok:
         verdict = "🔴"
         reasons.append("OPF/Spine fehlt oder unlesbar")
