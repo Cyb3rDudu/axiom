@@ -18,10 +18,10 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from pathlib import Path
 from posixpath import dirname as _posix_dirname
 from posixpath import normpath as _normpath
 from urllib.parse import unquote
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,11 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
                 i_id = re.search(r'id="([^"]+)"', item)
                 i_href = re.search(r'href="([^"]+)"', item)
                 if i_id and i_href:
-                    manifest[i_id.group(1)] = unquote(i_href.group(1))
+                    # Keep the raw href — fragments (#…) must be split off
+                    # BEFORE percent-decoding (RFC 3986): a literal # in a
+                    # filename is legally encoded as %23 and becomes
+                    # indistinguishable from the separator after unquote.
+                    manifest[i_id.group(1)] = i_href.group(1)
             for ref in re.findall(r"<itemref\b[^>]*/?>", opf):
                 r_id = re.search(r'idref="([^"]+)"', ref)
                 if r_id:
@@ -110,12 +114,13 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
         # may carry ../ segments, ./ prefixes, or fragments — resolve to a
         # real zip entry and never invent or crash on unresolvable targets.
         spine_docs = []
+        name_set = set(names)
         for rid in spine_idrefs:
             href = manifest.get(rid)
             if not href:
                 continue
-            target = _normpath(base + href.split("#")[0])
-            if target in names:
+            target = _normpath(base + unquote(href.split("#", 1)[0]))
+            if target in name_set:
                 spine_docs.append(target)
     else:
         # Fallback for OPFs we could not fully parse (missing manifest or

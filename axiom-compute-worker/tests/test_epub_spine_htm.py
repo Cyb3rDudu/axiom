@@ -119,6 +119,24 @@ def test_manifest_href_parent_segments_resolves(tmp_path):
     assert result["spine_docs"] == 2
 
 
+def test_percent_encoded_hash_in_filename_resolves(tmp_path):
+    """RFC 3986: Fragment-Trennung vor Percent-Decoding — ein literales #
+    im Dateinamen (als %23 kodiert) muss nicht still aus der Spine fallen
+    (Review-MINOR: False-Red ggü. origin/main)."""
+    opf = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+ <metadata/><manifest>
+  <item id="c1" href="Kapitel%20%231.htm" media-type="application/xhtml+xml"/>
+ </manifest>
+ <spine><itemref idref="c1"/></spine>
+</package>
+"""
+    path = _epub_file(tmp_path, opf, {"OEBPS/Kapitel #1.htm": _TEXT})
+    result = analyze_epub(path)
+    assert result["text_layer"] is True
+    assert result["spine_docs"] == 1
+
+
 def test_unresolvable_href_is_skipped_not_fatal(tmp_path):
     """href zeigt auf nicht vorhandenen Eintrag + Fragment-Suffix: Eintrag
     wird übersprungen, analysierbare Docs zählen trotzdem, kein Crash."""
