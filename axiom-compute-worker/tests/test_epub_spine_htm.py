@@ -210,6 +210,26 @@ def test_ghost_spine_item_does_not_shift_cfi_slots(tmp_path):
                e["cfi"].startswith("epubcfi(/6/6!") for e in entries)
 
 
+def test_all_ghost_spine_yields_empty_cfi_map(tmp_path):
+    """Review-NIT: ein Spine, der ausschliesslich auf fehlende Dateien
+    zeigt, bleibt ehrlich leer — kein alphabetischer Fallback, der eine
+    Lesereihenfolge erfindet (matches pre-#378 behavior)."""
+    from axiom_compute_worker.epub_cfi import build_cfi_map
+
+    opf = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+ <metadata/><manifest>
+  <item id="g1" href="g1.xhtml" media-type="application/xhtml+xml"/>
+  <item id="g2" href="g2.xhtml" media-type="application/xhtml+xml"/>
+ </manifest>
+ <spine><itemref idref="g1"/><itemref idref="g2"/></spine>
+</package>
+"""
+    # Reale Doks im Zip, aber nicht im Spine — duerfen nicht gemappt werden.
+    path = _epub_file(tmp_path, opf, {"OEBPS/a1.htm": _TEXT, "OEBPS/z9.htm": _TEXT})
+    assert build_cfi_map(path) == []
+
+
 def test_unresolvable_href_is_skipped_not_fatal(tmp_path):
     """href zeigt auf nicht vorhandenen Eintrag + Fragment-Suffix: Eintrag
     wird übersprungen, analysierbare Docs zählen trotzdem, kein Crash."""

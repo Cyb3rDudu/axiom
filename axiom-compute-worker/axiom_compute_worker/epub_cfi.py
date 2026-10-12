@@ -215,7 +215,11 @@ def build_cfi_map(epub_path: str) -> list[dict[str, Any]]:
         return []
 
     spine_hrefs = _parse_opf_spine(epub)
-    if not any(h is not None for h in spine_hrefs):
+    # Extension fallback ONLY when no spine is known at all. A spine that
+    # exists but resolves entirely to None (all-ghost) stays empty — the
+    # OPF is authoritative, alphabetical guessing would invent a reading
+    # order that never existed (review NIT; matches pre-#378 behavior).
+    if not spine_hrefs:
         spine_hrefs = sorted(n for n in epub.namelist()
                              if n.endswith((".html", ".htm", ".xhtml"))
                              and not n.startswith("META-INF/"))
