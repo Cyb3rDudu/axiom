@@ -91,3 +91,47 @@ def test_fallback_extension_filter_includes_htm(tmp_path):
     path = tmp_path / "no_spine_refs.epub"
     path.write_bytes(buf.getvalue())
     assert analyze_epub(str(path))["text_layer"] is True
+
+
+def test_manifest_href_parent_segments_resolves(tmp_path):
+    """Regression (Review-Blocker, FFMTJA3S-Klasse): hrefs mit ../-Segmenten
+    müssen auf den echten Zip-Eintrag normalisiert werden — kein KeyError."""
+    opf = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+ <metadata/><manifest>
+  <item id="c1" href="../Text/c1.xhtml" media-type="application/xhtml+xml"/>
+  <item id="c2" href="../Text/c2.htm" media-type="application/xhtml+xml"/>
+ </manifest>
+ <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
+</package>
+"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", _CONTAINER)
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("Text/c1.xhtml", _TEXT)
+        z.writestr("Text/c2.htm", _TEXT)
+    path = tmp_path / "parent_segments.epub"
+    path.write_bytes(buf.getvalue())
+    result = analyze_epub(str(path))
+    assert result["text_layer"] is True
+    assert result["spine_docs"] == 2
+
+
+def test_unresolvable_href_is_skipped_not_fatal(tmp_path):
+    """href zeigt auf nicht vorhandenen Eintrag + Fragment-Suffix: Eintrag
+    wird übersprungen, analysierbare Docs zählen trotzdem, kein Crash."""
+    opf = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+ <metadata/><manifest>
+  <item id="ghost" href="../Missing/ghost.xhtml" media-type="application/xhtml+xml"/>
+  <item id="c1" href="c1.htm#c1anchor" media-type="application/xhtml+xml"/>
+ </manifest>
+ <spine><itemref idref="ghost"/><itemref idref="c1"/></spine>
+</package>
+"""
+    path = _epub_file(tmp_path, opf, {"OEBPS/c1.htm": _TEXT})
+    result = analyze_epub(path)
+    assert result["text_layer"] is True
+    assert result["spine_docs"] == 1

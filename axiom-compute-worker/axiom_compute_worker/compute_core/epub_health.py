@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import zipfile
 from posixpath import dirname as _posix_dirname
+from posixpath import normpath as _normpath
 from urllib.parse import unquote
 from pathlib import Path
 
@@ -104,9 +105,18 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
         pass
     if spine_idrefs and manifest:
         base = f"{opf_dir}/" if opf_dir else ""
-        spine_docs = [href for rid in spine_idrefs
-                      if (href := manifest.get(rid))]
-        spine_docs = [f"{base}{h}" for h in spine_docs]
+        # Normalization + membership check, proven class (jobs CVM26KLA/
+        # FFMTJA3S, cf. epub_repair.normalize_entry_paths): manifest hrefs
+        # may carry ../ segments, ./ prefixes, or fragments — resolve to a
+        # real zip entry and never invent or crash on unresolvable targets.
+        spine_docs = []
+        for rid in spine_idrefs:
+            href = manifest.get(rid)
+            if not href:
+                continue
+            target = _normpath(base + href.split("#")[0])
+            if target in names:
+                spine_docs.append(target)
     else:
         # Fallback for OPFs we could not fully parse (missing manifest or
         # spine idrefs): extension heuristic, .htm included (#378).
@@ -137,7 +147,10 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
     # 3) text extractable — at least one spine doc with real characters
     total_chars = 0
     for n in spine_docs[:50]:
-        raw = epub.read(n).decode("utf-8", "replace")
+        try:
+            raw = epub.read(n).decode("utf-8", "replace")
+        except KeyError:  # unresolvable entry: skip, never crash the probe
+            continue
         text = re.sub(r"<[^>]+>", " ", raw)
         total_chars += len(re.sub(r"\s", "", text))
         if total_chars > 500:
