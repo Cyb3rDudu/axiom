@@ -22,6 +22,21 @@ Headers for WRITE:
 
 - Both auth header variants work: `Zotero-API-Key: <key>` and `Authorization: Bearer <key>`.
 - The local key is **not** a cloud key; it is invalid against api.zotero.org.
+
+## Canonical agent key (no repeated authorize dialogs)
+
+Every call of `POST /api/local/authorize` spawns a NEW key — and a user-facing
+dialog, even with "Always Allow" persisted. Ad-hoc clients that authorize
+per session are the reason the dialog keeps popping up.
+
+Rule for all agents (pi/hivemind/codex alike):
+
+1. Read the shared key from `/run/agenix/zotero-api-key` (agenix secret,
+   `zotero-api-key.age` in nix-conf). Use it as `Zotero-API-Key` header.
+2. Only if that file is missing or the key is rejected (401), fall back to
+   `POST /api/local/authorize` — and report the fallback, so the secret can
+   be refreshed instead of accumulating another dialog key.
+3. Never store keys anywhere else; no per-session keys, no keys in notes.
 - Optimistic concurrency: PATCH/PUT/DELETE need `If-Unmodified-Since-Version: N`, where N is the item's current version (GET body `version` or response header `Last-Modified-Version`).
 
 ## Reading: pagination is mandatory
@@ -150,6 +165,41 @@ POST /api/users/0/items
   "note":"<html body — may include <p>, <strong>, highlight/citation spans>",
   "tags":[{"tag":"…"}]}]
 ```
+
+### Live note schema (Zotero 10 beta — the plain-text fallback trap)
+
+On Zotero 10.0-beta the UI renders a note's spans as **plain text** (citations
+not clickable, highlights inert) unless the HTML matches Zotero's own schema
+exactly. Verified cause and fix (2026-08-17/18 sessions):
+
+1. **Outer div must carry `data-schema-version="9"`** — without it Zotero
+   treats the whole body as plain text and every span is stripped of meaning.
+2. **`itemData` must be an OBJECT, not a list** — the CSL endpoint
+   (`?format=csljson`) returns an ARRAY; passing that array straight into
+   `data-citation-items` was the verified cause of the plain-text fallback.
+   Unwrap first: `csl[0] if isinstance(csl, list) else csl`.
+3. **URL-encode the JSON attributes** (`data-citation`, `data-citation-items`)
+   with `urllib.parse.quote(json.dumps(…, ensure_ascii=False), safe="")`.
+
+Working skeleton (mirrors a hand-built reference note):
+
+```html
+<div data-schema-version="9" data-citation-items="<url-encoded JSON:
+     [{&quot;uris&quot;:[&quot;http://zotero.org/users/local/<USER>/items/<KEY>&quot;],
+       &quot;itemData&quot;:<CSL object>}]>">
+  <h1>Thesis / title</h1>
+  <p>Einsatz: …</p><p>Warum relevant: …</p>
+  <p>…Fließtext… <span class="citation" data-citation="<url-encoded JSON:
+     {&quot;citationItems&quot;:[{&quot;uris&quot;:[…],&quot;locator&quot;:&quot;114-115&quot;}],
+     &quot;properties&quot;:{}}>"><span class="citation-item">(Autor, Jahr, S. 114-115)</span></span></p>
+  <h2></h2>
+</div>
+```
+
+Highlight spans additionally need a real PDF anchor to render live:
+`<span class="highlight" data-annotation="…">` referring to the PDF
+attachment with `pageLabel`, `pageIndex` and `rects` (the on-page rectangles).
+Without rects the highlight stays dead.
 
 ## Highlights / annotations (on PDF attachments)
 
