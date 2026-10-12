@@ -1422,7 +1422,7 @@ def _convert_epub_reference(epub_path: Path, md_path: Path):
         html_files = [
             n
             for n in names
-            if n.lower().endswith((".xhtml", ".html"))
+            if n.lower().endswith((".xhtml", ".html", ".htm"))
             and not n.startswith("META-INF/")
             and "/nav" not in n.lower()
         ]

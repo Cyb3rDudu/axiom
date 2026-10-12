@@ -157,7 +157,7 @@ def _marker_canonicalized_copy(epub_path: Path, out_dir: Path) -> Path:
             zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
         for item in z.infolist():
             data = z.read(item.filename)
-            if item.filename.lower().endswith((".xhtml", ".html")):
+            if item.filename.lower().endswith((".xhtml", ".html", ".htm")):
                 raw = data.decode("utf-8", "replace")
                 fixed = _canonicalize_page_anchors(raw)
                 if fixed != raw:

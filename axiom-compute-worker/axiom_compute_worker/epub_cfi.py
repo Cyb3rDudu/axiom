@@ -23,8 +23,9 @@ from __future__ import annotations
 import re
 import zipfile
 from html.parser import HTMLParser
-from pathlib import Path
 from typing import Any
+
+from axiom_compute_worker.opf_spine import parse_spine_hrefs
 
 # Void elements in HTML that never have a closing tag (HTML5 spec).
 _VOID_TAGS = frozenset({"img", "br", "hr", "input", "meta", "link", "area",
@@ -189,37 +190,12 @@ class _CFICollector(HTMLParser):
 
 
 def _parse_opf_spine(epub: zipfile.ZipFile) -> list[str]:
-    """Return the ordered list of XHTML file paths from the OPF spine."""
-    try:
-        container = epub.read("META-INF/container.xml").decode("utf-8", errors="replace")
-    except KeyError:
-        return []
-    opf_match = re.search(r'full-path="([^"]+)"', container)
-    if not opf_match:
-        return []
-    opf_path = opf_match.group(1)
-    try:
-        opf = epub.read(opf_path).decode("utf-8", errors="replace")
-    except KeyError:
-        return []
-    opf_dir = str(Path(opf_path).parent)
+    """Ordered list of resolved XHTML-ish file paths from the OPF spine.
 
-    id_to_href: dict[str, str] = {}
-    for m in re.finditer(r'<item[^>]*\bid="([^"]+)"[^>]*\bhref="([^"]+)"', opf):
-        id_to_href[m.group(1)] = m.group(2)
-    for m in re.finditer(r'<item[^>]*\bhref="([^"]+)"[^>]*\bid="([^"]+)"', opf):
-        id_to_href[m.group(2)] = m.group(1)
-
-    spine_ids: list[str] = []
-    for m in re.finditer(r'<itemref[^>]*\bidref="([^"]+)"', opf):
-        spine_ids.append(m.group(1))
-
-    hrefs: list[str] = []
-    for sid in spine_ids:
-        href = id_to_href.get(sid, "")
-        if href:
-            full = str(Path(opf_dir) / href) if opf_dir else href
-            hrefs.append(full)
+    Delegates to the shared resolver (opf_spine.parse_spine_hrefs) so
+    health, CFI and pagelist agree on one proven resolution path
+    (normpath, pre-unquote fragment split, .htm, case drift)."""
+    _, hrefs = parse_spine_hrefs(epub)
     return hrefs
 
 
@@ -238,7 +214,7 @@ def build_cfi_map(epub_path: str) -> list[dict[str, Any]]:
     spine_hrefs = _parse_opf_spine(epub)
     if not spine_hrefs:
         spine_hrefs = sorted(n for n in epub.namelist()
-                             if n.endswith((".html", ".xhtml"))
+                             if n.endswith((".html", ".htm", ".xhtml"))
                              and not n.startswith("META-INF/"))
 
     all_entries: list[dict[str, Any]] = []

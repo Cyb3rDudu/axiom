@@ -19,9 +19,8 @@ import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
-from posixpath import dirname as _posix_dirname
-from posixpath import normpath as _normpath
-from urllib.parse import unquote
+
+from axiom_compute_worker.opf_spine import parse_spine_hrefs
 
 logger = logging.getLogger(__name__)
 
@@ -76,53 +75,12 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
     reasons = []
     verdict = "🟢"
 
-    # 1) zip/container/OPF/spine — structural presence
-    opf_ok = False
-    manifest: dict[str, str] = {}
-    opf_dir = ""
-    spine_idrefs: list[str] = []
-    try:
-        container = epub.read("META-INF/container.xml").decode("utf-8", "replace")
-        m = re.search(r'full-path="([^"]+)"', container)
-        if m and m.group(1) in names:
-            opf_path = m.group(1)
-            opf_dir = _posix_dirname(opf_path)
-            opf = epub.read(opf_path).decode("utf-8", "replace")
-            opf_ok = bool(re.search(r"<spine", opf))
-            # #378 — derive spine docs from the OPF itself instead of
-            # guessing by extension: Wiley & co. legally use .htm filenames
-            # that the old .xhtml/.html filter missed entirely.
-            for item in re.findall(r"<item\b[^>]*/?>", opf):
-                i_id = re.search(r'id="([^"]+)"', item)
-                i_href = re.search(r'href="([^"]+)"', item)
-                if i_id and i_href:
-                    # Keep the raw href — fragments (#…) must be split off
-                    # BEFORE percent-decoding (RFC 3986): a literal # in a
-                    # filename is legally encoded as %23 and becomes
-                    # indistinguishable from the separator after unquote.
-                    manifest[i_id.group(1)] = i_href.group(1)
-            for ref in re.findall(r"<itemref\b[^>]*/?>", opf):
-                r_id = re.search(r'idref="([^"]+)"', ref)
-                if r_id:
-                    spine_idrefs.append(r_id.group(1))
-    except KeyError:
-        pass
-    if spine_idrefs and manifest:
-        base = f"{opf_dir}/" if opf_dir else ""
-        # Normalization + membership check, proven class (jobs CVM26KLA/
-        # FFMTJA3S, cf. epub_repair.normalize_entry_paths): manifest hrefs
-        # may carry ../ segments, ./ prefixes, or fragments — resolve to a
-        # real zip entry and never invent or crash on unresolvable targets.
-        spine_docs = []
-        name_set = set(names)
-        for rid in spine_idrefs:
-            href = manifest.get(rid)
-            if not href:
-                continue
-            target = _normpath(base + unquote(href.split("#", 1)[0]))
-            if target in name_set:
-                spine_docs.append(target)
-    else:
+    # 1) zip/container/OPF/spine — structural presence. Spine docs come
+    # from the shared OPF resolver (opf_spine.parse_spine_hrefs) instead
+    # of extension guessing: Wiley & co. legally use .htm filenames that
+    # the old .xhtml/.html-only filter missed entirely (#378).
+    opf_ok, spine_docs = parse_spine_hrefs(epub)
+    if not spine_docs:
         # Fallback for OPFs we could not fully parse (missing manifest or
         # spine idrefs): extension heuristic, .htm included (#378).
         spine_docs = [
@@ -154,7 +112,9 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
     for n in spine_docs[:50]:
         try:
             raw = epub.read(n).decode("utf-8", "replace")
-        except KeyError:  # unresolvable entry: skip, never crash the probe
+        except (KeyError, zipfile.BadZipFile, RuntimeError):
+            # Unresolvable entry (KeyError), corrupted CRC (BadZipFile),
+            # or an encrypted entry (RuntimeError): skip, never crash.
             continue
         text = re.sub(r"<[^>]+>", " ", raw)
         total_chars += len(re.sub(r"\s", "", text))

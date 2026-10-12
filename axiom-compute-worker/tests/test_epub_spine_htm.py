@@ -137,6 +137,53 @@ def test_percent_encoded_hash_in_filename_resolves(tmp_path):
     assert result["spine_docs"] == 1
 
 
+def test_prefixed_and_single_quoted_opf_parses(tmp_path):
+    """Review-MINOR: opf:-Präfix und Single-Quote-Attribute sind legal —
+    der alte Regex-Parser fiel hier auf den Endungs-Filter zurück."""
+    opf = """<?xml version="1.0"?>
+<opf:package xmlns:opf='http://www.idpf.org/2007/opf' version='2.0'>
+ <opf:manifest>
+  <opf:item id='c1' href='c1.htm' media-type='application/xhtml+xml'/>
+ </opf:manifest>
+ <opf:spine><opf:itemref idref='c1'/></opf:spine>
+</opf:package>
+"""
+    container = """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+ <rootfiles><rootfile full-path="content.opf"
+  media-type="application/oebps-package+xml"/></rootfiles>
+</container>
+"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", container)
+        z.writestr("content.opf", opf)
+        z.writestr("c1.htm", _TEXT)
+    path = tmp_path / "prefixed.epub"
+    path.write_bytes(buf.getvalue())
+    result = analyze_epub(str(path))
+    assert result["text_layer"] is True
+    assert result["spine_docs"] == 1
+
+
+def test_zip_entry_case_drift_resolves(tmp_path):
+    """Manifest-href weicht im Case vom Zip-Eintrag ab → Auflösung über
+    Case-Fallback statt stiller Verwurf."""
+    opf = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+ <metadata/><manifest>
+  <item id="c1" href="Text/C1.HTM" media-type="application/xhtml+xml"/>
+ </manifest>
+ <spine><itemref idref="c1"/></spine>
+</package>
+"""
+    path = _epub_file(tmp_path, opf, {"OEBPS/text/c1.htm": _TEXT})
+    result = analyze_epub(path)
+    assert result["text_layer"] is True
+    assert result["spine_docs"] == 1
+
+
 def test_unresolvable_href_is_skipped_not_fatal(tmp_path):
     """href zeigt auf nicht vorhandenen Eintrag + Fragment-Suffix: Eintrag
     wird übersprungen, analysierbare Docs zählen trotzdem, kein Crash."""
