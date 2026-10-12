@@ -9,7 +9,11 @@ Proven classes this consolidates (#378 and its review rounds):
 - namespaced/prefixed OPF markup that regex parsers miss.
 
 Contract: resolve every spine itemref to a REAL zip entry name — never
-invent targets, never return unresolvable paths.
+invent targets, never return unresolvable paths. The result is
+SLOT-FAITHFUL: one entry per spine itemref, None for unresolvable
+hrefs. Callers that use the list position as spine step (CFI, pagelist)
+MUST enumerate the slots and skip None so indices stay stable;
+callers that just need the documents filter None out.
 """
 from __future__ import annotations
 
@@ -29,8 +33,12 @@ def _find_all(root: ET.Element, name: str) -> list[ET.Element]:
     return [el for el in root.iter() if _local(el.tag) == name]
 
 
-def parse_spine_hrefs(epub: zipfile.ZipFile) -> tuple[bool, list[str]]:
-    """Return (opf_spine_present, resolved spine entry names in order).
+def parse_spine_hrefs(epub: zipfile.ZipFile) -> tuple[bool, list[str | None]]:
+    """Return (opf_spine_present, slot-faithful spine entries in order).
+
+    One list entry per spine <itemref>: the resolved zip name, or None
+    when the href does not resolve — slot positions are preserved so
+    spine-step indexing (CFI /6/{(i+1)*2}) never shifts.
 
     opf_spine_present is True when container.xml + OPF + <spine> are
     readable — independent of whether every href resolves.
@@ -71,14 +79,17 @@ def parse_spine_hrefs(epub: zipfile.ZipFile) -> tuple[bool, list[str]]:
     names = set(epub.namelist())
     lower_map = {n.lower(): n for n in names}
     opf_dir = full_path.rpartition("/")[0]
-    resolved: list[str] = []
+    resolved: list[str | None] = []
     for ref in _find_all(spines[0], "itemref"):
         href = manifest.get(ref.get("idref") or "")
         if not href:
+            resolved.append(None)  # slot preserved, target unresolvable
             continue
         target = normpath(_pjoin(opf_dir, unquote(href.split("#", 1)[0])))
         if target in names:
             resolved.append(target)
         elif target.lower() in lower_map:  # zip entry case drift
             resolved.append(lower_map[target.lower()])
+        else:
+            resolved.append(None)
     return True, resolved

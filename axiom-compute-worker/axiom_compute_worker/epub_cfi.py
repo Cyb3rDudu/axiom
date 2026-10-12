@@ -189,12 +189,15 @@ class _CFICollector(HTMLParser):
             self._current_text += data
 
 
-def _parse_opf_spine(epub: zipfile.ZipFile) -> list[str]:
-    """Ordered list of resolved XHTML-ish file paths from the OPF spine.
+def _parse_opf_spine(epub: zipfile.ZipFile) -> list[str | None]:
+    """SLOT-FAITHFUL ordered spine list from the OPF (shared resolver).
 
-    Delegates to the shared resolver (opf_spine.parse_spine_hrefs) so
-    health, CFI and pagelist agree on one proven resolution path
-    (normpath, pre-unquote fragment split, .htm, case drift)."""
+    Delegates to opf_spine.parse_spine_hrefs so health, CFI and
+    pagelist agree on one proven resolution path (normpath, pre-unquote
+    fragment split, .htm, case drift). One entry per <itemref>; None
+    marks an unresolvable slot — callers that use positions as spine
+    steps MUST keep the slot and skip None (index stability, review
+    MAJOR: ghost spine items must not shift CFI indices)."""
     _, hrefs = parse_spine_hrefs(epub)
     return hrefs
 
@@ -212,13 +215,15 @@ def build_cfi_map(epub_path: str) -> list[dict[str, Any]]:
         return []
 
     spine_hrefs = _parse_opf_spine(epub)
-    if not spine_hrefs:
+    if not any(h is not None for h in spine_hrefs):
         spine_hrefs = sorted(n for n in epub.namelist()
                              if n.endswith((".html", ".htm", ".xhtml"))
                              and not n.startswith("META-INF/"))
 
     all_entries: list[dict[str, Any]] = []
     for spine_idx, href in enumerate(spine_hrefs):
+        if href is None:  # unresolvable slot: keep index, skip doc
+            continue
         candidates = [href, href.replace("\\", "/")]
         for name in epub.namelist():
             if name.endswith(href) or href.endswith(name):

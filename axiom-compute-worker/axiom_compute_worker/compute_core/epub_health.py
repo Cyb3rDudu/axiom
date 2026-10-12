@@ -79,7 +79,9 @@ def analyze_epub(path: str, epubcheck_cmd: str | None = None) -> dict:
     # from the shared OPF resolver (opf_spine.parse_spine_hrefs) instead
     # of extension guessing: Wiley & co. legally use .htm filenames that
     # the old .xhtml/.html-only filter missed entirely (#378).
-    opf_ok, spine_docs = parse_spine_hrefs(epub)
+    opf_ok, resolved = parse_spine_hrefs(epub)
+    # None slots dropped — health only needs the readable documents.
+    spine_docs = [n for n in resolved if n]
     if not spine_docs:
         # Fallback for OPFs we could not fully parse (missing manifest or
         # spine idrefs): extension heuristic, .htm included (#378).

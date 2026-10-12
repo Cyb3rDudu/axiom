@@ -236,6 +236,8 @@ def parse_page_map(epub_path: str) -> dict[str, Any]:
     dialects: set[str] = set()
     raw_names = epub.namelist()
     for spine_idx, href in enumerate(spine_hrefs):
+        if href is None:  # slot-treue Indizes: None skippen, nicht shiften
+            continue
         raw = None
         for c in (href, href.replace("\\", "/")):
             for name in raw_names:
@@ -510,11 +512,11 @@ def _find_nav(epub: zipfile.ZipFile, opf_path: str) -> dict[str, str]:
     return {}
 
 
-def _resolve_spine(href: str, spine_hrefs: list[str]) -> int | None:
+def _resolve_spine(href: str, spine_hrefs: list[str | None]) -> int | None:
     """Spine index for a (possibly relative) href — matched by suffix."""
     tail = href.split("#")[0]
     for i, s in enumerate(spine_hrefs):
-        if s == tail or s.endswith("/" + tail) or tail.endswith(s):
+        if s and (s == tail or s.endswith("/" + tail) or tail.endswith(s)):
             return i
     return None
 
@@ -541,7 +543,7 @@ def verify_print_folios(
     except (zipfile.BadZipFile, FileNotFoundError):
         return empty
     spine_hrefs = _parse_opf_spine(epub)
-    if not spine_hrefs or not anchors:
+    if not any(h is not None for h in spine_hrefs) or not anchors:
         epub.close()
         return empty
 
@@ -554,6 +556,8 @@ def verify_print_folios(
     opf_path = next((n for n in raw_names if n.lower().endswith(".opf")), "")
     nav = _find_nav(epub, opf_path)
     for idx, href in enumerate(spine_hrefs):
+        if href is None:  # slot-treue Indizes
+            continue
         if idx >= first_anchor_spine:
             break
         raw = None

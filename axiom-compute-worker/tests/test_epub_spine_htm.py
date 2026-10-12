@@ -184,6 +184,32 @@ def test_zip_entry_case_drift_resolves(tmp_path):
     assert result["spine_docs"] == 1
 
 
+def test_ghost_spine_item_does_not_shift_cfi_slots(tmp_path):
+    """Review-MAJOR: ein nicht auflösendes Spine-Item (Slot 0) darf die
+    CFI-Spine-Indizes der Folgedokumente nicht verschieben — c1 ist
+    Spine-Slot 1, also epubcfi(/6/4!/4/2), NICHT /6/2."""
+    from axiom_compute_worker.epub_cfi import build_cfi_map
+
+    opf = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+ <metadata/><manifest>
+  <item id="ghost" href="ghost.xhtml" media-type="application/xhtml+xml"/>
+  <item id="c1" href="c1.htm" media-type="application/xhtml+xml"/>
+  <item id="c2" href="c2.htm" media-type="application/xhtml+xml"/>
+ </manifest>
+ <spine><itemref idref="ghost"/><itemref idref="c1"/><itemref idref="c2"/></spine>
+</package>
+"""
+    path = _epub_file(tmp_path, opf, {
+        "OEBPS/c1.htm": _TEXT, "OEBPS/c2.htm": _TEXT,
+    })
+    entries = build_cfi_map(path)
+    spines = sorted({e["spine"] for e in entries})
+    assert spines == [1, 2]  # Slot 0 bleibt Ghost, Indizes shiften nicht
+    assert all(e["cfi"].startswith("epubcfi(/6/4!") or
+               e["cfi"].startswith("epubcfi(/6/6!") for e in entries)
+
+
 def test_unresolvable_href_is_skipped_not_fatal(tmp_path):
     """href zeigt auf nicht vorhandenen Eintrag + Fragment-Suffix: Eintrag
     wird übersprungen, analysierbare Docs zählen trotzdem, kein Crash."""
