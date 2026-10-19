@@ -50,6 +50,9 @@ type envRow struct {
 // MUST stay complete over config.go's reader calls — TestEffectiveTableCoversAllReadKeys enforces it.
 var envRows = []envRow{
 	{"AXIOM_ZOTERO_BASE", "ZoteroBaseURL", false},
+	// #379 sync path translation (container deployments): raw pair list,
+	// parsed at composition startup with fail-fast on malformed values.
+	{"AXIOM_ZOTERO_PATH_MAP", "ZoteroPathMap", false},
 	{"AXIOM_ZOTERO_LIBRARY", "ZoteroLibraryID", false},
 	// DM07 #316 / #368: the store DSN row — secret: config.sqlite carries
 	// references only, the value rides env / the OS secret store.

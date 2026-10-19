@@ -246,6 +246,16 @@ func Select(cfg config.Config, logger *log.Logger, ports Ports, roles ...Role) (
 			}
 		}
 	}
+	// #379 sync path translation: parse + install BEFORE anything starts.
+	// The map lives at the LocalFilePath derivation point, so every sync
+	// consumer (mirror projection, store intake, repair invoker) sees the
+	// same translated path. Malformed input is a half-wiring — refuse to
+	// start, never a silent no-op; empty is the identity (no translation).
+	pairs, err := zoteroprovider.ParsePathMap(cfg.ZoteroPathMap)
+	if err != nil {
+		return nil, fmt.Errorf("composition: AXIOM_ZOTERO_PATH_MAP=%q invalid: %v — refusing to start half-wired (expected HOST_PREFIX:CONTAINER_PREFIX, comma-separated for more than one pair)", cfg.ZoteroPathMap, err)
+	}
+	zoteroprovider.SetPathPairs(pairs)
 	if set[RoleStore] && cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("composition: role %q selected but AXIOM_STORE_DATABASE_URL is empty — the store port is not startable; set the DSN or serve api-only", RoleStore)
 	}

@@ -21,6 +21,15 @@ type Config struct {
 	ZoteroBaseURL string
 	// ZoteroLibraryID is the library prefix, e.g. users/0 for the local user.
 	ZoteroLibraryID string
+	// ZoteroPathMap is the sync path translation for containerized
+	// deployments (#379): HOST_PREFIX:CONTAINER_PREFIX, comma-separated
+	// for more than one pair. The Zotero local API reports host-absolute
+	// file:// paths; inside the container the blobs live elsewhere. The
+	// value is parsed and installed by composition startup (fail-fast on
+	// malformed input) at the LocalFilePath derivation point, so mirror
+	// projection, store intake and repair invoker all see the translated
+	// path. Empty = no translation (byte-identical paths).
+	ZoteroPathMap string
 
 	// DatabaseURL is the Postgres+pgvector DSN.
 	DatabaseURL string
@@ -265,6 +274,7 @@ func Load() Config {
 	cfg := Config{
 		ZoteroBaseURL:   env("AXIOM_ZOTERO_BASE", defaultZoteroBase),
 		ZoteroLibraryID: env("AXIOM_ZOTERO_LIBRARY", defaultLibraryID),
+		ZoteroPathMap:   env("AXIOM_ZOTERO_PATH_MAP", ""),
 		// DM07 #316 / #368: the store DSN — canonical AXIOM_STORE_DATABASE_URL
 		// only (the legacy AXIOM_DATABASE_URL fallback is gone; an unknown
 		// key is refused loudly with its canonical successor).
