@@ -9,13 +9,20 @@
 # the heavy GPU deps of the real backend are out of scope for the
 # topology proof (the processor contract is backend-transparent).
 FROM golang:1.26 AS build
+# Version stamp + port guard: without BuildType=release the binary is a
+# debug build and refuses the production ports (AXIOM_ALLOW_DEBUG_BIND would
+# only mask that). Same ldflags as the Makefile `rag` target.
+ARG VERSION=dev
+ARG COMMIT=none
 WORKDIR /src
 # layer-cache friendliness: modules first, then sources
 WORKDIR /src/axiom
 COPY axiom/go.mod axiom/go.sum ./
 RUN go mod download
 COPY axiom ./
-RUN CGO_ENABLED=0 go build -o /out/axiom ./cmd/axiom
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X github.com/Cyb3rDudu/axiom/axiom/internal/version.Version=${VERSION} -X github.com/Cyb3rDudu/axiom/axiom/internal/version.Commit=${COMMIT} -X github.com/Cyb3rDudu/axiom/axiom/internal/version.BuildType=release" \
+    -o /out/axiom ./cmd/axiom
 
 FROM python:3.11-slim
 # pandoc: the EPUB lane shells out to it (same as the CI runner job)
