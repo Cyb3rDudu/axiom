@@ -1,0 +1,77 @@
+# Dockerfile.worker — the REAL-compute worker image (halo / AMD Strix Halo,
+# gfx1151). Companion to Dockerfile (the light/reference topology image):
+# same entrypoint contract, but carries the full heavy stack
+# (requirements.txt + requirements-heavy.txt) with AMD per-target ROCm
+# wheels, so AXIOM_PROCESSOR_COMPUTE=real runs on the Radeon 8060S.
+#
+# WHY a per-target wheel index: gfx1151 is NOT in the standard
+# download.pytorch.org ROCm wheels (gfx110x only; reports of segfaults on
+# Strix Halo). AMD publishes self-contained gfx1151 builds via TheRock:
+#   https://rocm.nightlies.amd.com/v2/gfx1151/
+# Those wheels bundle the ROCm userspace runtime — the container needs no
+# /opt/rocm; only host kernel access via --device /dev/kfd --device /dev/dri.
+#
+# Build (repo root as context, rootful nerdctl):
+#   sudo nerdctl build -f deploy/container/Dockerfile.worker \
+#        -t axiom-compute-worker .
+#
+# Run (GPU passthrough — plain device cgroup grants, no container toolkit):
+#   sudo nerdctl run --rm \
+#        --device /dev/kfd --device /dev/dri \
+#        --group-add video --group-add render \
+#        -e AXIOM_PROCESSOR_COMPUTE=real \
+#        axiom-compute-worker worker
+#
+# The torch pin PRECEDES the requirements installs on purpose: marker-pdf /
+# FlagEmbedding / gliner all declare unpinned torch deps and would otherwise
+# pull the default (CUDA/plain) wheel and overwrite the ROCm one.
+FROM python:3.11-slim
+
+# pandoc: the EPUB lane shells out to it (same as the base image and the
+# CI runner job). libatomic1/libgomp1/libstdc++6: the TheRock torch wheel's
+# rocm_sdk preload and libtorch dlopen them (not in python:slim). No ROCm
+# userspace packages needed otherwise — the wheels are self-contained.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pandoc libatomic1 libgomp1 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/axiom/worker
+
+# 1) ROCm torch for gfx1151 FIRST (self-contained TheRock wheels):
+#    --index-url ONLY — with PyPI as an extra index pip prefers the higher
+#    plain (CUDA-less) version from PyPI (observed: torch-2.14.1 manylinux).
+#    Local version label (+rocm…) also sorts BELOW PyPI releases, so the pin
+#    must be exact. Bump by checking the index for the newest cp311 linux
+#    wheel: https://rocm.nightlies.amd.com/v2/gfx1151/torch/
+#    Note: torch 2.9.1 is below the 2.13 the MPS stack was verified with; the
+#    heavy requirements do not pin torch, and marker/surya/gliner floors are
+#    comfortably below 2.9.
+ARG ROCM_WHEEL_INDEX=https://rocm.nightlies.amd.com/v2/gfx1151/
+ARG TORCH_ROCM_VERSION=2.9.1+rocm7.13.0a20260501
+RUN pip install --no-cache-dir \
+        --index-url ${ROCM_WHEEL_INDEX} \
+        "torch==${TORCH_ROCM_VERSION}"
+
+# 2) Light deps, then the heavy stack. torch is already satisfied, pip
+#    keeps the ROCm wheel (requirements do not pin a torch version).
+COPY axiom-compute-worker/requirements.txt /tmp/requirements.txt
+COPY axiom-compute-worker/requirements-heavy.txt /tmp/requirements-heavy.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements-heavy.txt
+
+COPY axiom-compute-worker/axiom_compute_worker ./axiom_compute_worker
+COPY --chmod=0755 deploy/container/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+# Same uid 1100 runtime user and state-root contract as the base image.
+RUN useradd --system --create-home --uid 1100 axiom \
+    && mkdir -p /var/lib/axiom /home/axiom/.cache/huggingface \
+    && chown -R axiom:axiom /var/lib/axiom /home/axiom/.cache
+USER axiom
+
+# HF model cache lands under the runtime user's home; mount a named volume
+# at /home/axiom/.cache/huggingface so weights survive container recycling.
+ENV HF_HOME=/home/axiom/.cache/huggingface \
+    PYTORCH_ROCM_ARCH=gfx1151 \
+    AXIOM_PROCESSOR_COMPUTE=real
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

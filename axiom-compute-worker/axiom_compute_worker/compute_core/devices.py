@@ -32,7 +32,6 @@ class HardwareDetector:
     def __init__(self):
         self.system = platform.system()
         self.force_cpu = os.getenv("FORCE_CPU_MODE", "false").lower() == "true"
-        self.preferred_device = os.getenv("PREFERRED_DEVICE_TYPE", "auto").lower()
         self._device_info = None
 
     def detect_hardware(self) -> dict[str, Any]:
