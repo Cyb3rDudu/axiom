@@ -120,7 +120,7 @@ func TestRunCanonicalLosslessAndNoAnnotateEnqueue(t *testing.T) {
 	}
 
 	repoObj := repo.New(d.Pool())
-	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool(), nil), repoObj, src.baseURL, "users/0", nil, log.Default())
 	res, err := svc.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -204,7 +204,7 @@ func TestCanonicalVersionGuard(t *testing.T) {
 	src.items = []zoteroprovider.CanonicalItem{itemV2, att}
 
 	rep := repo.New(d.Pool())
-	svc := New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(rep.Pool(), nil), rep, src.baseURL, "users/0", nil, log.Default())
 	res1, err := svc.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("first canonical: %v", err)
@@ -267,13 +267,13 @@ func TestCanonicalBootstrapOldCursor(t *testing.T) {
 	src.items = []zoteroprovider.CanonicalItem{mkItemJSON("B1", "book", "", "A Book", nil), att}
 
 	repoObj := repo.New(d.Pool())
-	mir := mirror.New(repoObj.Pool())
+	mir := mirror.New(repoObj.Pool(), nil)
 	// The legacy document cursor is irrelevant: the canonical cursor is separate
 	// and starts at 0, so the first canonical sync is a full snapshot.
 	if _, err := mir.EnsureSource(ctx, src.baseURL, "users/0", src.serverID); err != nil {
 		t.Fatal(err)
 	}
-	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool(), nil), repoObj, src.baseURL, "users/0", nil, log.Default())
 	res, err := svc.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)

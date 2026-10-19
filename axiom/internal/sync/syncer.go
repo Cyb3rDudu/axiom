@@ -35,6 +35,10 @@ type Service struct {
 	libID   string
 	log     *log.Logger
 
+	// pathPairs is the #379 container path map: TranslatePath applied to
+	// every LocalFilePath derivation below (nil = identity).
+	pathPairs []zoteroprovider.PathPair
+
 	// contextual (#255/#262): the resolved rules (collection zotero_keys +
 	// tag names). Zero value = no rules = everything citable. ctxPaths/ctxTags
 	// are the configured env INPUTS kept for the post-sync re-resolve;
@@ -255,8 +259,8 @@ func (s *Service) mir() *mirror.Repo { return s.mirror }
 // repo (the mirror's home since #358) and the Store repo (the
 // store-effect phase's handle). mirror or store may be nil on the
 // degraded boot path.
-func New(src zoteroprovider.Source, mir *mirror.Repo, store *repo.Repo, baseURL, libID string, log *log.Logger) *Service {
-	return &Service{src: src, store: store, mirror: mir, baseURL: baseURL, libID: libID, log: log}
+func New(src zoteroprovider.Source, mir *mirror.Repo, store *repo.Repo, baseURL, libID string, pathPairs []zoteroprovider.PathPair, log *log.Logger) *Service {
+	return &Service{src: src, store: store, mirror: mir, baseURL: baseURL, libID: libID, pathPairs: pathPairs, log: log}
 }
 
 // Result is a summary of one canonical sync run exposed by POST /api/zotero/sync.
@@ -461,7 +465,7 @@ func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, b
 			return nil, err
 		}
 		storeVer[key] = ver
-		path := zoteroprovider.LocalFilePath(itemLocalPathFromEnv([]byte(env)))
+		path := zoteroprovider.TranslatePath(s.pathPairs, zoteroprovider.LocalFilePath(itemLocalPathFromEnv([]byte(env))))
 		out[key] = mirror.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
 	}
 	rows.Close()
@@ -478,7 +482,7 @@ func (s *Service) prepareAttachmentFiles(ctx context.Context, sourceID string, b
 		if sv, ok := storeVer[dims.Key]; ok && sv > it.Version {
 			continue // rejected older delta: keep committed path/hash
 		}
-		path := zoteroprovider.LocalFilePath(itemLocalPathFor(it))
+		path := zoteroprovider.TranslatePath(s.pathPairs, zoteroprovider.LocalFilePath(itemLocalPathFor(it)))
 		out[dims.Key] = mirror.AttachmentFileInfo{LocalPath: path, Exists: statFile(path)}
 	}
 

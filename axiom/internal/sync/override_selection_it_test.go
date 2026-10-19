@@ -57,8 +57,8 @@ func TestOverrideOnceAndPersistedSelectionIT(t *testing.T) {
 	src.items[1].Envelope = env
 
 	repoObj := repo.New(d.Pool())
-	mir := mirror.New(repoObj.Pool())
-	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
+	mir := mirror.New(repoObj.Pool(), nil)
+	svc := New(src, mirror.New(repoObj.Pool(), nil), repoObj, src.baseURL, "users/0", nil, log.Default())
 
 	jobCount := func(sourceID string) int {
 		var n int
@@ -187,8 +187,8 @@ func TestCollectionSelectionGatesSyncIT(t *testing.T) {
 	}
 
 	repoObj := repo.New(d.Pool())
-	mir := mirror.New(repoObj.Pool())
-	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
+	mir := mirror.New(repoObj.Pool(), nil)
+	svc := New(src, mirror.New(repoObj.Pool(), nil), repoObj, src.baseURL, "users/0", nil, log.Default())
 
 	delJobs := func(sourceID string) {
 		if _, err := d.Pool().Exec(ctx, `
@@ -300,7 +300,7 @@ func TestSyncIncludeOverrideEnqueuesJob(t *testing.T) {
 	src.items[1].Envelope = env
 
 	repoObj := repo.New(d.Pool())
-	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool(), nil), repoObj, src.baseURL, "users/0", nil, log.Default())
 
 	// first sync projects + enqueues (the document enters the world)
 	res, err := svc.Run(ctx, nil)
@@ -399,7 +399,7 @@ func TestSyncIncludeUnderCollectionSelectionInBase(t *testing.T) {
 	}
 
 	repoObj := repo.New(d.Pool())
-	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(repoObj.Pool(), nil), repoObj, src.baseURL, "users/0", nil, log.Default())
 
 	// collection-include selection on the healed doc's collection —
 	// CLEANUP: the sync ITs share the DSN database; a leftover selection

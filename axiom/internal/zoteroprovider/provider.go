@@ -137,6 +137,10 @@ type Options struct {
 	APIKey string
 	// Store carries lease, audit and anchors (required).
 	Store ProviderStore
+	// PathPairs is the #379 container path map applied to enclosure
+	// readbacks (TranslatePath on the LocalFilePath result). nil/empty
+	// = identity — host-identical paths inside and outside the container.
+	PathPairs []PathPair
 	// Owner identifies this writer in the lease (host:pid:nonce).
 	Owner string
 	// LeaseTTL overrides the lease TTL (tests); <=0 = library default.
@@ -156,6 +160,8 @@ type Provider struct {
 	owner  string
 	ttl    time.Duration
 	cancel context.CancelFunc
+
+	pathPairs []PathPair // #379 container path map (Options.PathPairs)
 
 	mu     sync.Mutex
 	cat    *catalogSnapshot
@@ -1026,7 +1032,7 @@ func (p *Provider) readbackRendition(ctx context.Context, key string, d library.
 		if eerr != nil {
 			return 0, 0, mapWriteErr(eerr, key, "rendition file readback")
 		}
-		local := enclosurePath(eraw)
+		local := p.enclosurePath(eraw)
 		if local == "" {
 			return 0, 0, renditionBroken("attachment %s carries no local enclosure path (file-less leftover?)", key)
 		}
@@ -1056,7 +1062,7 @@ func versionOf(v string) int64 {
 // enclosurePath extracts links.enclosure.href from a raw item envelope,
 // maps file:/// URLs onto the local path, and percent-DECODES it (the
 // href arrives URL-encoded; spaces are %20). "" when absent.
-func enclosurePath(raw []byte) string {
+func (p *Provider) enclosurePath(raw []byte) string {
 	var env struct {
 		Links struct {
 			Enclosure struct {
@@ -1069,9 +1075,9 @@ func enclosurePath(raw []byte) string {
 	}
 	href := env.Links.Enclosure.Href
 	// Single derivation point (#379): the write-path readback shares the
-	// URI→path mapping — container path map included — with LocalFilePath
-	// (identical semantics without a map: strip file://, percent-decode).
-	return LocalFilePath(href)
+	// URI→path derivation with the sync side (strip file://,
+	// percent-decode), then applies the carried container path map.
+	return TranslatePath(p.pathPairs, LocalFilePath(href))
 }
 
 func (p *Provider) findTaggedAttachment(ctx context.Context, contentHash, parentKey string) (string, error) {

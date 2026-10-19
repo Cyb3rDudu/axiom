@@ -62,7 +62,7 @@ func ctxBootSvc(t *testing.T, src zoteroprovider.Source) (*Service, *bytes.Buffe
 		t.Skip("AXIOM_TEST_DATABASE_URL not set; skipping integration test")
 	}
 	buf := &bytes.Buffer{}
-	return New(src, mirror.New(nil), nil, "", "users/0", log.New(buf, "", 0)), buf
+	return New(src, mirror.New(nil, nil), nil, "", "users/0", nil, log.New(buf, "", 0)), buf
 }
 
 // ctxDocClass reads citation_class for a document key.
@@ -132,7 +132,7 @@ func TestContextualBootDegradedNoSyncIT(t *testing.T) {
 	svc, buf := ctxBootSvc(t, src)
 	rep := repo.New(d.Pool())
 	svc.store = rep
-	svc.mirror = mirror.New(rep.Pool())
+	svc.mirror = mirror.New(rep.Pool(), nil)
 
 	if err := svc.InitContextual(ctx, []string{"VWL/Lectures"}, []string{"Vorlesung"}); err != nil {
 		t.Fatalf("#262: boot must succeed degraded on a never-synced DB, got fatal: %v", err)
@@ -190,7 +190,7 @@ func TestContextualBootConvergesAfterFirstSyncIT(t *testing.T) {
 	svc, buf := ctxBootSvc(t, src)
 	rep := repo.New(d.Pool())
 	svc.store = rep
-	svc.mirror = mirror.New(rep.Pool())
+	svc.mirror = mirror.New(rep.Pool(), nil)
 
 	if err := svc.InitContextual(ctx, []string{"VWL/Lectures"}, []string{"Vorlesung"}); err != nil {
 		t.Fatalf("degraded boot: %v", err)
@@ -243,7 +243,7 @@ func TestContextualBootSyncedUnknownStillFatalIT(t *testing.T) {
 	svc, buf := ctxBootSvc(t, src)
 	rep := repo.New(d.Pool())
 	svc.store = rep
-	svc.mirror = mirror.New(rep.Pool())
+	svc.mirror = mirror.New(rep.Pool(), nil)
 	if _, err := svc.Run(ctx, nil); err != nil {
 		t.Fatalf("seed sync: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestContextualBootActiveSurvivesCollectionDeletionIT(t *testing.T) {
 	svc, buf := ctxBootSvc(t, src)
 	rep := repo.New(d.Pool())
 	svc.store = rep
-	svc.mirror = mirror.New(rep.Pool())
+	svc.mirror = mirror.New(rep.Pool(), nil)
 	// Collection-path rule ONLY: the doc carries no ruled tag, so its class
 	// is observable through the collection axis alone.
 	if err := svc.InitContextual(ctx, []string{"VWL/Lectures"}, nil); err != nil {
@@ -371,13 +371,13 @@ func TestContextualActivationFailClosedIT(t *testing.T) {
 	svc, buf := ctxBootSvc(t, src)
 	rep := repo.New(d.Pool())
 	svc.store = rep
-	svc.mirror = mirror.New(rep.Pool())
+	svc.mirror = mirror.New(rep.Pool(), nil)
 	if err := svc.InitContextual(ctx, []string{"VWL/Lectures"}, []string{"Vorlesung"}); err != nil {
 		t.Fatalf("degraded boot: %v", err)
 	}
 
 	// Arm the injected recompute failure for the FIRST sync's activation.
-	seam := &failingCtxAPI{Repo: mirror.New(rep.Pool()), failRecompute: true}
+	seam := &failingCtxAPI{Repo: mirror.New(rep.Pool(), nil), failRecompute: true}
 	svc.SetContextualResolver(seam)
 
 	res, err := svc.Run(ctx, nil)

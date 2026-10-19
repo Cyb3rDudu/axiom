@@ -57,7 +57,7 @@ func newHookService(t *testing.T, cons Consolidator, debounce time.Duration) *Se
 	d := openTestDB(t, ctx)
 	src := &canonicalFake{serverID: "cons197unit", baseURL: newScriptedBase(), version: 1}
 	consRep := repo.New(d.Pool())
-	svc := New(src, mirror.New(consRep.Pool()), consRep, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(consRep.Pool(), nil), consRep, src.baseURL, "users/0", nil, log.Default())
 	svc.SetConsolidator(cons)
 	svc.consolidateDebounce = debounce
 	return svc
@@ -122,7 +122,7 @@ func TestConsolidationHookNoFireOnFailedSync(t *testing.T) {
 	// Empty server id: Run fails BEFORE any apply (source unreachable).
 	src := &canonicalFake{baseURL: newScriptedBase(), version: 1}
 	fcRep := repo.New(d.Pool())
-	svc := New(src, mirror.New(fcRep.Pool()), fcRep, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(fcRep.Pool(), nil), fcRep, src.baseURL, "users/0", nil, log.Default())
 	svc.SetConsolidator(fc)
 	svc.consolidateDebounce = 10 * time.Millisecond
 	if _, err := svc.Run(ctx, nil); err == nil {
@@ -243,7 +243,7 @@ func TestConsolidationHookMergesRealDuplicatesIT(t *testing.T) {
 	d := openTestDB(t, ctx)
 	src := &canonicalFake{serverID: "cons197it", baseURL: newScriptedBase(), version: 1}
 	rep := repo.New(d.Pool())
-	svc := New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(rep.Pool(), nil), rep, src.baseURL, "users/0", nil, log.Default())
 	svc.SetConsolidator(rep) // the REAL consolidation, exactly as main.go wires it
 	svc.consolidateDebounce = 20 * time.Millisecond
 

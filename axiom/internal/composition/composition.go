@@ -142,6 +142,10 @@ type Root struct {
 	ports  Ports
 	roles  map[Role]bool
 
+	// pathPairs is the parsed #379 container path map carried to the
+	// sync service, the mirror repo and the provider options.
+	pathPairs []zoteroprovider.PathPair
+
 	components []Component
 
 	rootCtx context.Context
@@ -251,11 +255,10 @@ func Select(cfg config.Config, logger *log.Logger, ports Ports, roles ...Role) (
 	// consumer (mirror projection, store intake, repair invoker) sees the
 	// same translated path. Malformed input is a half-wiring — refuse to
 	// start, never a silent no-op; empty is the identity (no translation).
-	pairs, err := zoteroprovider.ParsePathMap(cfg.ZoteroPathMap)
+	pathPairs, err := zoteroprovider.ParsePathMap(cfg.ZoteroPathMap)
 	if err != nil {
 		return nil, fmt.Errorf("composition: AXIOM_ZOTERO_PATH_MAP=%q invalid: %v — refusing to start half-wired (expected HOST_PREFIX:CONTAINER_PREFIX, comma-separated for more than one pair)", cfg.ZoteroPathMap, err)
 	}
-	zoteroprovider.SetPathPairs(pairs)
 	if set[RoleStore] && cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("composition: role %q selected but AXIOM_STORE_DATABASE_URL is empty — the store port is not startable; set the DSN or serve api-only", RoleStore)
 	}
@@ -292,12 +295,13 @@ func Select(cfg config.Config, logger *log.Logger, ports Ports, roles ...Role) (
 	}
 
 	r := &Root{
-		cfg:    cfg,
-		logger: logger,
-		ports:  ports,
-		roles:  set,
-		ready:  make(map[Role]*atomic.Bool, len(set)),
-		fatal:  make(chan error, 1),
+		cfg:       cfg,
+		logger:    logger,
+		ports:     ports,
+		roles:     set,
+		pathPairs: pathPairs,
+		ready:     make(map[Role]*atomic.Bool, len(set)),
+		fatal:     make(chan error, 1),
 	}
 	for role := range set {
 		r.ready[role] = &atomic.Bool{}
@@ -754,7 +758,7 @@ func (r *Root) componentsFor() []Component {
 					return fmt.Errorf("library migrate: %w", err)
 				}
 				r.libRepo = pglib.NewStore(libDB.Pool())
-				r.mirrorRepo = mirror.New(libDB.Pool())
+				r.mirrorRepo = mirror.New(libDB.Pool(), r.pathPairs)
 				r.logger.Printf("library: PostgreSQL profile (own database; the Zotero mirror lives here since #358)")
 				// The documents/selection surface is the CODE-MERGED listing:
 				// mirror rows (Library DB) + job/snapshot truth (Store DB).
@@ -861,6 +865,7 @@ func (r *Root) componentsFor() []Component {
 					LibraryID: r.cfg.ZoteroLibraryID,
 					APIKey:    apiKey,
 					Store:     r.libRepo,
+					PathPairs: r.pathPairs,
 				})
 				if perr != nil {
 					return fmt.Errorf("library zotero provider: %w", perr)
@@ -967,7 +972,7 @@ func (r *Root) componentsFor() []Component {
 			if r.mirrorRepo == nil {
 				return fmt.Errorf("sync: no Zotero mirror (the library PostgreSQL profile did not boot — the mirror is Library-database-resident since #358)")
 			}
-			r.syncSvc = axsync.New(r.src, r.mirrorRepo, r.rep, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, r.logger)
+			r.syncSvc = axsync.New(r.src, r.mirrorRepo, r.rep, r.cfg.ZoteroBaseURL, r.cfg.ZoteroLibraryID, r.pathPairs, r.logger)
 			// #255/#262 contextual source class: resolve + validate the
 			// configured rule inputs against the SYNCED canonical state. Boot
 			// ALWAYS succeeds (#262 owner ruling): a never-synced DB degrades

@@ -107,7 +107,7 @@ func TestSyncSplitWorldIT(t *testing.T) {
 	src.items[1].Envelope = env
 
 	rep := repo.New(storeDB.Pool())
-	svc := New(src, mirror.New(libDB.Pool()), rep, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(libDB.Pool(), nil), rep, src.baseURL, "users/0", nil, log.Default())
 
 	res, err := svc.Run(ctx, nil)
 	if err != nil {

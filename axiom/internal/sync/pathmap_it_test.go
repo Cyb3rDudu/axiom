@@ -59,8 +59,8 @@ func TestPathMapMirrorPersistsTranslatedLocalPathIT(t *testing.T) {
 	src.items[1].Envelope = env
 
 	repoObj := repo.New(d.Pool())
-	svc := New(src, mirror.New(repoObj.Pool()), repoObj, src.baseURL, "users/0", log.Default())
-	t.Cleanup(func() { zoteroprovider.SetPathPairs(nil) })
+	// Run 1 uses the no-map service; run 2 constructs a second service
+	// WITH the pairs (the post-deploy shape: config carried by consumers).
 
 	storedPath := func(sourceID string) string {
 		var p string
@@ -73,6 +73,7 @@ func TestPathMapMirrorPersistsTranslatedLocalPathIT(t *testing.T) {
 	}
 
 	// Run 1 — no map installed: the mirror persists the raw host path.
+	svc := New(src, mirror.New(repoObj.Pool(), nil), repoObj, src.baseURL, "users/0", nil, log.Default())
 	res, err := svc.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("run 1: %v", err)
@@ -81,12 +82,13 @@ func TestPathMapMirrorPersistsTranslatedLocalPathIT(t *testing.T) {
 		t.Fatalf("without a map local_path must be the raw host path %q, got %q", hostPath, got)
 	}
 
-	// Run 2 — map installed (the post-deploy shape): the mirror upsert
+	// Run 2 — map carried (the post-deploy shape): the mirror upsert
 	// rewrites the stored path with the translated container path.
-	zoteroprovider.SetPathPairs([]zoteroprovider.PathPair{
+	pairs := []zoteroprovider.PathPair{
 		{From: "/home/dudu/Zotero/storage", To: "/var/lib/axiom/zotero-storage"},
-	})
-	res, err = svc.Run(ctx, nil)
+	}
+	svcMap := New(src, mirror.New(repoObj.Pool(), pairs), repoObj, src.baseURL, "users/0", pairs, log.Default())
+	res, err = svcMap.Run(ctx, nil)
 	if err != nil {
 		t.Fatalf("run 2: %v", err)
 	}
