@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/config"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
 )
 
 func testLogger() *log.Logger { return log.New(os.Stderr, "composition-test: ", log.LstdFlags) }
@@ -124,6 +125,31 @@ func TestSelectRejectsUnknownRole(t *testing.T) {
 	_, err := Select(apiOnlyCfg(0), testLogger(), Ports{}, Role("bogus"))
 	if err == nil || !strings.Contains(err.Error(), "unknown role") {
 		t.Fatalf("unknown role must fail, got: %v", err)
+	}
+}
+
+// TestSelectParsesZoteroPathMap — #379: the sync path translation is
+// validated + installed at composition startup. Malformed values refuse
+// to start (half-wiring guard, never a silent no-op); a valid map is live
+// at the LocalFilePath derivation point before any component runs.
+func TestSelectParsesZoteroPathMap(t *testing.T) {
+	t.Cleanup(func() { zoteroprovider.SetPathPairs(nil) })
+	for _, malformed := range []string{"/no/colon", ":/empty-host", "/x:", "a:/x,broken"} {
+		cfg := apiOnlyCfg(0)
+		cfg.ZoteroPathMap = malformed
+		_, err := Select(cfg, testLogger(), Ports{}, RoleAPI)
+		if err == nil || !strings.Contains(err.Error(), "AXIOM_ZOTERO_PATH_MAP") {
+			t.Fatalf("malformed map %q must fail naming AXIOM_ZOTERO_PATH_MAP, got: %v", malformed, err)
+		}
+	}
+	// Valid map: startup succeeds and the translation is installed.
+	cfg := apiOnlyCfg(0)
+	cfg.ZoteroPathMap = "/home/dudu/Zotero/storage:/var/lib/axiom/zotero-storage"
+	if _, err := Select(cfg, testLogger(), Ports{}, RoleAPI); err != nil {
+		t.Fatalf("valid map must boot, got: %v", err)
+	}
+	if got := zoteroprovider.LocalFilePath("file:///home/dudu/Zotero/storage/a/b.pdf"); got != "/var/lib/axiom/zotero-storage/a/b.pdf" {
+		t.Fatalf("Select must install the map at the derivation point, got %q", got)
 	}
 }
 
