@@ -49,17 +49,20 @@ func PreferredAttachment(atts []Attachment) *Attachment {
 // (e.g. "file:///Users/x/y.pdf" -> "/Users/x/y.pdf"). Percent-escapes are
 // decoded — Zotero reports renamed attachments ("Author - Year - Title.pdf")
 // URL-encoded. Non-file URIs are returned unchanged so a plain path still
-// works; undecodable input falls back to the raw path.
+// works; undecodable input falls back to the raw path. The result is the
+// SINGLE derivation point for local paths (#379): the container path map
+// (AXIOM_ZOTERO_PATH_MAP) is applied here so every consumer — mirror
+// projection, store intake, repair invoker — sees the same translated path.
 func LocalFilePath(uri string) string {
 	const prefix = "file://"
 	if !strings.HasPrefix(uri, prefix) {
-		return uri
+		return translatePath(uri)
 	}
 	raw := strings.TrimPrefix(uri, prefix)
 	if decoded, err := url.PathUnescape(raw); err == nil {
-		return decoded
+		return translatePath(decoded)
 	}
-	return raw
+	return translatePath(raw)
 }
 
 // ContentHash returns a stable sha256 hex digest of a local file's contents,
