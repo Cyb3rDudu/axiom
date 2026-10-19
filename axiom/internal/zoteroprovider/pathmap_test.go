@@ -8,11 +8,9 @@ package zoteroprovider
 
 import "testing"
 
-// withPairs installs pairs for one test and always restores identity.
-func withPairs(t *testing.T, pairs []PathPair) {
-	t.Helper()
-	SetPathPairs(pairs)
-	t.Cleanup(func() { SetPathPairs(nil) })
+// pairs is the shared #379 test map (host Zotero storage → container state).
+func pairs() []PathPair {
+	return []PathPair{{From: "/home/dudu/Zotero/storage", To: "/var/lib/axiom/zotero-storage"}}
 }
 
 func TestParsePathMap(t *testing.T) {
@@ -64,7 +62,7 @@ func TestParsePathMap(t *testing.T) {
 }
 
 func TestTranslatePathSegmentBoundary(t *testing.T) {
-	withPairs(t, []PathPair{{From: "/home/dudu/Zotero/storage", To: "/var/lib/axiom/zotero-storage"}})
+	m := pairs()
 	cases := map[string]string{
 		// Boundary cases: the prefix must end at a path segment.
 		"/home/dudu/Zotero/storage/AB123/file.pdf": "/var/lib/axiom/zotero-storage/AB123/file.pdf",
@@ -78,27 +76,26 @@ func TestTranslatePathSegmentBoundary(t *testing.T) {
 		"relative/path.pdf":          "relative/path.pdf",
 	}
 	for in, want := range cases {
-		if got := LocalFilePath(in); got != want {
-			t.Errorf("LocalFilePath(%q) = %q, want %q", in, got, want)
+		if got := TranslatePath(m, in); got != want {
+			t.Errorf("TranslatePath(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
 func TestTranslatePathFirstMatchWins(t *testing.T) {
-	withPairs(t, []PathPair{
+	m := []PathPair{
 		{From: "/data/zotero", To: "/mnt/z"},
 		{From: "/data", To: "/mnt/data"},
-	})
-	if got := LocalFilePath("/data/zotero/x.pdf"); got != "/mnt/z/x.pdf" {
+	}
+	if got := TranslatePath(m, "/data/zotero/x.pdf"); got != "/mnt/z/x.pdf" {
 		t.Errorf("first pair must win, got %q", got)
 	}
-	if got := LocalFilePath("/data/other/x.pdf"); got != "/mnt/data/other/x.pdf" {
+	if got := TranslatePath(m, "/data/other/x.pdf"); got != "/mnt/data/other/x.pdf" {
 		t.Errorf("second pair must catch the rest, got %q", got)
 	}
 }
 
 func TestLocalFilePathWithoutMapIsByteIdentical(t *testing.T) {
-	withPairs(t, nil) // explicit: no map installed
 	cases := map[string]string{
 		"file:///Users/x/Englert%20-%202019.pdf": "/Users/x/Englert - 2019.pdf",
 		"file:///home/dudu/Zotero/storage/a.pdf": "/home/dudu/Zotero/storage/a.pdf",
@@ -111,13 +108,14 @@ func TestLocalFilePathWithoutMapIsByteIdentical(t *testing.T) {
 	}
 }
 
-func TestLocalFilePathAppliesMapAfterURIDecode(t *testing.T) {
-	withPairs(t, []PathPair{{From: "/home/dudu/Zotero/storage", To: "/var/lib/axiom/zotero-storage"}})
+func TestTranslatePathAppliesAfterURIDecode(t *testing.T) {
+	m := pairs()
 	// Translation applies to the DERIVED path (URI-decoded), so encoded
-	// attachment names inside a mapped prefix survive intact.
-	in := "file:///home/dudu/Zotero/storage/Englert%20-%202019.pdf"
+	// attachment names inside a mapped prefix survive intact — the caller
+	// composes LocalFilePath (pure URI→path) with TranslatePath.
+	in := LocalFilePath("file:///home/dudu/Zotero/storage/Englert%20-%202019.pdf")
 	want := "/var/lib/axiom/zotero-storage/Englert - 2019.pdf"
-	if got := LocalFilePath(in); got != want {
-		t.Errorf("LocalFilePath(%q) = %q, want %q", in, got, want)
+	if got := TranslatePath(m, in); got != want {
+		t.Errorf("TranslatePath(LocalFilePath(...)) = %q, want %q", got, want)
 	}
 }

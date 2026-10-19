@@ -181,7 +181,7 @@ func custITEnv(t *testing.T) (*Server, *repo.Repo, *custWriteZotero, *custSource
 	}, 5)
 
 	rep := repo.New(d.Pool())
-	if _, err := axiomsync.New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default()).Run(ctx, nil); err != nil {
+	if _, err := axiomsync.New(src, mirror.New(rep.Pool(), nil), rep, src.baseURL, "users/0", nil, log.Default()).Run(ctx, nil); err != nil {
 		t.Fatalf("seed sync: %v", err)
 	}
 	t.Cleanup(func() {
@@ -281,7 +281,7 @@ func TestIT_CustodyFullProtocolHealedPreferredAfterSync(t *testing.T) {
 			"contentType": "application/pdf", "filename": "Geursen - 2022 - Nachhaltiges Personalmanagement.pdf",
 		}, healed),
 	}, 6)
-	if _, err := axiomsync.New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default()).Run(ctx, nil); err != nil {
+	if _, err := axiomsync.New(src, mirror.New(rep.Pool(), nil), rep, src.baseURL, "users/0", nil, log.Default()).Run(ctx, nil); err != nil {
 		t.Fatalf("post-custody sync: %v", err)
 	}
 	var pref struct {

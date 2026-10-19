@@ -17,20 +17,25 @@ import (
 	"time"
 
 	"github.com/Cyb3rDudu/axiom/axiom/internal/repo"
+	"github.com/Cyb3rDudu/axiom/axiom/internal/zoteroprovider"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Repo wraps the LIBRARY pool with the Zotero-mirror methods.
 type Repo struct {
 	pool *pgxpool.Pool
+
+	// pathPairs is the #379 container path map: TranslatePath applied to
+	// the local_path projections below (nil = identity).
+	pathPairs []zoteroprovider.PathPair
 }
 
 // New builds a mirror Repo on the Library component's pool. A nil pool is
 // tolerated: the degraded sync boot path constructs the service before
 // any database exists and must not dereference one — mirror calls on
 // such a Repo fail loudly at first use.
-func New(pool *pgxpool.Pool) *Repo {
-	return &Repo{pool: pool}
+func New(pool *pgxpool.Pool, pathPairs []zoteroprovider.PathPair) *Repo {
+	return &Repo{pool: pool, pathPairs: pathPairs}
 }
 
 // Pool returns the underlying pgx pool.

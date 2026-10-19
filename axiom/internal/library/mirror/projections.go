@@ -183,7 +183,7 @@ func (m *Repo) deriveFullProjections(ctx context.Context, tx pgx.Tx, sourceID st
 			DocumentKey: parentKey, AttachmentKey: pref.Key,
 			// the NATIVE path (no file:// scheme) — the store's source
 			// serving opens it directly
-			Version: pref.Version, LocalPath: zoteroprovider.LocalFilePath(pref.LocalPath),
+			Version: pref.Version, LocalPath: zoteroprovider.TranslatePath(m.pathPairs, zoteroprovider.LocalFilePath(pref.LocalPath)),
 			ContentType: meta.contentType, Filename: meta.fileName, LinkMode: meta.linkMode,
 		}
 		if fin.Exists && fin.Hash != "" {
@@ -340,7 +340,7 @@ func (m *Repo) ensureDocumentProjection(ctx context.Context, tx pgx.Tx, sourceID
 // returns its id. linkMode comes from the Zotero raw data (imported_file,
 // linked_file, imported_url, ...).
 func (m *Repo) upsertAttachmentProjection(ctx context.Context, tx pgx.Tx, sourceID, docID, parentKey string, att zoteroprovider.Attachment, deleted bool, linkMode string) (string, error) {
-	native := zoteroprovider.LocalFilePath(att.LocalPath)
+	native := zoteroprovider.TranslatePath(m.pathPairs, zoteroprovider.LocalFilePath(att.LocalPath))
 	var id string
 	err := tx.QueryRow(ctx, `
 		INSERT INTO zotero_attachments (

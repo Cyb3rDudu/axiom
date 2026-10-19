@@ -133,7 +133,6 @@ func TestSelectRejectsUnknownRole(t *testing.T) {
 // to start (half-wiring guard, never a silent no-op); a valid map is live
 // at the LocalFilePath derivation point before any component runs.
 func TestSelectParsesZoteroPathMap(t *testing.T) {
-	t.Cleanup(func() { zoteroprovider.SetPathPairs(nil) })
 	for _, malformed := range []string{"/no/colon", ":/empty-host", "/x:", "a:/x,broken"} {
 		cfg := apiOnlyCfg(0)
 		cfg.ZoteroPathMap = malformed
@@ -142,14 +141,18 @@ func TestSelectParsesZoteroPathMap(t *testing.T) {
 			t.Fatalf("malformed map %q must fail naming AXIOM_ZOTERO_PATH_MAP, got: %v", malformed, err)
 		}
 	}
-	// Valid map: startup succeeds and the translation is installed.
+	// Valid map: startup succeeds and the parsed pairs translate.
 	cfg := apiOnlyCfg(0)
 	cfg.ZoteroPathMap = "/home/dudu/Zotero/storage:/var/lib/axiom/zotero-storage"
 	if _, err := Select(cfg, testLogger(), Ports{}, RoleAPI); err != nil {
 		t.Fatalf("valid map must boot, got: %v", err)
 	}
-	if got := zoteroprovider.LocalFilePath("file:///home/dudu/Zotero/storage/a/b.pdf"); got != "/var/lib/axiom/zotero-storage/a/b.pdf" {
-		t.Fatalf("Select must install the map at the derivation point, got %q", got)
+	pairs, err := zoteroprovider.ParsePathMap(cfg.ZoteroPathMap)
+	if err != nil {
+		t.Fatalf("ParsePathMap: %v", err)
+	}
+	if got := zoteroprovider.TranslatePath(pairs, "/home/dudu/Zotero/storage/a/b.pdf"); got != "/var/lib/axiom/zotero-storage/a/b.pdf" {
+		t.Fatalf("parsed pairs must translate, got %q", got)
 	}
 }
 

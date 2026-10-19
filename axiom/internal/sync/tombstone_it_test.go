@@ -57,7 +57,7 @@ func TestZoteroDeleteBecomesTombstoneIT(t *testing.T) {
 	src.items = []zoteroprovider.CanonicalItem{tombItem("TB1", "", "Tomb Book", 10), tombItem("TA1", "TB1", "", 10)}
 	src.items[1].Envelope = mustEnclosure(src.items[1], pdf)
 	rep := repo.New(d.Pool())
-	svc := New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(rep.Pool(), nil), rep, src.baseURL, "users/0", nil, log.Default())
 
 	res, err := svc.Run(ctx, nil)
 	if err != nil || res.Enqueued != 1 {
@@ -89,7 +89,7 @@ func TestZoteroDeleteBecomesTombstoneIT(t *testing.T) {
 	}
 
 	// The listing shows the tombstone exactly once.
-	mir := mirror.New(d.Pool())
+	mir := mirror.New(d.Pool(), nil)
 	rows, err := mir.ListDocumentsMirror(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +178,7 @@ func TestFullReconcileClearsHeldPhantomsIT(t *testing.T) {
 	src.items = []zoteroprovider.CanonicalItem{tombItem("PB1", "", "Phantom Book", 10), tombItem("PA1", "PB1", "", 10)}
 	src.items[1].Envelope = mustEnclosure(src.items[1], pdf)
 	rep := repo.New(d.Pool())
-	svc := New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(rep.Pool(), nil), rep, src.baseURL, "users/0", nil, log.Default())
 
 	if _, err := svc.Run(ctx, nil); err != nil {
 		t.Fatalf("seed sync: %v", err)
@@ -246,7 +246,7 @@ func TestReparentUpdatesRenditionIdentityIT(t *testing.T) {
 	src.items = []zoteroprovider.CanonicalItem{tombItem("RPOLD", "", "Reparent Book", 10), tombItem("RPATT", "RPOLD", "", 10)}
 	src.items[1].Envelope = mustEnclosure(src.items[1], pdf)
 	rep := repo.New(d.Pool())
-	svc := New(src, mirror.New(rep.Pool()), rep, src.baseURL, "users/0", log.Default())
+	svc := New(src, mirror.New(rep.Pool(), nil), rep, src.baseURL, "users/0", nil, log.Default())
 
 	if _, err := svc.Run(ctx, nil); err != nil {
 		t.Fatalf("seed sync: %v", err)
