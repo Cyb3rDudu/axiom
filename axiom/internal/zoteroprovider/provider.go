@@ -1068,13 +1068,10 @@ func enclosurePath(raw []byte) string {
 		return ""
 	}
 	href := env.Links.Enclosure.Href
-	if strings.HasPrefix(href, "file://") {
-		href = strings.TrimPrefix(href, "file://")
-	}
-	if dec, err := url.PathUnescape(href); err == nil {
-		return dec
-	}
-	return href
+	// Single derivation point (#379): the write-path readback shares the
+	// URI→path mapping — container path map included — with LocalFilePath
+	// (identical semantics without a map: strip file://, percent-decode).
+	return LocalFilePath(href)
 }
 
 func (p *Provider) findTaggedAttachment(ctx context.Context, contentHash, parentKey string) (string, error) {
