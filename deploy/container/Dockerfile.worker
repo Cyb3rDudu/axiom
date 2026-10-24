@@ -34,10 +34,12 @@ FROM python:3.11-slim
 # pandoc: the EPUB lane shells out to it (same as the base image and the
 # CI runner job). libatomic1/libgomp1/libstdc++6: the TheRock torch wheel's
 # rocm_sdk preload and libtorch dlopen them (not in python:slim). Harmless
-# on the cuda/cpu targets.
+# on the cuda/cpu targets. gcc+python3-dev: the CUDA target's torch
+# JIT-compiles triton kernels at runtime (surya) — no compiler in the
+# slim base means the first convert dies in triton's _find_compiler.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        pandoc libatomic1 libgomp1 libstdc++6 \
+        pandoc libatomic1 libgomp1 libstdc++6 gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/axiom/worker
