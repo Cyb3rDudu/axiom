@@ -40,10 +40,8 @@ RUN apt-get update \
 # worker image's stack.
 COPY axiom-fixer/requirements.txt /tmp/fixer-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/fixer-requirements.txt \
-    && mkdir -p /opt/axiom/bin /opt/axiom/fixer \
-    && printf '#!/bin/sh\nexec python3 /opt/axiom/fixer/app/repair_agent.py "$@"\n' \
-        > /opt/axiom/bin/axiom-repair-worker \
-    && chmod 0755 /opt/axiom/bin/axiom-repair-worker
+    && mkdir -p /opt/axiom/bin /opt/axiom/fixer
+COPY --chmod=0755 deploy/container/repair-worker.sh /opt/axiom/bin/axiom-repair-worker
 COPY axiom-fixer /opt/axiom/fixer/app
 WORKDIR /opt/axiom/worker
 COPY axiom-compute-worker/requirements.txt /tmp/requirements.txt
