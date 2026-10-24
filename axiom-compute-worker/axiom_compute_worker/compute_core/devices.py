@@ -400,6 +400,20 @@ class HardwareDetector:
         else:
             device = device_setting
 
+        # #382: mps is a Darwin-only backend. An operator env carried from
+        # an Apple host (observed DEVICE_GLINER=mps on a Linux/ROCm box)
+        # must not reach torch verbatim — placement would warn and every
+        # op would fail. Guard here: one truth for both detection AND
+        # per-model overrides. Non-Darwin mps degrades to cpu (loud).
+        if "mps" in device.split(":")[0] and self.system != "Darwin":
+            logger.warning(
+                "Model '%s' assigned mps on %s — mps is Darwin-only; "
+                "degrading to cpu. Fix the DEVICE_* env (leftover from an "
+                "Apple host?).",
+                model_name, self.system,
+            )
+            device = "cpu"
+
         logger.info(f"Model '{model_name}' assigned to device: {device}")
         return device
 
