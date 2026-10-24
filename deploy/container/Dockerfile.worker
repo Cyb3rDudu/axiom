@@ -72,6 +72,15 @@ USER axiom
 # at /home/axiom/.cache/huggingface so weights survive container recycling.
 ENV HF_HOME=/home/axiom/.cache/huggingface \
     PYTORCH_ROCM_ARCH=gfx1151 \
-    AXIOM_PROCESSOR_COMPUTE=real
+    AXIOM_PROCESSOR_COMPUTE=real \
+    FONT_DIR=/home/axiom/.cache/marker/fonts \
+    FONT_PATH=/home/axiom/.cache/marker/fonts/GoNotoCurrent-Regular.ttf \
+    OUTPUT_DIR=/home/axiom/.cache/marker/results
+# FONT_*: marker-pdf's pydantic settings default the font download into
+# site-packages/static — unwritable for the runtime user, so the first
+# real-mode PDF conversion failed in download_font() (PermissionError
+# /usr/local/lib/python3.11/site-packages/static). The bare names are
+# intentional: marker's SettingsConfigDict has no env_prefix, so the
+# field names ARE the env names.
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
