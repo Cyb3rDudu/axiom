@@ -25,10 +25,26 @@ RUN CGO_ENABLED=0 go build \
     -o /out/axiom ./cmd/axiom
 
 FROM python:3.11-slim
-# pandoc: the EPUB lane shells out to it (same as the CI runner job)
+# pandoc: the EPUB lane shells out to it (same as the CI runner job).
+# tesseract/ghostscript (+deu): the repair worker's OCR path (ocrmypdf,
+# T2 class); the label-heal path (T1, pikepdf) needs none of them.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pandoc \
+    && apt-get install -y --no-install-recommends \
+        pandoc tesseract-ocr tesseract-ocr-deu ghostscript \
     && rm -rf /var/lib/apt/lists/*
+
+# The repair worker (axiom-fixer / pdf_repair_agent, F08 #302) is exec'd by
+# the repair role IN THIS CONTAINER (AXIOM_REPAIR_WORKER_CMD, default
+# /opt/axiom/bin/axiom-repair-worker — hence that exact path). Autarkic deps
+# per axiom-fixer/requirements.txt: its own pinned set, never shared with the
+# worker image's stack.
+COPY axiom-fixer/requirements.txt /tmp/fixer-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/fixer-requirements.txt \
+    && mkdir -p /opt/axiom/bin /opt/axiom/fixer \
+    && printf '#!/bin/sh\nexec python3 /opt/axiom/fixer/app/repair_agent.py "$@"\n' \
+        > /opt/axiom/bin/axiom-repair-worker \
+    && chmod 0755 /opt/axiom/bin/axiom-repair-worker
+COPY axiom-fixer /opt/axiom/fixer/app
 WORKDIR /opt/axiom/worker
 COPY axiom-compute-worker/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
