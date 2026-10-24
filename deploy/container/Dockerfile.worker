@@ -1,59 +1,75 @@
-# Dockerfile.worker — the REAL-compute worker image (halo / AMD Strix Halo,
-# gfx1151). Companion to Dockerfile (the light/reference topology image):
-# same entrypoint contract, but carries the full heavy stack
-# (requirements.txt + requirements-heavy.txt) with AMD per-target ROCm
-# wheels, so AXIOM_PROCESSOR_COMPUTE=real runs on the Radeon 8060S.
+# Dockerfile.worker — the REAL-compute worker image, all GPU targets.
+# Companion to Dockerfile (the light/reference topology image): same
+# entrypoint contract, but carries the full heavy stack (requirements.txt +
+# requirements-heavy.txt) with a per-target GPU torch, so
+# AXIOM_PROCESSOR_COMPUTE=real runs on the host's GPU.
 #
-# WHY a per-target wheel index: gfx1151 is NOT in the standard
-# download.pytorch.org ROCm wheels (gfx110x only; reports of segfaults on
-# Strix Halo). AMD publishes self-contained gfx1151 builds via TheRock:
-#   https://rocm.nightlies.amd.com/v2/gfx1151/
-# Those wheels bundle the ROCm userspace runtime — the container needs no
-# /opt/rocm; only host kernel access via --device /dev/kfd --device /dev/dri.
+# ONE Dockerfile, every GPU target — selected by GPU_TARGET:
+#   cuda          carrier (RTX 3090 / RTX A3000, Ampere): the PyPI default
+#                 wheel already bundles CUDA — nothing special needed.
+#   rocm-gfx1151  halo (Radeon 8060S, Strix Halo): self-contained TheRock
+#                 wheels from https://rocm.nightlies.amd.com/v2/gfx1151/
+#                 (pytorch.org ROCm wheels are gfx110x-only; reports of
+#                 segfaults on Strix Halo). Unknown values fail the build.
+#   cpu           reference/fallback: the CPU-only wheel.
 #
-# Build (repo root as context, rootful nerdctl):
+# Build (repo root as context, rootful nerdctl; GPU_TARGET defaults to
+# rocm-gfx1151):
 #   sudo nerdctl build -f deploy/container/Dockerfile.worker \
-#        -t axiom-compute-worker .
+#        --build-arg GPU_TARGET=cuda -t axiom-compute-worker .
 #
-# Run (GPU passthrough — plain device cgroup grants, no container toolkit):
-#   sudo nerdctl run --rm \
-#        --device /dev/kfd --device /dev/dri \
-#        --group-add video --group-add render \
-#        -e AXIOM_PROCESSOR_COMPUTE=real \
-#        axiom-compute-worker worker
+# Run — the passthrough flags differ per host:
+#   halo (AMD):   --device /dev/kfd --device /dev/dri --group-add video
+#                 (no `render` group inside the image; kfd/dri grants are
+#                 enough — plain device cgroup grants, no container toolkit)
+#   carrier (NV): --gpus all (needs the nvidia container runtime configured
+#                 for containerd)
 #
-# The torch pin PRECEDES the requirements installs on purpose: marker-pdf /
-# FlagEmbedding / gliner all declare unpinned torch deps and would otherwise
-# pull the default (CUDA/plain) wheel and overwrite the ROCm one.
+# The torch install PRECEDES the requirements installs on purpose:
+# marker-pdf / FlagEmbedding / gliner all declare unpinned torch deps and
+# would otherwise pull the default (CUDA/plain) wheel and overwrite the
+# target-specific one.
 FROM python:3.11-slim
 
 # pandoc: the EPUB lane shells out to it (same as the base image and the
 # CI runner job). libatomic1/libgomp1/libstdc++6: the TheRock torch wheel's
-# rocm_sdk preload and libtorch dlopen them (not in python:slim). No ROCm
-# userspace packages needed otherwise — the wheels are self-contained.
+# rocm_sdk preload and libtorch dlopen them (not in python:slim). Harmless
+# on the cuda/cpu targets.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pandoc libatomic1 libgomp1 libstdc++6 \
+    && apt-get install -y --no-install-recommends \
+        pandoc libatomic1 libgomp1 libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/axiom/worker
 
-# 1) ROCm torch for gfx1151 FIRST (self-contained TheRock wheels):
-#    --index-url ONLY — with PyPI as an extra index pip prefers the higher
-#    plain (CUDA-less) version from PyPI (observed: torch-2.14.1 manylinux).
-#    Local version label (+rocm…) also sorts BELOW PyPI releases, so the pin
-#    must be exact. Bump by checking the index for the newest cp311 linux
-#    wheel: https://rocm.nightlies.amd.com/v2/gfx1151/torch/
-#    Note: torch 2.9.1 is below the 2.13 the MPS stack was verified with; the
-#    heavy requirements do not pin torch, and marker/surya/gliner floors are
-#    comfortably below 2.9.
-ARG ROCM_WHEEL_INDEX=https://rocm.nightlies.amd.com/v2/gfx1151/
-ARG TORCH_ROCM_VERSION=2.9.1+rocm7.13.0a20260501
-RUN pip install --no-cache-dir \
-        --index-url ${ROCM_WHEEL_INDEX} \
-        "torch==${TORCH_ROCM_VERSION}"
+# 1) GPU torch FIRST (see header). rocm pin notes: --index-url ONLY — a PyPI
+#    extra index outbids the local rocm pin (observed plain torch 2.14.1);
+#    local version labels also sort BELOW PyPI releases, so the pin must be
+#    exact. Bump by checking the index for the newest cp311 linux wheel:
+#    https://rocm.nightlies.amd.com/v2/gfx1151/torch/
+#    Note: torch 2.9.1 (rocm) is below the 2.13 the MPS stack was verified
+#    with; the heavy requirements do not pin torch, and marker/surya/gliner
+#    floors are comfortably below 2.9.
+ARG GPU_TARGET=rocm-gfx1151
+RUN case "${GPU_TARGET}" in \
+        cuda) \
+            pip install --no-cache-dir torch \
+            ;; \
+        rocm-gfx1151) \
+            pip install --no-cache-dir \
+                --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ \
+                "torch==2.9.1+rocm7.13.0a20260501" \
+            ;; \
+        cpu) \
+            pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+            ;; \
+        *) \
+            echo "unknown GPU_TARGET '${GPU_TARGET}' (expected cuda|rocm-gfx1151|cpu)" >&2; exit 64 \
+            ;; \
+    esac
 
 # 2) Light deps, then the heavy stack. torch is already satisfied, pip
-#    keeps the ROCm wheel (requirements do not pin a torch version).
+#    keeps the installed wheel (requirements do not pin a torch version).
 COPY axiom-compute-worker/requirements.txt /tmp/requirements.txt
 COPY axiom-compute-worker/requirements-heavy.txt /tmp/requirements-heavy.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
@@ -70,6 +86,8 @@ USER axiom
 
 # HF model cache lands under the runtime user's home; mount a named volume
 # at /home/axiom/.cache/huggingface so weights survive container recycling.
+# PYTORCH_ROCM_ARCH is inert on the cuda/cpu targets; FONT_*/OUTPUT_DIR
+# keep marker-pdf's downloads out of site-packages (see base-image lesson).
 ENV HF_HOME=/home/axiom/.cache/huggingface \
     PYTORCH_ROCM_ARCH=gfx1151 \
     AXIOM_PROCESSOR_COMPUTE=real \
@@ -78,9 +96,7 @@ ENV HF_HOME=/home/axiom/.cache/huggingface \
     OUTPUT_DIR=/home/axiom/.cache/marker/results
 # FONT_*: marker-pdf's pydantic settings default the font download into
 # site-packages/static — unwritable for the runtime user, so the first
-# real-mode PDF conversion failed in download_font() (PermissionError
-# /usr/local/lib/python3.11/site-packages/static). The bare names are
-# intentional: marker's SettingsConfigDict has no env_prefix, so the
-# field names ARE the env names.
+# real PDF convert died in download_font() (PermissionError). The bare
+# names are intentional: marker's SettingsConfigDict has no env_prefix.
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
