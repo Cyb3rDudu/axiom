@@ -4,6 +4,9 @@ Linux/ROCm box) to torch verbatim on non-Darwin systems.
 """
 import pytest
 
+# devices.py imports torch at module top; the light CI leg runs without it.
+pytest.importorskip("torch")
+
 from axiom_compute_worker.compute_core.devices import HardwareDetector
 
 
