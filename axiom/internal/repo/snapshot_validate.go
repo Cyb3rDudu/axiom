@@ -218,6 +218,11 @@ func validateRefsResolve(res *processor.Result) error {
 			}
 		}
 	}
+	for _, r := range res.EntityRelationships {
+		if !entityRefs[r.SourceEntityRef] || !entityRefs[r.TargetEntityRef] {
+			return verrf("ENTITY_REL_REF_UNRESOLVED", "entity relationship %q->%q endpoint unresolved", r.SourceEntityRef, r.TargetEntityRef)
+		}
+	}
 	return nil
 }
 

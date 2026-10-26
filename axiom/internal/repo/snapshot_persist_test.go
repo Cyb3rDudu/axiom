@@ -327,6 +327,18 @@ func TestPersistInvalidRefsRollBack(t *testing.T) {
 	}
 }
 
+func TestValidateEntityRelationshipEndpointBeforePersist(t *testing.T) {
+	h := newPersistHarness(t, "badrelendpoint")
+	res := h.validResultRaw(3)
+	res.EntityRelationships[0].TargetEntityRef = "entity-not-in-result"
+	err := ValidateProcessorResult(res, h.frozen, 3)
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Code != "ENTITY_REL_REF_UNRESOLVED" ||
+		!strings.Contains(ve.Message, "entity-not-in-result") {
+		t.Fatalf("expected specific pre-persist endpoint error, got %v", err)
+	}
+}
+
 // --- 4. Invalid dense dimensions roll back ---------------------------------
 
 func TestPersistInvalidDimensionsRollBack(t *testing.T) {
@@ -1277,6 +1289,71 @@ func TestForceRerunReplacesSnapshotContent(t *testing.T) {
 	}
 	if !strings.Contains(ops, "delete") || !strings.Contains(ops, "index") {
 		t.Fatalf("replace must plan delete+index outbox ops, got %q", ops)
+	}
+}
+
+// KG consolidation can repoint edges to entities in a different snapshot.
+// Such edges survive the entity CASCADE on force replacement. The 467-edge
+// fixture matches the observed Controlling persist delta from production.
+func TestForceReplaceClearsRepointedRelationships(t *testing.T) {
+	h := newPersistHarness(t, "repointed")
+	ctx := context.Background()
+	baseline, err := h.persist(t, h.validResultBytes(t, 3), 3, markdownArtifact())
+	if err != nil {
+		t.Fatalf("baseline persist: %v", err)
+	}
+	var survivor string
+	if err := h.pool.QueryRow(ctx, `SELECT id::text FROM processing_entities WHERE snapshot_id=$1`, baseline).Scan(&survivor); err != nil {
+		t.Fatal(err)
+	}
+
+	driveForce := func() (string, error) {
+		t.Helper()
+		jobID := h.seedExtraForceJob(t, h.jobID)
+		claimed, err := h.rep.ClaimNextJob(ctx, defaultClaim("worker-repointed"))
+		if err != nil || claimed == nil || claimed.LeaseRef.JobID != jobID {
+			return "", fmt.Errorf("claim force job %s: %v %v", jobID, claimed, err)
+		}
+		if err := h.rep.MarkProcessing(ctx, claimed.LeaseRef); err != nil {
+			return "", err
+		}
+		res := h.validResultRaw(3)
+		res.JobID = jobID
+		raw, err := json.Marshal(res)
+		if err != nil {
+			return "", err
+		}
+		return h.rep.PersistResult(ctx, jobID, raw, PersistOptions{CapDim: 3, Artifacts: markdownArtifact()})
+	}
+
+	forceSnap, err := driveForce()
+	if err != nil {
+		t.Fatalf("first force persist: %v", err)
+	}
+	// Model consolidation: all 467 old relationships now point outside
+	// their owning snapshot, so deleting local entities cannot cascade them.
+	if _, err := h.pool.Exec(ctx, `UPDATE processing_entity_relationships
+		SET source_entity_id=$2, target_entity_id=$2 WHERE snapshot_id=$1`, forceSnap, survivor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.pool.Exec(ctx, `INSERT INTO processing_entity_relationships
+		(snapshot_id, source_entity_id, target_entity_id, type, evidence_chunk_ids)
+		SELECT $1, $2, $2, 'related_to', '[]'::jsonb FROM generate_series(1,466)`, forceSnap, survivor); err != nil {
+		t.Fatal(err)
+	}
+	var stale int
+	if err := h.pool.QueryRow(ctx, `SELECT count(*) FROM processing_entity_relationships WHERE snapshot_id=$1`, forceSnap).Scan(&stale); err != nil || stale != 467 {
+		t.Fatalf("fixture old edges=%d, err=%v; want 467", stale, err)
+	}
+	replaced, err := driveForce()
+	if err != nil {
+		t.Fatalf("force replace after consolidation: %v", err)
+	}
+	if replaced != forceSnap {
+		t.Fatalf("snapshot id changed: %s -> %s", forceSnap, replaced)
+	}
+	if err := h.pool.QueryRow(ctx, `SELECT count(*) FROM processing_entity_relationships WHERE snapshot_id=$1`, replaced).Scan(&stale); err != nil || stale != 1 {
+		t.Fatalf("relationships after replace=%d, err=%v; want 1", stale, err)
 	}
 }
 
