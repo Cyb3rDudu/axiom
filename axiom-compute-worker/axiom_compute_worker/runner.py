@@ -2171,9 +2171,26 @@ def _real_pipeline(
     if want_relationships:
         # mREBEL reads metadata['chunk_id'] as evidence — set the contract
         # ref so evidence_chunk_refs resolve without a second mapping.
+        resumed_relationships = False
         if cp.resume("relationships"):
-            real_relationships = cp.load_json("relationships", "relationships")
-            budget_exceeded = bool(cp.load_json("relationships", "budget_exceeded"))
+            try:
+                saved_relationships = cp.load_json("relationships", "relationships")
+                # mREBEL may have appended entities that GLiNER missed. The
+                # earlier entities checkpoint cannot supply those new refs.
+                saved_entities = cp.load_json("relationships", "entities")
+                saved_budget_exceeded = bool(cp.load_json("relationships", "budget_exceeded"))
+                refs = {e["ref"] for e in saved_entities}
+                if any(r["source_entity_ref"] not in refs or
+                       r["target_entity_ref"] not in refs for r in saved_relationships):
+                    raise ValueError("relationship checkpoint has dangling entity refs")
+                real_relationships = saved_relationships
+                real_entities = saved_entities
+                budget_exceeded = saved_budget_exceeded
+                resumed_relationships = True
+            except (OSError, ValueError, KeyError, TypeError) as cp_err:
+                # Old checkpoints saved relationships without entities.
+                log.warning("relationship checkpoint incomplete (%s); recomputing", cp_err)
+        if resumed_relationships:
             enter("relationships")  # timing witness: ~0 elapsed (reused)
             cp.mark("relationships", "reused")
             _assign_contract_chunk_ids(chunk_dicts)
@@ -2194,6 +2211,7 @@ def _real_pipeline(
                 if set_progress is not None else None,
             )
             cp.save("relationships", jsons={"relationships": real_relationships,
+                                             "entities": real_entities,
                                              "budget_exceeded": budget_exceeded})
             cp.mark("relationships", "computed")
         if budget_exceeded:

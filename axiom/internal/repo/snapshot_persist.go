@@ -295,6 +295,13 @@ func (r *Repo) persistTx(ctx context.Context, jobID string, ident jobIdentity, r
 				DELETE FROM processing_artifacts WHERE snapshot_id=$1`, existingID); derr != nil {
 				return "", fmt.Errorf("force replace clear artifacts: %w", derr)
 			}
+			// KG consolidation can repoint an edge's endpoints to entities in
+			// another snapshot. Deleting this snapshot's entities then no longer
+			// cascades to that edge, so clear relationships by snapshot first.
+			if _, derr := tx.Exec(ctx, `
+				DELETE FROM processing_entity_relationships WHERE snapshot_id=$1`, existingID); derr != nil {
+				return "", fmt.Errorf("force replace clear entity relationships: %w", derr)
+			}
 			if _, derr := tx.Exec(ctx, `
 				DELETE FROM processing_entities WHERE snapshot_id=$1`, existingID); derr != nil {
 				return "", fmt.Errorf("force replace clear entities: %w", derr)
