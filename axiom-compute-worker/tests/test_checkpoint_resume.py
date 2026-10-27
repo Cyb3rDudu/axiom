@@ -437,6 +437,7 @@ class TestRealPipelineResume:
 
         ic.resolve_captioner = lambda: _Captioner()
         ic.caption_image = lambda *a, **k: None  # zero captions, no reason
+        ic.caption_image_detailed = lambda *a, **k: (None, "api_error")  # #387
         monkeypatch.setitem(__import__("sys").modules,
                             "axiom_compute_worker.compute_core.image_captioner", ic)
 

@@ -57,6 +57,10 @@ class Settings:
     # images stay empty — no placeholders, #241 discipline). 0 disables.
     image_captions_budget_seconds: float = 900.0
     image_caption_timeout_seconds: float = 60.0
+    # #387: transient caption API failures (429/5xx/timeout) are retried
+    # with bounded exponential backoff before being counted as lost.
+    image_caption_retries: int = 3
+    image_caption_backoff_base_seconds: float = 1.0
 
     @property
     def bind(self) -> tuple[str, int]:
@@ -161,6 +165,12 @@ def load_settings() -> Settings:
         ),
         image_caption_timeout_seconds=_env_float(
             "AXIOM_PROCESSOR_IMAGE_CAPTION_TIMEOUT_SECONDS", 60.0
+        ),
+        image_caption_retries=max(
+            1, _env_int("AXIOM_PROCESSOR_IMAGE_CAPTION_RETRIES", 3)
+        ),
+        image_caption_backoff_base_seconds=_env_float(
+            "AXIOM_PROCESSOR_IMAGE_CAPTION_BACKOFF_SECONDS", 1.0
         ),
     )
 
