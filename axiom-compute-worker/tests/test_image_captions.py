@@ -56,6 +56,8 @@ def _run(arts, chunks, tmp_path, captioner, budget=900.0, timeout=60.0, cache=No
             st = cfg.load_settings()
             object.__setattr__(st, "image_captions_budget_seconds", budget)
             object.__setattr__(st, "image_caption_timeout_seconds", timeout)
+            object.__setattr__(st, "image_caption_retries", 1)
+            object.__setattr__(st, "image_caption_backoff_base_seconds", 0.0)
             return st
     import axiom_compute_worker.runner as runner_mod
     real_settings = runner_mod.settings
@@ -913,3 +915,178 @@ def test_extract_figure_captions_german_forms():
         "Bild 2: Eingliederung der Kostenrechnung"
     )
 
+
+
+# ── #387: silent caption-request drops — retry, reason buckets, warnings ───
+
+
+def _http_error(status: int):
+    import httpx
+
+    req = httpx.Request("POST", "http://x/v1/chat/completions")
+    resp = httpx.Response(status, request=req)
+    return httpx.HTTPStatusError(f"{status}", request=req, response=resp)
+
+
+class FlakyCaptioner:
+    """Fails N times with the given HTTP status, then succeeds."""
+
+    model = "fake-vision-1"
+
+    def __init__(self, status: int = 429, failures: int = 2):
+        self.status = status
+        self.failures = failures
+        self.calls = 0
+
+    def caption(self, image_bytes: bytes, media_type: str) -> tuple[str, str]:
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise _http_error(self.status)
+        return "Recovered caption", "cloud"
+
+
+def test_transient_429_retried_then_succeeds(tmp_path):
+    """#387: a 429 was previously swallowed as a silent miss — now it is
+    retried with bounded exponential backoff and succeeds."""
+    img = tmp_path / "img.bin"
+    img.write_bytes(b"imgdata")
+    cap = FlakyCaptioner(status=429, failures=2)
+    delays: list[float] = []
+    rec, reason = ic.caption_image_detailed(
+        cap, img, "image/png", "ab" * 32, tmp_path / "cache", 30.0,
+        sleep=delays.append, max_attempts=3, backoff_base=1.5,
+    )
+    assert reason is None and rec is not None and rec["caption"] == "Recovered caption"
+    assert cap.calls == 3, "two 429s then success — exactly three attempts"
+    assert delays == [1.5, 3.0], "exponential backoff between attempts"
+
+
+def test_retry_exhaustion_returns_reason_bucket(tmp_path):
+    img = tmp_path / "img.bin"
+    img.write_bytes(b"imgdata")
+    cap = FlakyCaptioner(status=429, failures=99)
+    rec, reason = ic.caption_image_detailed(
+        cap, img, "image/png", "cd" * 32, tmp_path / "cache", 30.0,
+        sleep=lambda _s: None, max_attempts=3, backoff_base=0.0,
+    )
+    assert rec is None and reason == "rate_limited"
+
+
+def test_non_transient_4xx_not_retried(tmp_path):
+    img = tmp_path / "img.bin"
+    img.write_bytes(b"imgdata")
+    cap = FlakyCaptioner(status=400, failures=99)
+    rec, reason = ic.caption_image_detailed(
+        cap, img, "image/png", "ef" * 32, tmp_path / "cache", 30.0,
+        sleep=lambda _s: None, max_attempts=3, backoff_base=0.0,
+    )
+    assert rec is None and reason == "api_error"
+    assert cap.calls == 1, "a permanent 4xx must not be retried"
+
+
+def test_missing_image_file_buckets_no_image_data(tmp_path):
+    rec, reason = ic.caption_image_detailed(
+        FakeCaptioner(), tmp_path / "does-not-exist.png", "image/png",
+        "ab" * 32, tmp_path / "cache", 5.0,
+        sleep=lambda _s: None, max_attempts=3, backoff_base=0.0,
+    )
+    assert rec is None and reason == "no_image_data"
+
+
+def test_stage_warns_on_scattered_api_misses(tmp_path):
+    """#387 (PEN-200 pattern): transient API drops were silently skipped
+    and the job completed green. Mutation probe: removing the warning
+    emission makes this red."""
+    arts = [_art("image-0000", "aa" * 32), _art("image-0001", "bb" * 32)]
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000", "image-0001"]}}]
+
+    class HalfFailing:
+        model = "fake-vision-1"
+
+        def __init__(self):
+            self.calls = 0
+
+        def caption(self, b, m):
+            self.calls += 1
+            if self.calls == 1:
+                raise _http_error(503)
+            return "ok caption", "cloud"
+
+    ran, sc = _run(arts, chunks, tmp_path, HalfFailing())
+    assert ran is True
+    warnings = sc.get("caption_warnings") or []
+    assert len(warnings) == 1
+    w = warnings[0]
+    assert w["code"] == "IMAGE_CAPTIONS_INCOMPLETE"
+    assert w["total"] == 2 and w["missing"] == 1 and w["captioned"] == 1
+    assert w["reasons"] == {"api_error": 1}
+    assert w["missing_refs"] == ["image-0000"]
+
+
+def test_budget_abort_warns_with_budget_exceeded_bucket(tmp_path):
+    """#387 (Capital Markets pattern): the stage-budget tail cutoff is
+    bucketed as budget_exceeded and warned, not silently green."""
+    arts = [_art("image-0000", "aa" * 32), _art("image-0001", "bb" * 32)]
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+    ran, sc = _run(arts, chunks, tmp_path, FakeCaptioner(), budget=0.000001)
+    assert ran is True
+    assert sc["image_captions_reason"] == "STAGE_BUDGET_EXCEEDED"
+    w = (sc.get("caption_warnings") or [])[0]
+    assert w["reasons"] == {"budget_exceeded": 2}
+    assert w["missing_refs"] == ["image-0000", "image-0001"]
+    assert w["stage_reason"] == "STAGE_BUDGET_EXCEEDED"
+
+
+def test_all_calls_failed_still_warns(tmp_path):
+    arts = [_art("image-0000", "aa" * 32)]
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+    ran, sc = _run(arts, chunks, tmp_path, FakeCaptioner(fail=True))
+    assert ran is True
+    assert sc["image_captions_reason"] == "CAPTION_CALLS_FAILED"
+    w = (sc.get("caption_warnings") or [])[0]
+    assert w["missing"] == 1 and w["reasons"]["api_error"] == 1
+
+
+def test_stage_not_provisioned_warns(tmp_path):
+    arts = [_art("image-0000", "aa" * 32)]
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+    ran, sc = _run(arts, chunks, tmp_path, None)
+    assert ran is True
+    w = (sc.get("caption_warnings") or [])[0]
+    assert w["reasons"] == {"not_provisioned": 1}
+    assert w["stage_reason"] == "CAPTIONER_NOT_PROVISIONED"
+
+
+def test_complete_run_has_no_caption_warning(tmp_path):
+    arts = [_art("image-0000", "aa" * 32)]
+    chunks = [{"text": "t", "metadata": {"image_refs": ["image-0000"]}}]
+    ran, sc = _run(arts, chunks, tmp_path, FakeCaptioner())
+    assert ran is True
+    assert not sc.get("caption_warnings"), "a fully captioned run must stay green"
+
+
+def test_stage_warnings_wired_into_result_warnings():
+    """Wiring pin (#387): _finish must append stage_completion
+    caption_warnings to result["warnings"] — the Go persist boundary stores
+    result.warnings on the snapshot. Mutation probe: dropping the wiring
+    turns this red (green jobs with half-empty captions were the bug)."""
+    import ast
+    import inspect
+    import pathlib
+
+    import axiom_compute_worker.runner as runner_mod
+    src = pathlib.Path(inspect.getsourcefile(runner_mod)).read_text()
+    tree = ast.parse(src)
+    finish_annotates = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_finish":
+            for n in ast.walk(node):
+                if isinstance(n, ast.Assign) and n.targets:
+                    try:
+                        finish_annotates = finish_annotates or (
+                            ast.unparse(n.targets[0]).replace("'", '"') == 'result["warnings"]'
+                        )
+                    except Exception:  # noqa: BLE001 — unparse edge cases
+                        pass
+    assert finish_annotates, (
+        "_finish must merge caption_warnings into result['warnings']")

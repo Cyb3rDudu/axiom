@@ -314,6 +314,43 @@ def _local_runtime_ready(model_dir: Path) -> bool:
     return all((model_dir / f).exists() for f in files)
 
 
+RETRYABLE_REASONS = frozenset({"api_error", "rate_limited", "timeout"})
+
+
+def classify_caption_error(err: BaseException) -> tuple[str, bool]:
+    """#387: bucket a captioner exception into (reason, retryable).
+
+    Buckets: rate_limited (429), timeout (per-image deadline, HTTP
+    timeouts), api_error (5xx/transport/protocol), no_image_data (missing
+    artifact bytes). Non-retryable buckets return False — a 4xx (bad
+    request, bad key) or a poisoned local captioner will not heal by
+    trying again.
+    """
+    import concurrent.futures
+
+    if isinstance(err, (concurrent.futures.TimeoutError, TimeoutError)):
+        return "timeout", True
+    try:
+        import httpx
+    except ImportError:
+        httpx = None  # type: ignore[assignment]
+    if httpx is not None:
+        if isinstance(err, httpx.TimeoutException):
+            return "timeout", True
+        if isinstance(err, httpx.HTTPStatusError):
+            status = getattr(getattr(err, "response", None), "status_code", 0)
+            if status == 429:
+                return "rate_limited", True
+            if status >= 500:
+                return "api_error", True
+            return "api_error", False
+        if isinstance(err, httpx.TransportError):
+            return "api_error", True
+    if isinstance(err, FileNotFoundError):
+        return "no_image_data", False
+    return "api_error", False
+
+
 def _cache_path(cache_dir: Path, sha256: str) -> Path:
     return cache_dir / f"{sha256}.json"
 
@@ -336,25 +373,21 @@ def load_cached_caption(
     return None
 
 
-def caption_image(
-    captioner: Captioner,
+def _caption_single(
+    captioner: Captioner | None,
     image_path: Path,
     media_type: str,
     sha256: str,
     cache_dir: Path,
     timeout: float,
     clock: Callable[[], float] = time.monotonic,
-) -> dict[str, str] | None:
-    """Caption ONE image under the hash gate + per-image budget.
-
-    Returns ``{"caption", "model", "path"}`` (from cache or a fresh call)
-    or None when the captioner failed/timed out — an honest miss, never a
-    placeholder (#241). Cache writes are best-effort: a read-only cache
-    dir must not fail the stage.
-    """
+) -> tuple[dict[str, str] | None, str | None]:
+    """ONE hash-gated caption attempt. Returns (record, None) on success
+    or (None, reason) on an honest miss (#387: the reason is named, never
+    swallowed)."""
     cached = load_cached_caption(cache_dir, sha256)
     if cached is not None:
-        return cached
+        return cached, None, False
 
     deadline = clock() + timeout if timeout > 0 else None
 
@@ -362,7 +395,7 @@ def caption_image(
         return (deadline - clock()) if deadline is not None else 1.0
 
     if deadline is not None and _left() <= 0:
-        return None
+        return None, "timeout", True
 
     try:
         if deadline is None:
@@ -388,20 +421,88 @@ def caption_image(
                 poison = getattr(captioner, "poison", None)
                 if callable(poison):
                     poison()
-                raise
+                return None, "timeout", True
             finally:
                 ex.shutdown(wait=False)
+    except FileNotFoundError as err:
+        log.warning("caption failed for %s: image data missing: %s", sha256[:12], err)
+        return None, "no_image_data", False
     except Exception as err:  # noqa: BLE001 — any captioner miss is an honest miss
-        log.warning("caption failed for %s: %s", sha256[:12], err)
-        return None
+        reason, retryable = classify_caption_error(err)
+        log.warning("caption failed for %s (%s%s): %s",
+                    sha256[:12], reason, "" if retryable else ", permanent", err)
+        return None, reason, retryable
 
     if not caption:
         # poisoned local captioner: honest miss, no record written
-        return None
+        return None, "local_poisoned", False
     rec = {"caption": caption, "model": captioner.model, "path": path}
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         _cache_path(cache_dir, sha256).write_text(json.dumps(rec))
     except OSError as err:
         log.warning("caption cache write failed (continuing): %s", err)
+    return rec, None, False
+
+
+def caption_image_detailed(
+    captioner: Captioner | None,
+    image_path: Path,
+    media_type: str,
+    sha256: str,
+    cache_dir: Path,
+    timeout: float,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    max_attempts: int = 3,
+    backoff_base: float = 1.0,
+) -> tuple[dict[str, str] | None, str | None]:
+    """#387: caption ONE image with bounded retry/backoff.
+
+    Transient misses (rate_limited, timeout, api_error-from-5xx/transport)
+    are retried up to ``max_attempts`` total attempts with exponential
+    backoff (``backoff_base`` * 2^attempt, capped at 10s) between them.
+    Returns (record, None) or (None, reason bucket) — the caller surfaces
+    the bucket instead of dropping the request silently.
+    """
+    attempts = max(1, int(max_attempts))
+    rec: dict[str, str] | None = None
+    reason: str | None = None
+    for attempt in range(1, attempts + 1):
+        # #387: retryability comes from the CLASSIFICATION (a 4xx
+        # api_error is permanent), not from the reason string alone.
+        rec, reason, retryable = _caption_single(
+            captioner, image_path, media_type, sha256, cache_dir, timeout, clock
+        )
+        if rec is not None:
+            return rec, None
+        if not retryable:
+            return rec, reason
+        if attempt < attempts:
+            delay = min(backoff_base * (2 ** (attempt - 1)), 10.0)
+            if delay > 0:
+                sleep(delay)
+    return rec, reason
+
+
+def caption_image(
+    captioner: Captioner | None,
+    image_path: Path,
+    media_type: str,
+    sha256: str,
+    cache_dir: Path,
+    timeout: float,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[str, str] | None:
+    """Backward-compatible single-attempt wrapper (#230 signature).
+
+    Returns ``{"caption", "model", "path"}`` (from cache or a fresh call)
+    or None when the captioner failed/timed out — an honest miss, never a
+    placeholder (#241). Callers that need the miss reason use
+    :func:`caption_image_detailed`.
+    """
+    rec, _ = caption_image_detailed(
+        captioner, image_path, media_type, sha256, cache_dir, timeout,
+        clock=clock, sleep=lambda _s: None, max_attempts=1,
+    )
     return rec

@@ -813,9 +813,37 @@ def _caption_images_stage(
         return None
     stage_completion["image_captions"] = False
     stage_completion["image_captions_reason"] = None
+    # #387: per-image miss buckets — an image left uncaptioned must be
+    # VISIBLE (warning entry + counts), never a green job with a hole.
+    miss_reasons: dict[str, int] = {}
+    missing_refs: list[str] = []
+
+    def _record_miss(ref: str, reason: str) -> None:
+        miss_reasons[reason] = miss_reasons.get(reason, 0) + 1
+        missing_refs.append(ref)
+
+    def _emit_caption_warning() -> None:
+        """Stage-exit invariant (#387): any uncaptioned target produces a
+        warning entry in the result's warnings manifest."""
+        if not miss_reasons:
+            return
+        total = len(targets)
+        entry = {
+            "code": "IMAGE_CAPTIONS_INCOMPLETE",
+            "stage": "image_captions",
+            "captioned": total - len(missing_refs),
+            "total": total,
+            "missing": len(missing_refs),
+            "reasons": dict(sorted(miss_reasons.items())),
+            "stage_reason": stage_completion.get("image_captions_reason"),
+            "missing_refs": missing_refs[:200],
+            "missing_refs_truncated": len(missing_refs) > 200,
+        }
+        stage_completion.setdefault("caption_warnings", []).append(entry)
+
     from axiom_compute_worker.compute_core.image_captioner import (
         DEFAULT_CACHE_DIR,
-        caption_image,
+        caption_image_detailed,
         resolve_captioner,
     )
 
@@ -827,6 +855,9 @@ def _caption_images_stage(
     captioner = resolve_captioner()
     if captioner is None:
         stage_completion["image_captions_reason"] = "CAPTIONER_NOT_PROVISIONED"
+        for a in targets:
+            _record_miss(a["ref"], "not_provisioned")
+        _emit_caption_warning()
         log.warning("image_captions: no captioner configured "
                     "(AXIOM_CAPTION_API_BASE/_KEY or AXIOM_CAPTION_LOCAL_MODEL_DIR)")
     elif not targets:
@@ -842,11 +873,16 @@ def _caption_images_stage(
                 stage_completion["image_captions_reason"] = (
                     "CAPTIONER_NOT_PROVISIONED"
                 )
+                for a in targets:
+                    _record_miss(a["ref"], "not_provisioned")
+                _emit_caption_warning()
                 log.warning("image_captions: captioner load failed: %s", err)
                 return True
         s = settings.get()
         budget = s.image_captions_budget_seconds
         per_image = s.image_caption_timeout_seconds
+        caption_retries = s.image_caption_retries
+        caption_backoff = s.image_caption_backoff_base_seconds
         deadline = (time.monotonic() + budget) if budget > 0 else None
         cache_dir = Path(os.getenv("AXIOM_CAPTION_CACHE_DIR", str(DEFAULT_CACHE_DIR)))
         # C2 (#230 rider review): the ORIGINAL captioner owns the loaded
@@ -861,9 +897,12 @@ def _caption_images_stage(
                     set_progress(done, len(targets), "images")
                 if deadline is not None and time.monotonic() >= deadline:
                     # Honest partial (#241): what is captioned stays, the
-                    # rest stays EMPTY — never placeholders.
+                    # rest stays EMPTY — never placeholders. #387: the
+                    # skipped tail is bucketed as budget_exceeded and warned.
                     stage_completion["image_captions_reason"] = "STAGE_BUDGET_EXCEEDED"
                     stage_completion["image_captions_done"] = f"{len(captioned)}/{len(targets)}"
+                    for tail in targets[done - 1:]:
+                        _record_miss(tail["ref"], "budget_exceeded")
                     log.warning("image_captions budget (%ss) exceeded at %d/%d "
                                 "images (%d captioned)", budget, done - 1,
                                 len(targets), len(captioned))
@@ -882,10 +921,13 @@ def _caption_images_stage(
                                     "cloud takes over from image %d/%d",
                                     done, len(targets))
                         captioner = cloud
-                rec = caption_image(
+                rec, miss_reason = caption_image_detailed(
                     captioner, img_path, art.get("media_type", "image/jpeg"),
                     art["sha256"], cache_dir, timeout,
+                    max_attempts=caption_retries, backoff_base=caption_backoff,
                 )
+                if miss_reason is not None:
+                    _record_miss(art["ref"], miss_reason)
                 if rec is not None:
                     # C1 (#230 review): the fields MUST nest under
                     # "attributes" — processor.Artifact reads only that key
@@ -904,6 +946,7 @@ def _caption_images_stage(
                 else:
                     # every call failed (network/model) — honest named miss
                     stage_completion["image_captions_reason"] = "CAPTION_CALLS_FAILED"
+            _emit_caption_warning()
         finally:
             # Rule 1 (C1): the INGEST-class captioner leaves memory on EVERY
             # exit path — budget break, exception, or normal completion.
@@ -2155,6 +2198,13 @@ def _real_pipeline(
             result["manifest"]["stage_completion"] = stage_completion
         else:
             result.setdefault("manifest", {})["stage_completion"] = stage_completion
+        # #387: caption misses (and any future stage warning) must reach the
+        # result's warnings manifest — the Go persist boundary stores
+        # result.warnings on the snapshot; before this, a half-captioned
+        # book completed green with an empty warnings manifest.
+        stage_warnings = stage_completion.get("caption_warnings") or []
+        if stage_warnings:
+            result["warnings"] = (result.get("warnings") or []) + list(stage_warnings)
         return result
 
     # [] (not None) suppresses _build_reference_result's heuristic fallback

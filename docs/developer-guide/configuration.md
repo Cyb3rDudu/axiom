@@ -171,6 +171,10 @@ removed.
 | `AXIOM_PROCESSOR_SOURCE_TIMEOUT` | `120` | Runner-side source-download budget (seconds) for one `source_url` pull. |
 | `AXIOM_PROCESSOR_MAX_QUERY_TEXTS` | `16` | Hard cap for `/v1/embed` batch size. |
 | `AXIOM_PROCESSOR_RELATIONSHIPS_BUDGET_SECONDS` | `900` | #225 wall-clock budget for the relationships stage (mREBEL over a full book is inherently slow on MPS, #179). On expiry the stage stops BETWEEN batches and the job completes HONESTLY with the early-committed chunks/embeddings/entities (`manifest.stage_completion.relationships_reason = STAGE_BUDGET_EXCEEDED`) — never an eternal lease. `0` disables the budget. |
+| `AXIOM_PROCESSOR_IMAGE_CAPTIONS_BUDGET_SECONDS` | `900` | #230 wall-clock budget for the image_captions stage. On expiry the stage stops at the current image; the remaining images stay uncaptioned and — since #387 — are bucketed as `budget_exceeded` in an `IMAGE_CAPTIONS_INCOMPLETE` warning entry on the snapshot warnings manifest. `0` disables the budget. |
+| `AXIOM_PROCESSOR_IMAGE_CAPTION_TIMEOUT_SECONDS` | `60` | #230 per-image caption call timeout (the call is abandoned, not joined). Since #387 a timeout miss is bucketed as `timeout` and retried. |
+| `AXIOM_PROCESSOR_IMAGE_CAPTION_RETRIES` | `3` | #387 bounded retry count for transient caption API failures (429/5xx/timeout/transport) per image, with exponential backoff. Permanent errors (4xx) are never retried. |
+| `AXIOM_PROCESSOR_IMAGE_CAPTION_BACKOFF_SECONDS` | `1.0` | #387 exponential backoff base for caption retries (`base * 2^attempt`, capped at 10 s). |
 | `AXIOM_PROCESSOR_EPUBCHECK_CMD` | auto | #220 EPUB preflight: external epubcheck command (BSD-3, JSON mode) for the `/v1/pdf/preflight` EPUB branch. Empty/auto = `epubcheck` on PATH; when absent the gate degrades honestly to the built-in light checks (zip/OPF/spine, DRM, text-layer) and reports `epubcheck: not_available`. Deliberately NOT bundled into the runner artifact — the conda-pack artifact must not gain a Java runtime (#208). |
 | `AXIOM_PROCESSOR_RERANK_MAX_TEXTS` | `64` | Hard cap for `/v1/rerank` candidate count. |
 
