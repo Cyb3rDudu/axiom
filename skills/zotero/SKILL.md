@@ -178,8 +178,13 @@ exactly. Verified cause and fix (2026-08-17/18 sessions):
    (`?format=csljson`) returns an ARRAY; passing that array straight into
    `data-citation-items` was the verified cause of the plain-text fallback.
    Unwrap first: `csl[0] if isinstance(csl, list) else csl`.
-3. **URL-encode the JSON attributes** (`data-citation`, `data-citation-items`)
+3. **URL-encode the JSON attributes** (`data-citation`, `data-citation-items`, `data-annotation`)
    with `urllib.parse.quote(json.dumps(…, ensure_ascii=False), safe="")`.
+4. **URI source & citation label (verified 2026-10):** `csl["id"]` already
+   returns the local item URI (`http://zotero.org/users/local/<USER>/items/<KEY>`)
+   — use it for `uris`, don't hand-build. Inline citation spans carry
+   `"label":"page"` next to the locator:
+   `{"citationItems":[{"uris":[…],"locator":"213","label":"page"}],"properties":{}}`.
 
 Working skeleton (mirrors a hand-built reference note):
 
@@ -198,20 +203,39 @@ Working skeleton (mirrors a hand-built reference note):
 
 Highlight spans additionally need a real PDF anchor to render live:
 `<span class="highlight" data-annotation="…">` referring to the PDF
-attachment with `pageLabel`, `pageIndex` and `rects` (the on-page rectangles).
-Without rects the highlight stays dead.
+attachment. Without a real annotation anchor (`rects` + existing
+`annotationKey`) the highlight stays dead.
+Verified `data-annotation` payload (URL-encoded like the citations):
+```json
+{"attachmentURI":"http://zotero.org/users/local/<USER>/items/<ATTACHMENT key>",
+ "pageLabel":"213",
+ "position":{"pageIndex":218,"rects":[[201.199,439.257,416.928,449.26]]},
+ "citationItem":{"uris":["http://zotero.org/users/local/<USER>/items/<DOC key>"],"locator":"213"},
+ "annotationKey":"<key of the REAL annotation item on the attachment>",
+ "text":"<highlighted original text>","color":"#ffd400","comment":"…"}
+```
 
 ## Highlights / annotations (on PDF attachments)
+
+Parent is the **ATTACHMENT key**, not the doc — find it via `GET /items/<docKey>/children`.
 
 ```
 [{"itemType":"annotation","parentItem":"<ATTACHMENT key>",
   "annotationType":"highlight",
+  "annotationText":"<the highlighted text>",
+  "annotationComment":"<optional comment>",
   "annotationColor":"#ffd400",
-  "annotationPageLabel":"114",
+  "annotationPageLabel":"114",          // printed page label, STRING
   "annotationPosition":"<JSON STRING, not an object!>",
-  "annotationSortIndex":"{pageIndex:05d}|{top:06d}|{left:05d}"}]
+  "annotationSortIndex":"{pageIndex:05d}|{top:06d}|{left:05d}",
+  "tags":[…],"relations":{}}]
 ```
 - Coordinates: Zotero origin is **bottom-left**; convert from top-left PDF coords with `zotero_y = pageHeight − mupdf_y`
+- `pageIndex` is **0-based** and usually ≠ pageLabel (verified: label `"105"` ↔ pageIndex `112`).
+- Verified position string — `rects` are **arrays** `[x1,y1,x2,y2]` in PDF points:
+  `{"pageIndex":112,"rects":[[162.8,159.959,180.328,171.119],[182.913,159.959,239.283,171.119]]}`
+- Sort-index `top`/`left` ≈ `y1`/`x1` of the first rect, rounded (verified: `"00112|000171|00163"`).
+- Other types analog: `note` (sticky), `underline`, `image`.
 
 ## Deletion semantics (verified — read before deleting)
 
