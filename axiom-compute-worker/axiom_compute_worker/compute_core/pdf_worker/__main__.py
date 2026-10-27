@@ -87,10 +87,13 @@ def _scan_profile(doc) -> _ScanProfile:
 
 
 def _is_raster_scan(profile: _ScanProfile) -> bool:
-    """Scan-Klasse: kaum Text + überwiegend Rasterseiten + Volumen über Limit."""
+    """Image-volume gate (#387 follow-up, hybrid fix): batch any document
+    whose decoded raster volume is the RAM risk — regardless of text
+    coverage. Production case: hybrid Pearson textbooks (real text layer
+    ~2000 chars/page + full-page ~3 MPix images) sailed past the old
+    'kaum Text' gate and OOM-killed the host three attempts in a row;
+    the memory risk comes from the images, not the text."""
     if profile.pages < 8:
-        return False
-    if profile.chars_per_page >= SCAN_TEXT_CHARS_PER_PAGE:
         return False
     if profile.pages and profile.raster_pages / profile.pages < 0.8:
         return False

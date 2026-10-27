@@ -77,9 +77,25 @@ class ScanGateTests(unittest.TestCase):
         self.assertTrue(_is_raster_scan(prof), "Bartscher-Klasse MUSS erkennen")
 
     def test_textbook_not_gated(self):
-        """Normale Bücher (Text vorhanden) nie scalieren."""
+        """Normale Bücher (kleine Bilder) nie scalieren — Text spielt
+        seit dem Hybrid-Fix keine Rolle mehr, nur Bildvolumen."""
         doc = _fake_doc(400, 2000, 500, 400)
         self.assertFalse(_is_raster_scan(_scan_profile(doc)))
+
+    def test_hybrid_textbook_with_fullpage_raster_is_gated(self):
+        """Hybrid-Fix (Produktionsfall 2026-10-27): Pearson-Lehrbücher mit
+        echtem Text-Layer (~2000 Zeichen/Seite) UND Ganzseiten-Raster
+        (~3.7 MPix). Das alte 'kaum Text'-Gate liess sie ungebatcht
+        durch — der Convert OOM-te den Host dreimal hintereinander.
+        Jetzt MUSS gebatcht werden: die RAM-Gefahr ist das Bildvolumen,
+        nicht der Text."""
+        text = "x" * 2000  # echter Text-Layer (das Fake-API nimmt den String roh)
+        doc = _FakeDoc([(text, 1944, 1944)] * 737)  # Biopsychologie-Klasse
+        prof = _scan_profile(doc)
+        self.assertGreater(prof["chars_per_page"], 20)  # waere frueher durchgegangen
+        self.assertTrue(_is_raster_scan(prof), "Hybrid mit Raster-Volumen MUSS gebatcht werden")
+        bounds = _batch_bounds(prof)
+        self.assertGreaterEqual(len(bounds), 2, "737 Seiten ~8 GB muessen in Batches zerfallen")
 
     def test_batches_stay_in_budget(self):
         prof = _scan_profile(_fake_doc(658, 0, 1944, 1944))
