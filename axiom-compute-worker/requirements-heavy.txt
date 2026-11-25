@@ -12,6 +12,10 @@
 
 # PDF conversion (Marker v1).
 marker-pdf==1.10.2
+# marker 1.10.2 imports six (renderers.markdown) without declaring it in
+# its metadata — pin it explicitly or the worker container crashes at
+# convert time (ModuleNotFoundError, 4060ti build 2026-11-25).
+six
 
 # Dense/sparse embeddings (BGE-M3).
 FlagEmbedding==1.4.0
