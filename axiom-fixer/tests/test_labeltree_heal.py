@@ -97,7 +97,10 @@ class TestClassification:
 class TestRunAgentFastPath:
     """run_agent heilt die Klasse deterministisch — ohne Modell, ohne
     Stelle-2/3-Vorbedingung (client=None reicht als Beweis: der Fast-Path
-    läuft VOR der NO-MODEL-Prüfung)."""
+    läuft VOR der NO-MODEL-Prüfung). Die Fixture trägt Band-Rauschen
+    (Jahreszahl auf Titelei und unnummeriertem Opener), damit die #395-
+    Regel (Anker-/Rausch-Tore) bewusst declint und genau der #253-Pfad
+    behandelt wird — beide Katalog-Regeln bleiben getrennt belegt."""
 
     def _cfg(self, tmp_path):
         from config import Config
@@ -118,10 +121,28 @@ class TestRunAgentFastPath:
             provenance={},
         )
 
+    def _noisy_missing_tree_pdf(self, path: Path, n=6, folio_from=1):
+        """Wie _missing_tree_pdf plus Rauschen: 2 von 6 Ziffer-Seiten ohne
+        Label-Treffer überschreiten die #395-Rauschschwelle (25 %)."""
+        doc = pymupdf.open()
+        for i in range(n):
+            pg = doc.new_page()
+            if i == 0 or i == 3:
+                pg.insert_text((72, 40), "2020")  # Band-Rauschen (Jahr)
+                pg.insert_text((72, 72), "Title Page: A Study")
+            else:
+                pg.insert_text(
+                    (72, 72), f"chapter text {i} " + "lorem ipsum dolor " * 30
+                )
+                pg.insert_text((72, 800), str(folio_from + i - 1))
+        doc.save(path)
+        doc.close()
+        return path
+
     def test_dry_run_reports_would_heal(self, tmp_path):
         cfg = self._cfg(tmp_path)
         (cfg.zotero_storage_root / "K1").mkdir(parents=True)
-        _missing_tree_pdf(cfg.zotero_storage_root / "K1" / "doc.pdf")
+        self._noisy_missing_tree_pdf(cfg.zotero_storage_root / "K1" / "doc.pdf")
         import repair_agent as ra
 
         report = ra.run_agent("K1", apply=False, client=None, cfg=cfg)
@@ -132,7 +153,7 @@ class TestRunAgentFastPath:
     def test_apply_heals_without_model(self, tmp_path):
         cfg = self._cfg(tmp_path)
         (cfg.zotero_storage_root / "K2").mkdir(parents=True)
-        _missing_tree_pdf(cfg.zotero_storage_root / "K2" / "doc.pdf")
+        self._noisy_missing_tree_pdf(cfg.zotero_storage_root / "K2" / "doc.pdf")
         import repair_agent as ra
 
         report = ra.run_agent("K2", apply=True, client=None, cfg=cfg)

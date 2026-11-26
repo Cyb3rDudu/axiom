@@ -55,9 +55,12 @@ def test_volllauf_heilt_arbeitskopie_und_schreibt_report():
     orig = cfg.zotero_storage_root / key / "falsch.pdf"
     original_vorher = read_page_labels(orig)
     assert original_vorher == [str(i + 3) for i in range(10)]
-    rep = run_agent(key, apply=True, client=MockClient(list(HEAL_STEPS)), cfg=cfg)
-    assert rep["verdict"] == "halt"
-    assert [s["action"] for s in rep["steps"]] == ["forensics", "surgery"]
+    # #395: konstant-offset heilt jetzt deterministisch über die Katalog-
+    # Regel — client=None ist der Beweis, dass KEIN Modell beteiligt war.
+    rep = run_agent(key, apply=True, client=None, cfg=cfg)
+    assert rep["verdict"] == "healed"
+    assert rep["catalog_rule"].endswith("(#395)")
+    assert rep["final_step"]["plan_class"] == "constant-offset"
     # Heilung bewiesen an der Arbeitskopie:
     assert read_page_labels(run_dir / "work.pdf") == [str(i) for i in range(1, 11)]
     assert read_page_labels(orig) == original_vorher, (
@@ -65,25 +68,28 @@ def test_volllauf_heilt_arbeitskopie_und_schreibt_report():
     )
     # Audit-Spur mit Pflicht-Abschnitten:
     spur = json.loads((run_dir / "report.json").read_text())
-    assert spur["key"] == key and "unproven" in spur and "evidence" in spur
+    assert spur["key"] == key and "evidence" in spur and spur["heal_readback"]
 
 
 def test_ohne_apply_kein_schreibzugriff():
-    """apply=true im Step OHNE CLI-Freigabe darf NICHT schreiben."""
+    """apply=true im Step OHNE CLI-Freigabe darf NICHT schreiben — die
+    Katalog-Regel liefert im Dry-Run nur den REPORT (#395), kein Byte."""
     cfg = _cfg_sandbox()
     key = "BBBB2222"
     run_dir = _fresh_run_dir(cfg, key)
     rep = run_agent(key, apply=False, client=MockClient(list(HEAL_STEPS)), cfg=cfg)
-    assert rep["verdict"] == "halt"
+    assert rep["verdict"] == "report"
     lbls = read_page_labels(run_dir / "work.pdf")
     assert lbls == [str(i + 3) for i in range(10)], "Dry-Run schrieb heimlich!"
 
 
 def test_spread_ocr_apply_ohne_freigabe_erzeugt_keine_artefakte():
     """D: apply=true-Schritte ohne CLI-Freigabe dürfen KEINE Ausgabedateien
-    (spread_split.pdf / ocr.pdf) anlegen — Plan-Evidenz ja, Bytes nein."""
+    (spread_split.pdf / ocr.pdf) anlegen — Plan-Evidenz ja, Bytes nein.
+    AAAA1111 (gesund): alle Katalog-Regeln declinen bewusst — nur so
+    erreicht der Lauf überhaupt den Agentenpfad (BBBB2222 heilt #395)."""
     cfg = _cfg_sandbox()
-    key = "BBBB2222"
+    key = "AAAA1111"
     run_dir = _fresh_run_dir(cfg, key)
     steps = [
         '{"action":"spread","apply":true}',
@@ -97,17 +103,21 @@ def test_spread_ocr_apply_ohne_freigabe_erzeugt_keine_artefakte():
 
 
 def test_ohne_modell_ehrliche_verweigerung():
+    # AAAA1111 (gesund): Labels korrekt, kein Katalog-Regel-Heilpfad —
+    # ohne Modell bleibt nur die ehrliche Verweigerung.
     cfg = _cfg_sandbox()
-    rep = run_agent("BBBB2222", apply=True, client=None, cfg=cfg)
+    rep = run_agent("AAAA1111", apply=True, client=None, cfg=cfg)
     assert rep["verdict"] == "NO-MODEL"
     assert "DEEPSEEK_API_KEY" in rep["cause"]
 
 
 def test_nomodel_schreibt_reportjson_ueberschreibt_stale():
     """B: Auch der NO-MODEL-Abbruch schreibt report.json — ein stale
-    Bericht eines früheren Laufs kann nie vom Rückgabewert abweichen."""
+    Bericht eines früheren Laufs kann nie vom Rückgabewert abweichen.
+    AAAA1111 (gesund): Katalog-Regeln declinen — NO-MODEL bleibt
+    erreichbar (BBBB2222 heilt seit #395 deterministisch)."""
     cfg = _cfg_sandbox()
-    key = "BBBB2222"
+    key = "AAAA1111"
     run_dir = _fresh_run_dir(cfg, key)
     rep = run_agent(key, apply=False, client=None, cfg=cfg)
     assert rep["verdict"] == "NO-MODEL"
@@ -148,7 +158,7 @@ def test_main_ohne_modell_exit1_und_json_report(capsys, tmp_path, monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)  # Env überlagert
     env = tmp_path / "config.env"
     env.write_text("")  # leer: kein Key, Sandbox-Default bleibt
-    rc = main(["--key", "BBBB2222", "--config", str(env)])
+    rc = main(["--key", "AAAA1111", "--config", str(env)])
     rep = json.loads(capsys.readouterr().out)
     assert rc == 1
     assert rep["verdict"] == "NO-MODEL"

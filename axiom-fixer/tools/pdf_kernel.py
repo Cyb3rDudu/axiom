@@ -134,17 +134,73 @@ def write_page_labels(pdf: str | Path, labels: list[str]) -> None:
         # Strukturänderung (Seiten-Labels = /Root-Objektumbau) ab. Voller Save
         # auf eine Temp-Datei im selben Verzeichnis, dann atomar ersetzen —
         # die Arbeitskopie (Backup-Pflicht des Agenten) bleibt unangetastet.
-        d = Path(pdf).parent
-        fd, tmp = tempfile.mkstemp(suffix="-labels.pdf", dir=d)
-        os.close(fd)
-        try:
-            doc.save(tmp)
-            os.replace(tmp, pdf)
-        finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+        _atomic_save(doc, pdf)
     finally:
         doc.close()
+
+
+def _atomic_save(doc: pymupdf.Document, pdf: str) -> None:
+    """Voller Save auf Temp + atomares Ersetzen (Range-Schreiben ist
+    /Root-Objektumbau — inkrementell lehnt pymupdf das ab)."""
+    d = Path(pdf).parent
+    fd, tmp = tempfile.mkstemp(suffix="-labels.pdf", dir=d)
+    os.close(fd)
+    try:
+        doc.save(tmp)
+        os.replace(tmp, pdf)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _validate_ranges(ranges: list[dict], n: int) -> list[dict] | None:
+    """Strukturprüfung eines Range-Baums (#395): erste Range bei Seite 0,
+    Startpages streig steigend, Style aus der PDF-Semantik. Rückgabe
+    None = nicht darstellbar."""
+    if not ranges or not isinstance(ranges, list):
+        return None
+    prev = -1
+    for r in ranges:
+        sp = r.get("startpage")
+        style = r.get("style", "")
+        fpn = r.get("firstpagenum", 0)
+        if not isinstance(sp, int) or not (0 <= sp < n) or sp <= prev:
+            return None
+        if r.get("prefix", "") != "":
+            return None  # Präfixe trägt dieser Baum bewusst nicht
+        if style not in ("", "D", "r", "R"):
+            return None
+        if not isinstance(fpn, int) or (style in ("r", "R") and fpn < 1):
+            return None
+        prev = sp
+    return ranges
+
+
+def write_label_ranges(pdf: str | Path, ranges: list[dict]) -> None:
+    """#395: setzt einen MEHRFACH-Range-Baum (römischer Vorspann + mehrere
+    D-Segmente — das Drift-/Two-Range-Heilungsformat). Validierung wie
+    write_page_labels (nie falsch befüllen), atomarer Save wie dort."""
+    pdf = str(pdf)
+    doc = pymupdf.open(pdf)
+    try:
+        n = doc.page_count
+        if _validate_ranges(ranges, n) is None:
+            raise ValueError(
+                "Range-Baum nicht darstellbar (leer/falsche Reihenfolge/"
+                "unzulässiger Style) — nichts geschrieben."
+            )
+        doc.set_page_labels(ranges)
+        _atomic_save(doc, pdf)
+    finally:
+        doc.close()
+
+
+def labels_from_ranges(ranges: list[dict], n: int) -> list[str]:
+    """Label-Liste (read_page_labels-Form) aus einem Range-Baum — die
+    gemeinsame Render-Sicht von Klassifikator und Readback-Vergleich."""
+    from tools.label_drift import labels_from_ranges as render
+
+    return render(ranges, n)
 
 
 def _zone_texts(page: pymupdf.Page) -> dict[str, str]:
