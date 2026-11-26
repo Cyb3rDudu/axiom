@@ -42,7 +42,7 @@ PKG = HERE.parent
 if str(PKG) not in sys.path:
     sys.path.insert(0, str(PKG))  # standalone: `python tools/surgery_exec.py …`
 
-from tools import labeltree_heal, pdf_kernel  # type: ignore[reportMissingImports]
+from tools import labeltree_heal, pdf_kernel  # type: ignore[reportMissingImports]  # noqa: E402
 
 
 def validate(plan: dict) -> tuple[bool, str]:
@@ -53,7 +53,7 @@ def validate(plan: dict) -> tuple[bool, str]:
     if not isinstance(ops, list) or not ops:
         return False, "Plan hat keine operations-Liste"
     for i, op in enumerate(ops):
-        if op.get("op") != "write_labels":
+        if op.get("op") not in ("write_labels", "write_label_ranges"):
             return False, f"Op {i}: unbekannter op '{op.get('op')}'"
         src = Path(op.get("source", ""))
         if not src.exists():
@@ -65,23 +65,39 @@ def validate(plan: dict) -> tuple[bool, str]:
             return False, f"Op {i}: backup fehlt (Pflicht vor jeder Änderung)"
         if str(Path(backup)) == str(src):
             return False, f"Op {i}: backup == source — Backup wäre die Änderung selbst"
-        labels = op.get("labels")
-        if not isinstance(labels, list):
-            return False, f"Op {i}: labels fehlt"
-        # #258: eine Heilung, die KEINE Seite benennt, ist ein No-Op — der
-        # Upload-Pfad für Schein-Heilungen. Strukturell verweigert.
-        if not any(str(l).strip() for l in labels):
-            return False, f"Op {i}: labels komplett leer — No-Op, keine Heilung"
         want = pdf_kernel.doc_page_count(src)
-        if len(labels) != want:
-            return False, f"Op {i}: labels-Länge {len(labels)} != page_count {want}"
-        # PDF-Darstellbarkeit VOR jedem Schreiben prüfen (sonst crasht der
-        # Write mitten im Lauf und lässt die Quelle teils geschrieben).
-        if any(labels) and not pdf_kernel._build_ranges(labels):
-            return False, (
-                f"Op {i}: labels nicht PDF-darstellbar (Lücke/Sprung im"
-                f" belegten Körper oder Restseiten nach dem Lauf) — Verweigerung"
-            )
+        if op["op"] == "write_label_ranges":
+            # #395: Mehrfach-Range-Baum (röm. Vorspann + D-Segmente). Die
+            # Darstellbarkeitsprüfung läuft über die gerenderte Label-Liste
+            # (gleiche Sicht wie der Readback-Vergleich).
+            ranges = op.get("ranges")
+            if not isinstance(ranges, list) or not ranges:
+                return False, f"Op {i}: ranges fehlt"
+            if pdf_kernel._validate_ranges(ranges, want) is None:
+                return False, (
+                    f"Op {i}: ranges nicht PDF-darstellbar (Reihenfolge/"
+                    f"Style) — Verweigerung"
+                )
+            rendered = pdf_kernel.labels_from_ranges(ranges, want)
+            if not any(str(lab).strip() for lab in rendered):
+                return False, f"Op {i}: ranges benennen keine Seite — No-Op"
+        else:
+            labels = op.get("labels")
+            if not isinstance(labels, list):
+                return False, f"Op {i}: labels fehlt"
+            # #258: eine Heilung, die KEINE Seite benennt, ist ein No-Op — der
+            # Upload-Pfad für Schein-Heilungen. Strukturell verweigert.
+            if not any(str(lab).strip() for lab in labels):
+                return False, f"Op {i}: labels komplett leer — No-Op, keine Heilung"
+            if len(labels) != want:
+                return False, f"Op {i}: labels-Länge {len(labels)} != page_count {want}"
+            # PDF-Darstellbarkeit VOR jedem Schreiben prüfen (sonst crasht der
+            # Write mitten im Lauf und lässt die Quelle teils geschrieben).
+            if any(labels) and not pdf_kernel._build_ranges(labels):
+                return False, (
+                    f"Op {i}: labels nicht PDF-darstellbar (Lücke/Sprung im"
+                    f" belegten Körper oder Restseiten nach dem Lauf) — Verweigerung"
+                )
         exp = op.get("expected_after")
         if exp is not None and len(exp) != want:
             return False, f"Op {i}: expected_after-Länge {len(exp)} != {want}"
@@ -89,20 +105,21 @@ def validate(plan: dict) -> tuple[bool, str]:
 
 
 def _apply_op_plan(op: dict) -> dict:
-    """Führt EINE write_labels-Operation mit Backup + Read-Back aus.
+    """Führt EINE write_labels-/write_label_ranges-Operation mit Backup +
+    Read-Back aus.
 
     Kein Raise nach außen: Laufzeitfehler → Rollback auf das frische
     Backup + strukturierter applied:false-Bericht.
     """
     src = Path(op["source"])
     backup = Path(op["backup"])
-    labels = op["labels"]
+    labels = op.get("labels")
     expected = op.get("expected_after")
     result: dict = {
-        "op": "write_labels",
+        "op": op["op"],
         "source": str(src),
         "backup": str(backup),
-        "pages": len(labels),
+        "pages": pdf_kernel.doc_page_count(src),
     }
     backup_taken = False
     try:
@@ -117,7 +134,12 @@ def _apply_op_plan(op: dict) -> dict:
             result["rolled_back"] = False
             return result
         backup_taken = True
-        pdf_kernel.write_page_labels(src, labels)
+        if op["op"] == "write_label_ranges":
+            pdf_kernel.write_label_ranges(src, op["ranges"])
+        else:
+            if not isinstance(labels, list):
+                raise ValueError("write_labels ohne labels-Liste")
+            pdf_kernel.write_page_labels(src, labels)
         got = pdf_kernel.read_page_labels(src)
         result["readback"] = got
         # #258 Readback-Beweis (PFLICHT, unabhängig von expected_after): der
@@ -179,10 +201,10 @@ def run_plan(plan: dict, apply: bool = False) -> dict:
             "dry_run": True,
             "operations": [
                 {
-                    "op": "write_labels",
+                    "op": op["op"],
                     "source": op["source"],
                     "backup": op["backup"],
-                    "label_count": len(op["labels"]),
+                    "label_count": len(op.get("labels") or op.get("ranges") or []),
                     "expected_after": op.get("expected_after"),
                 }
                 for op in plan["operations"]

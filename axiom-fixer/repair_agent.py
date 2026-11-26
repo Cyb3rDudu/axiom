@@ -541,6 +541,109 @@ def make_client(cfg):
     return DeepSeekClient(cfg.deepseek_api_key, cfg.deepseek_base_url, cfg.model)
 
 
+# #395: deterministische Stelle-1-Katalog-Regel für die T1-Klasse
+# "Tree vorhanden, aber falsch" — konstant-offset, two-range und die
+# Drift-Treppe (+1-Stufen an unnummerierten Kapitel-Grenzen) heilen
+# ohne Modell, wenn die Band-Messung die Disziplin trägt. Nur der
+# POSITIVE Pfad schaltet kurz: Verweigerungsgründe (widersprüchliche
+# Evidenz) und kein-Signal-Fälle fallen an den Agentenlauf zurück,
+# damit Spread/OCR-Defekte und die ehrlichen Parks unverändert laufen.
+def _label_drift_rule(cfg, key: str, apply: bool) -> dict | None:
+    from tools import label_drift, pdf_kernel, surgery_exec  # type: ignore[reportAttributeAccessIssue]
+
+    wc = ensure_work_copy(cfg, key)
+    if wc is None:
+        return None
+    work, _reused = wc
+    verdict = label_drift.would_heal(work)
+    if not verdict.get("would_heal"):
+        return None
+    ranges = verdict["ranges"]
+    run_dir = cfg.work_root / key
+    n = pdf_kernel.doc_page_count(work)
+    expected = pdf_kernel.labels_from_ranges(ranges, n)
+    plan = {
+        "class": verdict["plan_class"],
+        "operations": [
+            {
+                "op": "write_label_ranges",
+                "source": str(work),
+                "backup": str(run_dir / "backup.pdf"),
+                "ranges": ranges,
+                "expected_after": expected,
+            }
+        ],
+    }
+    if not apply:
+        report = {
+            "key": key,
+            "verdict": "report",
+            "catalog_rule": "labeltree-wrong+folios -> write_label_ranges (#395)",
+            "final_step": {
+                "action": "report",
+                "plan_class": verdict["plan_class"],
+                "reason": (
+                    f"Katalog-Regel (#395): {verdict['plan_class']} über "
+                    f"{verdict['segments']} Segment(e), {verdict['anchors']} "
+                    f"Band-Anker — beweisbare write_label_ranges-Operation, "
+                    f"Schreibfreigabe nicht erteilt (Dry-Run)."
+                ),
+            },
+            "evidence": [verdict],
+            "config": config_status(cfg),
+            "apply": False,
+        }
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=1, default=str)
+        )
+        return report
+
+    res = surgery_exec.run_plan(plan, apply=True)
+    applied = bool(res.get("applied"))
+    # #258: healed NUR mit Readback-Beweis + Treffer gegen die gerenderten
+    # Labels (der Range-Baum muss EXAKT das Gemessene gelandet sein).
+    proof = _heal_readback_proof(work)
+    match = proof is not None and pdf_kernel.read_page_labels(work) == expected
+    op_cause = res.get("cause") or next(
+        (o.get("cause") for o in res.get("operations", []) if o.get("cause")),
+        None,
+    )
+    report = {
+        "key": key,
+        "verdict": "healed" if applied and proof and match else "halt",
+        "catalog_rule": "labeltree-wrong+folios -> write_label_ranges (#395)",
+        "heal_readback": proof,
+        "final_step": {
+            "action": "heal" if applied and proof and match else "rollback",
+            "plan_class": verdict["plan_class"],
+            "reason": (
+                "Katalog-Regel (#395): write_label_ranges ausgeführt, "
+                "Read-Back bestätigt (Range-Baum == Messung)."
+                if applied and proof and match
+                else (
+                    f"write_label_ranges abgelehnt: {op_cause}"
+                    if not applied
+                    else "write_label_ranges angewendet, aber KEIN Readback-"
+                    "Beweis oder Messabweichung — ehrliches FAIL, kein "
+                    "Upload (#258)"
+                )
+            ),
+        },
+        "evidence": [verdict, res],
+        "config": config_status(cfg),
+        "apply": True,
+    }
+    if not (applied and proof and match):
+        # Unbewiesenes work.pdf ist ein falsches Artefakt (#258-Pforte).
+        work.unlink(missing_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=1, default=str)
+    )
+    return report
+
+
 def run_agent(
     key: str,
     *,
@@ -569,6 +672,17 @@ def run_agent(
     )
     if scan_report is not None:
         return scan_report
+
+    # #395: Katalog-Regel label-drift VOR #253 — die Band-Messung
+    # (Position ±9 %, Wort-Ebene) + Dominanz/Klassen-Modell deckt die
+    # Multi-Range-Fälle (Two-Range, Drift-Treppe), die die Single-Run-
+    # Semantik von #253 nicht darstellen kann; wo beide greifen würden,
+    # ist der #395-Baum der vollständigere (röm. Vorspann + alle Segmente).
+    # #253 bleibt als strenger Fallback (bewiesenes Ende) für Signale, die
+    # die #395-Tore (Rauschen, Widerspruch) nicht tragen.
+    drift_report = _label_drift_rule(cfg, key, apply)
+    if drift_report is not None:
+        return drift_report
 
     # #253: deterministische Stelle-1-Katalog-Regel VOR dem Agentenlauf —
     # "Label-Tree fehlt/leerer Strunk + Textschicht vorhanden" ist
@@ -685,7 +799,6 @@ def run_agent(
             json.dumps(report, ensure_ascii=False, indent=1, default=str)
         )
         return report
-
     system_prompt = (HERE / "prompts" / "system.txt").read_text() + system_header()
     freigabe = "erteilt (--apply)" if apply else "NICHT erteilt (nur Dry-Run)"
     zeit_budget = (

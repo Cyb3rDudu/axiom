@@ -116,7 +116,7 @@ class TestAgentGate:
         )
         assert rep["verdict"] == "healed", json.dumps(rep, default=str)[:400]
         assert rep["heal_readback"]["tree"] is True
-        assert rep["heal_readback"]["labels_sample"] == ["1", "2", "3"]
+        assert rep["heal_readback"]["labels_sample"] == ["i", "1", "2"]
         assert (cfg.work_root / "KEYHEAL1" / "work.pdf").exists()
 
     def test_unproven_run_removes_artifact_no_upload_path(self, tmp_path):
@@ -158,7 +158,14 @@ class TestAgentGate:
         def _boom(pdf, labels):
             raise RuntimeError("kernel write failed")
 
+        def _boom_ranges(pdf, ranges):
+            raise RuntimeError("kernel range write failed")
+
+        # #395: BEIDE Schreibpfade kappen — die Katalog-Regel läuft vor
+        # #253; ihr Misserfolg muss dieselbe Pforte treffen (halt +
+        # Artefakt weg), sonst wäre ein Crash nach Backup der Upload-Pfad.
         monkeypatch.setattr(pdf_kernel, "write_page_labels", _boom)
+        monkeypatch.setattr(pdf_kernel, "write_label_ranges", _boom_ranges)
         cfg = self._cfg(tmp_path)
         att = cfg.zotero_storage_root / "KEYFAIL1"
         att.mkdir(parents=True)

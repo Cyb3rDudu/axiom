@@ -138,7 +138,28 @@ def test_beispiel_durchlaeuft_agentenpfad():
     cfg = load_config({})
     cfg.ensure_dirs()
     assert cfg.sandbox
-    key = "BBBB2222"  # Sandbox-Storage: 10 Seiten, Label 3..12 (== Beispiel)
+    # Eigene 10-Seiten-Instanz für den Agentenpfad-Zeugen: Folios 1..6,
+    # danach 4 reine Rauschseiten (Jahr) — die #395-Tore (Rauschquote)
+    # und #253 (bewiesenes Ende) declinen bewusst, der Doku-Beispiel-
+    # surgery-Step bleibt anwendbar. BBBB2222 selbst heilt heute über
+    # die Katalog-Regel und erreicht den Agenten nicht mehr.
+    import pymupdf  # type: ignore[reportMissingImports]
+
+    key = "DOCBEISPIEL1"
+    att = cfg.zotero_storage_root / key
+    att.mkdir(parents=True, exist_ok=True)
+    doc = pymupdf.open()
+    for i in range(10):
+        pg = doc.new_page()
+        # Body-Text unterhalb des Kopf-Bands (±9 %): Ziffern im Fließtext
+        # der ersten Zeile dürfen keine Folio-Kandidaten werden.
+        pg.insert_text((72, 150), f"chapter text {i} " + "lorem ipsum dolor " * 20)
+        if i < 6:
+            pg.insert_text((72, 800), str(i + 1))
+        else:
+            pg.insert_text((72, 40), "2020")  # Band-Rauschen statt Folio
+    doc.save(att / "doc.pdf")
+    doc.close()
     run_dir = cfg.work_root / key
     if run_dir.exists():
         shutil.rmtree(run_dir)
