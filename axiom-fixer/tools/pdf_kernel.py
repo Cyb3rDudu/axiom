@@ -161,7 +161,7 @@ def _validate_ranges(ranges: list[dict], n: int) -> list[dict] | None:
     int-Anwärter: True == 1; pymupdf normalisiert <= 0 still und
     divergierte damit von labels_from_ranges). Rückgabe None = nicht
     darstellbar."""
-    if not ranges or not isinstance(ranges, list):
+    if not isinstance(ranges, list) or not ranges:
         return None
     prev = -1
     for k, r in enumerate(ranges):

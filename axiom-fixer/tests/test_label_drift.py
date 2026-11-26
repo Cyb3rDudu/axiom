@@ -459,3 +459,137 @@ def test_e2e_refuse_faellt_an_agenten_zurueck(tmp_path):
     # heal_readback-Beweis im Bericht (der Katalog hat bewusst geparkt).
     assert (att / "book.pdf").read_bytes() == vorher
     assert "heal_readback" not in rep
+
+
+def test_adjazenzform_nummerierte_grenzseite_heilt():
+    """Direkt nummerierte Grenzseite (Anker · Anker, Sprung +2): die
+    Grenze ist voll messbar — beide Seiten tragen ihr Folio, kein
+    Raten. Heilt als Drift mit Grenzrange auf der Ankerseite selbst
+    (Review-Finding: der alte Kommentar behauptete fälschlich ein Tor
+    für 'nummerierte Grenzseite'; das Tor gilt nur für Ziffern AUF der
+    Grenzstrecke zwischen den Ankern)."""
+    doc = pymupdf.open()
+    W, H = pymupdf.paper_size("a4")
+    folio = 1
+    for i in range(14):
+        pg = doc.new_page(width=W, height=H)
+        if i == 7:
+            folio += 1  # Sprung +2 zwischen p6 und p7, BEIDE nummeriert
+        pg.insert_text((300, 30), str(folio), fontsize=12)
+        folio += 1
+        pg.insert_text((40, 150), f"Text {i} " + "lorem ipsum " * 5, fontsize=11)
+    p = FIX / "_adjacency.pdf"
+    doc.save(p)
+    doc.close()
+    try:
+        meas, n = _load_fixture_pdf(p)
+        v = label_drift.classify(meas)
+        assert v["class"] == "drift", v.get("reason", "")
+        d = [r for r in v["ranges"] if r["style"] == "D"]
+        # Grenzrange beginnt AUF der (nummerierten) Ankerseite mit
+        # deren gemessenem Folio (keine Back-Extension, kein Raten)
+        assert [r["startpage"] for r in d] == [0, 7]
+        assert [r["firstpagenum"] for r in d] == [1, 9]
+        # jede gemessene Folio stimmt
+        labels = pdf_kernel.labels_from_ranges(v["ranges"], n)
+        for i, m in meas.items():
+            assert labels[i] in {str(x) for x in m["digits"]}
+    finally:
+        p.unlink(missing_ok=True)
+
+
+def test_validate_before_promise_fpn_null():
+    """Seite 0 druckt '0' → emittierter Baum D@0 f0 wäre vom Writer-
+    Validator abgelehnt; der Dry-Run darf ihn NICHT versprechen
+    (Review-Finding: Dry-Run meldete 'beweisbar', Apply lehnt ab)."""
+    doc = pymupdf.open()
+    W, H = pymupdf.paper_size("a4")
+    for i in range(8):
+        pg = doc.new_page(width=W, height=H)
+        pg.insert_text((300, 30), str(i), fontsize=12)  # p0 druckt 0
+        pg.insert_text((40, 150), f"Text {i} " + "lorem ipsum " * 5, fontsize=11)
+    p = FIX / "_fpn0.pdf"
+    doc.save(p)
+    doc.close()
+    try:
+        wh = label_drift.would_heal(p)
+        assert wh["would_heal"] is False
+        assert "darstellbar" in wh["reason"]
+    finally:
+        p.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("name,first_start,first_folio", [
+    ("A4", 21, 1), ("A5", 19, 1), ("A6", 11, 1),
+])
+def test_fensterbuecher_front_ranges_sind_gepingt(name, first_start, first_folio):
+    """Die Front-Konventions-Abweichung vom Referenzbaum (D-Start eine
+    Seite früher, firstpagenum = Anker-Folio − 1) ist jetzt regressions-
+    fest gepinnt — künftige Grenzkonventions-Änderungen fallen auf
+    (Review-Finding: nur Interior war gepinnt)."""
+    meas, n = _load_fixture(name)
+    v = label_drift.classify(meas)
+    d = [r for r in v["ranges"] if r["style"] == "D"]
+    assert d[0]["startpage"] == first_start, d[0]
+    assert d[0]["firstpagenum"] == first_folio, d[0]
+
+
+def test_a6_tail_segment_ist_gepingt():
+    """A6 (DFI2CY65): die 4. Range (Tail-Segment über die unnummerierte
+    Seite 0b60, Sprung 1+1) ist Teil der messegetreuen Klassifikation
+    und vom Referenzbaum bewusst ignoriert — gepinnt, inkl. Begründung."""
+    meas, n = _load_fixture("A6")
+    v = label_drift.classify(meas)
+    tail = {"startpage": 61, "prefix": "", "style": "D", "firstpagenum": 53}
+    assert tail in v["ranges"]
+
+
+def test_roman_evidence_und_noise_tokens_werden_bericht():
+    """DoD 'Ausreißerquote im Band wird berichtet' + Roman-Kanal: C1
+    (Vorschlag mit gemessenen Widersprüchen — Front-Matter-Drift) und
+    A1 (adoptiert aus Kette) decken beide Modi ab; Zusatz-Tokens auf
+    erklärten Seiten zählen in noise_tokens (Review-Messung: C1 182/566)."""
+    meas, n = _load_fixture("C1")
+    v = label_drift.classify(meas)
+    re_ = v["roman_evidence"]
+    assert re_["mode"] == "proposal"
+    assert len(re_["contradictions"]) >= 10  # Reviewer maß 12
+    assert "OFFENER" in re_["note"] or "VORSCHLAG" in re_["note"]
+    assert v["noise_tokens"] >= 150 and v["band_tokens"] >= 500
+    # Adopt-Zweig: A1 (RTH8Y9R5) adoptiert R@0 f1 aus der Kette
+    meas, n = _load_fixture("A1")
+    v1 = label_drift.classify(meas)
+    assert v1["roman_evidence"]["mode"] == "adopted"
+    assert v1["roman_evidence"]["support"] >= 5
+
+
+def test_e2e_report_traegt_roman_als_offenen_entscheidungspunkt(tmp_path):
+    """Stil-Politik: der römische Vorschlag wird im Bericht MARKIERT
+    (open_decisions), nie still gewählt — der Report-Kanal ist der
+    Entscheidungspunkt für den Owner (Review-Finding MAJOR 1)."""
+    import repair_agent as ra
+
+    cfg = _cfg(tmp_path)
+    key = "E2EROMAN1"
+    att = cfg.zotero_storage_root / key
+    att.mkdir(parents=True)
+    # Buch MIT unnummeriertem Vorspann (2 Titelei-Seiten vor Folio 1):
+    # nur dann emittiert die Regel den römischen VORSCHLAG, der im
+    # Bericht als offener Entscheidungspunkt markiert werden muss.
+    doc = pymupdf.open()
+    W, H = pymupdf.paper_size("a4")
+    folio = 1
+    for i in range(14):
+        pg = doc.new_page(width=W, height=H)
+        if i >= 2:
+            pg.insert_text((300, 30), str(folio), fontsize=12)
+            folio += 1
+        pg.insert_text((40, 150), f"Text {i} " + "lorem ipsum " * 5, fontsize=11)
+    doc.save(att / "book.pdf")
+    doc.close()
+    rep = ra.run_agent(key, apply=True, client=None, cfg=cfg)
+    assert rep["verdict"] == "healed"
+    od = rep.get("open_decisions") or []
+    assert od and od[0]["point"] == "roman_prefix"
+    assert "Vorschlag" in od[0]["choice"]
+    assert "roman_evidence" in od[0]

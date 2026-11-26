@@ -34,15 +34,22 @@ tests/fixtures/fixer395/):
     VORSCHLAG (r ab I), außer eine saubere, durchgehende römische Kette
     reicht bis an die Arabic-Grenze (dann adoptierte Startzahl + Case).
 
-  · REFUSAL-DISZIPLIN bleibt: nicht erklärbare Stufen (Schritt ≠ +1),
-    zu dünne Ankerbasis oder widersprüchliches Band-Rauschen parken
-    den Fall — der Fix ist besseres Messen, nicht ein niedrigeres Tor.
-    Konsistente, nicht erklärte Rest-Familien ab ZWEI Seiten (Echo-/
-    Restsegment) parken beim Owner statt Ratebasis. EINZELSEITIGE
-    Widersprüche bleiben toleriertes, berichtetes Rauschen —
-    shortcut: der emittierte Baum darf genau EINE widersprechende
-    Seite überstimmen (eine Seite allein trägt keinen Segment-Beweis),
-    nie aber einen konsistenten 2-Seiten-Lauf.
+  · REFUSAL-DISZIPLIN bleibt: nicht erklärbare Stufen (Schritt ≠ +1,
+    Ziffern auf der Grenzstrecke), zu dünne Ankerbasis oder
+    widersprüchliches Band-Rauschen parken den Fall — der Fix ist
+    besseres Messen, nicht ein niedrigeres Tor. Konsistente, nicht
+    erklärte Rest-Familien ab ZWEI Seiten (Echo-/Restsegment) parken
+    beim Owner. Die echte Rausch-Invariante: keine konsistente
+    ≥2-Seiten-Restfamilie und ≤ 25 % unerklärte Ziffer-Seiten;
+    Einzelseiten-Widersprüche und Zusatz-Tokens auf erklärten Seiten
+    (Kapitelnummern, Verlags-IDs) sind toleriertes, BERICHTETES
+    Rauschen (noise_pages / noise_tokens) und dürfen überstimmt
+    werden. Eine DIREKT nummerierte Grenzseite (Anker · Anker,
+    Sprung +2) ist dagegen voll messbar und heilt (Adjazenzform).
+    shortcut: die Roman-Spur (Vorschlag r ab I ohne gemessene Kette)
+    ist ein MARKIERTER offener Entscheidungspunkt im Bericht
+    (roman_evidence) — ihre Widersprüche werden berichtet, nicht
+    geheilt; „Baum == Messung" gilt für die Ziffer-Spur.
 
 Nur pymupdf (Paket-Disziplin, import_audit).
 """
@@ -175,9 +182,11 @@ def _expand(meas: dict[int, dict], d_star: int) -> list[dict] | None:
         if not near:
             return "end"
         b = min(near) if direction > 0 else max(near)
-        # Grenzform: alle Seiten ZWISCHEN den Ankern müssen unnummeriert
-        # sein (Opener, Blanks); eine nummerierte Grenzseite widerspricht
-        # der Form und bricht die Disziplin.
+        # Grenzform: alle Seiten AUF DER GRENZSTRECKE (zwischen den
+        # Ankern) müssen unnummeriert sein (Opener, Blanks); Ziffern
+        # dort widersprechen der Form und brechen die Disziplin. Eine
+        # DIREKT nummerierte Grenzseite (b == edge + direction) ist
+        # dagegen die Adjazenzform — voll messbar, heilt.
         for gap in range(1, abs(b - edge)):
             if edge + gap * direction in digit_pages:
                 return "break"
@@ -212,13 +221,14 @@ def _expand(meas: dict[int, dict], d_star: int) -> list[dict] | None:
 
 def _ranges_from_segments(
     meas: dict[int, dict], segs: list[dict]
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict], list[dict], dict]:
     """Range-Baum aus der Segmentkette: jede D-Range beginnt eine Seite
     vor ihrem ersten Anker (Grenzlabel = Anker-Folio − 1), sofern die
-    Seite ziffernlos ist. Rückgabe (ranges, per-segment-Evidenz)."""
+    Seite ziffernlos ist. Rückgabe (ranges, per-segment-Evidenz,
+    roman_evidence)."""
     digit_pages = {i for i, m in meas.items() if m["digits"]}
     ranges: list[dict] = []
-    evidence = []
+    evidence: list[dict] = []
     for seg in segs:
         first_anchor = seg["first"]
         start = first_anchor
@@ -245,14 +255,53 @@ def _ranges_from_segments(
         })
     # Römischer Vorspann vor der ersten D-Range (Stil-Politik: VORSCHLAG
     # r ab I; adoptiert nur bei sauberer, durchgehender Kette, die bis
-    # an die Arabic-Grenze reicht).
+    # an die Arabic-Grenze reicht). Die Roman-Spur ist ein MARKIERTER
+    # offener Entscheidungspunkt: roman_evidence trägt Modus, Ketten-
+    # stütze und JEDES gemessene römische Token, das dem emittierten
+    # Vorspann widerspricht (Front-Matter-Drift = Owner-Territorium).
     first_d = ranges[0]["startpage"]
+    roman_evidence: dict = {"mode": "none", "support": 0, "contradictions": []}
     if first_d > 0:
-        ranges.insert(0, _roman_prefix(meas, first_d))
-    return ranges, evidence
+        prefix, mode, support = _roman_prefix(meas, first_d)
+        ranges.insert(0, prefix)
+        contradictions: list[dict] = []
+        for i, m in meas.items():
+            if i >= first_d or not m["roman"]:
+                continue
+            expected = prefix["firstpagenum"] + i
+            for tok in m["roman"]:
+                v = _roman_value(tok)
+                if v is not None and v != expected:
+                    contradictions.append({
+                        "page": i,
+                        "token": tok,
+                        "emitted": pdf_kernel._roman_render(
+                            expected, prefix["style"] == "R"
+                        ),
+                    })
+        roman_evidence = {
+            "mode": mode,
+            "support": support,
+            "contradictions": contradictions,
+            "note": (
+                "adoptiert aus gemessener Kette (Startzahl + Case aus "
+                "M-Wahrheit)"
+                if mode == "adopted"
+                else "VORSCHLAG r ab I (Stil-Politik) — OFFENER ENTSCHEI-"
+                "DUNGSPUNKT: der Owner kann den Vorspann-Stil ändern; "
+                "römische Widersprüche (Front-Matter-Drift) sind hier "
+                "berichtet, nicht geheilt; Baum==Messung gilt für "
+                "die Ziffer-Spur"
+            ),
+        }
+    return ranges, evidence, roman_evidence
 
 
-def _roman_prefix(meas: dict[int, dict], first_d: int) -> dict:
+def _roman_prefix(meas: dict[int, dict], first_d: int) -> tuple[dict, str, int]:
+    """Römischer Vorspann: (Range, Modus, Kettenstütze). Modus 'adopted'
+    nur bei sauberer, durchgehender Kette (≥3 Anker, zuletzt ≤3 Seiten
+    vor der Arabic-Grenze) — sonst 'proposal' (r ab I; der Kanal ist
+    roman_evidence im classify-Verdict)."""
     roman_pages = {
         i: {v for v in ( _roman_value(t) for t in m["roman"] ) if v}
         for i, m in meas.items()
@@ -266,14 +315,15 @@ def _roman_prefix(meas: dict[int, dict], first_d: int) -> dict:
         ]
         if len(support) > best_support:
             best_v0, best_support, best_last = v0, len(support), max(support)
-    upper = any(
-        t[0].isupper()
-        for i, m in meas.items() if i < first_d for t in m["roman"]
-    )
     if best_support >= 3 and first_d - best_last <= _MAX_BOUNDARY_DIST:
-        return {"startpage": 0, "prefix": "", "style": "R" if upper else "r",
-                "firstpagenum": best_v0}
-    return {"startpage": 0, "prefix": "", "style": "r", "firstpagenum": 1}
+        upper = any(
+            t[0].isupper()
+            for i, m in meas.items() if i < first_d for t in m["roman"]
+        )
+        return ({"startpage": 0, "prefix": "", "style": "R" if upper else "r",
+                 "firstpagenum": best_v0}, "adopted", best_support)
+    return ({"startpage": 0, "prefix": "", "style": "r", "firstpagenum": 1},
+            "proposal", best_support)
 
 
 def classify(meas: dict[int, dict]) -> dict:
@@ -289,15 +339,16 @@ def classify(meas: dict[int, dict]) -> dict:
     for i, m in meas.items():
         for v in m["digits"]:
             support[v - i] += 1  # 0-basiertes Delta, wie _anchors
-    d_star = max(sorted(support), key=lambda d: support[d])
+    # deterministischer Tie-Break: höchste Unterstützung, dann kleinstes Delta
+    d_star = min(support, key=lambda d: (-support[d], d))
 
     segs = _expand(meas, d_star)
     if not segs:
         return {"class": "refused", "reason":
-                "Stufenprofil bricht die +1-Disziplin (Schritt ≠ +1, "
-                "nummerierte Grenzseite oder Einzelanker-Segment)"}
+                "Stufenprofil bricht die +1-Disziplin (Schritt ≠ +1 oder "
+                "Ziffern auf der Grenzstrecke)"}
 
-    ranges, evidence = _ranges_from_segments(meas, segs)
+    ranges, evidence, roman_evidence = _ranges_from_segments(meas, segs)
     total_anchors = sum(s["anchors"] for s in segs)
     if total_anchors < MIN_TOTAL_ANCHORS:
         return {"class": "refused", "reason":
@@ -312,9 +363,13 @@ def classify(meas: dict[int, dict]) -> dict:
     spans = [(s["first"], s["last"], s["d0"]) for s in segs]
     explained = set()
     unexplained: Counter[int] = Counter()
+    noise_tokens = 0
+    band_tokens = 0
     for i in digit_pages:
         vals = set(meas[i]["digits"])
         labels = {i + d0 for lo, hi, d0 in spans if lo <= i <= hi}
+        band_tokens += len(vals)
+        noise_tokens += len(vals - labels)
         if vals & labels:
             explained.add(i)
         else:
@@ -347,6 +402,11 @@ def classify(meas: dict[int, dict]) -> dict:
         "anchors": total_anchors,
         "pages_with_digits": len(digit_pages),
         "noise_pages": noise_pages,
+        # DoD #395: Ausreißerquote im Band wird berichtet — Token-Ebene
+        # (Zusatz-Ziffern auf erklärten Seiten zählen hier mit).
+        "noise_tokens": noise_tokens,
+        "band_tokens": band_tokens,
+        "roman_evidence": roman_evidence,
         "dominant_delta": d_star,
     }
 
@@ -365,12 +425,19 @@ def would_heal(pdf: str | Path) -> dict:
     if verdict["class"] not in ("constant-offset", "drift"):
         return {**verdict, "would_heal": False,
                 "reason": verdict.get("reason", verdict["class"])}
+    # Validate-before-promise: der Dry-Run verspricht nur Bäume, die der
+    # eigene Writer-Validator auch nimmt (sonst meldet der Dry-Run eine
+    # "beweisbare" Operation, die der Apply ehrlich ablehnt).
+    if pdf_kernel._validate_ranges(verdict["ranges"], n) is None:
+        return {**verdict, "would_heal": False,
+                "reason": "emittierter Baum nicht PDF-darstellbar "
+                "(Range-Validierung vor dem Versprechen)"}
     labels = pdf_kernel.labels_from_ranges(verdict["ranges"], n)
 
     current = pdf_kernel.read_page_labels(pdf)
     if current == labels:
         return {**verdict, "would_heal": False,
-                "reason": "labels already match measurement"}
+                "reason": "digit-track labels already match measurement"}
     # Messbasierter No-Defect-Check (Produktionsfall 7ZMNXU6R: Labels
     # bereits korrekt): stimmt JEDES gemessene Folio mit dem AKTUELLEN
     # Label selbst überein (Vergleich gegen die gemessenen Ziffern —
@@ -388,6 +455,7 @@ def would_heal(pdf: str | Path) -> dict:
             break
     if all_match:
         return {**verdict, "would_heal": False,
-                "reason": "all measured folios already correct"}
+                "reason": "all measured digit folios already correct "
+                "(roman front matter s. roman_evidence)"}
     return {**verdict, "would_heal": True, "op": "write_label_ranges",
             "labels": labels}
