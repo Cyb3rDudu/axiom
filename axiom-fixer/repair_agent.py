@@ -574,6 +574,17 @@ def _label_drift_rule(cfg, key: str, apply: bool) -> dict | None:
             }
         ],
     }
+    # Stil-Politik: der römische Vorschlag ist ein MARKIERTER offener
+    # Entscheidungspunkt (nie eine stille Wahl) — der Bericht trägt ihn
+    # mit der gemessenen Roman-Spur in JEDEN Lauf.
+    open_decisions = []
+    re_ = verdict.get("roman_evidence") or {}
+    if re_.get("mode") == "proposal":
+        open_decisions.append({
+            "point": "roman_prefix",
+            "choice": "r ab I (Vorschlag, nicht aus Messung adoptiert)",
+            "roman_evidence": re_,
+        })
     if not apply:
         report = {
             "key": key,
@@ -585,11 +596,13 @@ def _label_drift_rule(cfg, key: str, apply: bool) -> dict | None:
                 "reason": (
                     f"Katalog-Regel (#395): {verdict['plan_class']} über "
                     f"{verdict['segments']} Segment(e), {verdict['anchors']} "
-                    f"Band-Anker — beweisbare write_label_ranges-Operation, "
-                    f"Schreibfreigabe nicht erteilt (Dry-Run)."
+                    f"Band-Anker (Ziffer-Spur) — beweisbare "
+                    f"write_label_ranges-Operation, Schreibfreigabe nicht "
+                    f"erteilt (Dry-Run)."
                 ),
             },
             "evidence": [verdict],
+            "open_decisions": open_decisions,
             "config": config_status(cfg),
             "apply": False,
         }
@@ -631,6 +644,7 @@ def _label_drift_rule(cfg, key: str, apply: bool) -> dict | None:
             ),
         },
         "evidence": [verdict, res],
+        "open_decisions": open_decisions,
         "config": config_status(cfg),
         "apply": True,
     }
