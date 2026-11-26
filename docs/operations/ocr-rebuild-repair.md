@@ -16,6 +16,9 @@ The class is a **deterministic catalog rule** in `repair_agent.py` — no
 model call, no DeepSeek key needed (same pattern as the #253
 labeltree-missing rule). The repair runs before the label rule so a
 broken text layer is rasterized before any folio harvest reads it.
+Since #395 a third deterministic catalog rule (folio-band measurement:
+constant-offset/two-range/drift → `write_label_ranges`) runs between
+this OCR rule and the #253 label rule.
 
 ## Owner rulings, pinned in code
 

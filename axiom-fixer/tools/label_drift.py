@@ -34,10 +34,15 @@ tests/fixtures/fixer395/):
     VORSCHLAG (r ab I), außer eine saubere, durchgehende römische Kette
     reicht bis an die Arabic-Grenze (dann adoptierte Startzahl + Case).
 
-  · REFUSAL-DISZIPLIN bleibt: nicht erklärbare Stufen (Schritt ≠ +1,
-    konsistente Restläufe, Echo-Nummern), zu dünne Ankerbasis oder
-    widersprüchliches Band-Rauschen parken den Fall — der Fix ist
-    besseres Messen, nicht ein niedrigeres Tor.
+  · REFUSAL-DISZIPLIN bleibt: nicht erklärbare Stufen (Schritt ≠ +1),
+    zu dünne Ankerbasis oder widersprüchliches Band-Rauschen parken
+    den Fall — der Fix ist besseres Messen, nicht ein niedrigeres Tor.
+    Konsistente, nicht erklärte Rest-Familien ab ZWEI Seiten (Echo-/
+    Restsegment) parken beim Owner statt Ratebasis. EINZELSEITIGE
+    Widersprüche bleiben toleriertes, berichtetes Rauschen —
+    shortcut: der emittierte Baum darf genau EINE widersprechende
+    Seite überstimmen (eine Seite allein trägt keinen Segment-Beweis),
+    nie aber einen konsistenten 2-Seiten-Lauf.
 
 Nur pymupdf (Paket-Disziplin, import_audit).
 """
@@ -49,6 +54,8 @@ from collections import Counter
 from pathlib import Path
 
 import pymupdf  # type: ignore[reportMissingImports]
+
+from . import pdf_kernel
 
 # Kopf-/Fußband (±9 % Seitenhöhe) — die Sonde der Produktions-Evidenz.
 BAND = 0.09
@@ -65,14 +72,21 @@ _STRICT_ROMAN = re.compile(
 MIN_TOTAL_ANCHORS = 5
 MIN_SEGMENT_ANCHORS = 2
 MAX_NOISE_PAGE_RATIO = 0.25
-# Eine konsistente Rest-Delta-Familie ab dieser Seitenzahl ist kein
-# Rauschen mehr, sondern ein nicht erklärtes Segment (Echo/Drift-Rest)
-# → Verweigerung statt Ratebasis.
-MIN_UNEXPLAINED_FAMILY = 3
-# Grenz-Lokalität: erster Anker der Nachbarszene liegt höchstens zwei
+# Eine konsistente Rest-Delta-Familie ab ZWEI Seiten ist kein Rauschen
+# mehr, sondern ein nicht erklärtes Segment (Echo/Drift-Rest)
+# → Verweigerung statt Ratebasis. Einzelne Widerspruchs-Seiten bleiben
+# toleriertes Rauschen (siehe Modul-Docstring).
+MIN_UNEXPLAINED_FAMILY = 2
+# Grenz-Lokalität: erster Anker der Nachbarszene liegt höchstens DREI
 # Seiten nach dem letzten Anker der aktuellen (kanonisch: Anker,
-# unnummerierte Grenzseite, Anker).
+# unnummerierte Grenzseite, Anker; Produktion 6EE8CZSA trägt auch ZWEI
+# unnummerierte Grenzseiten — genau ein gedropptes Folio bleibt wahr).
 _MAX_BOUNDARY_DIST = 3
+# Obergrenzen der Ketten-Konstruktion: römische Startzahl-Suche (v0)
+# bzw. maximale Segmentzahl einer Kette (Schutz vor entarteten
+# Zyklen auf adversarischen Messungen).
+_MAX_ROMAN_PROBE = 30
+_MAX_SEGMENTS = 64
 
 
 def _roman_value(tok: str) -> int | None:
@@ -88,18 +102,6 @@ def _roman_value(tok: str) -> int | None:
         else:
             total += vals[ch]
     return total
-
-
-def _roman_render(v: int, upper: bool) -> str:
-    table = [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"),
-             (90, "xc"), (50, "l"), (40, "xl"), (10, "x"), (9, "ix"),
-             (5, "v"), (4, "iv"), (1, "i")]
-    out = ""
-    for n, sym in table:
-        while v >= n:
-            out += sym
-            v -= n
-    return out.upper() if upper else out
 
 
 def measure_bands(pdf: str | Path) -> dict[int, dict]:
@@ -181,7 +183,7 @@ def _expand(meas: dict[int, dict], d_star: int) -> list[dict] | None:
                 return "break"
         local = [p for p in cand if p >= b] if direction > 0 else [p for p in cand if p <= b]
         if len(local) < MIN_SEGMENT_ANCHORS:
-            # Einzelnker trägt keinen Drift-Beweis — reguläres Ende; der
+            # Einzelanker trägt keinen Drift-Beweis — reguläres Ende; der
             # Restanker fällt an die Rausch-/Widerspruchs-Rechnung.
             return "end"
         seg = {
@@ -201,7 +203,7 @@ def _expand(meas: dict[int, dict], d_star: int) -> list[dict] | None:
     for direction in (1, -1):
         while True:
             st = _step(direction)
-            if st == "break" or len(segs) > 64:
+            if st == "break" or len(segs) > _MAX_SEGMENTS:
                 return None
             if st == "end":
                 break
@@ -209,7 +211,7 @@ def _expand(meas: dict[int, dict], d_star: int) -> list[dict] | None:
 
 
 def _ranges_from_segments(
-    meas: dict[int, dict], segs: list[dict], n: int
+    meas: dict[int, dict], segs: list[dict]
 ) -> tuple[list[dict], list[dict]]:
     """Range-Baum aus der Segmentkette: jede D-Range beginnt eine Seite
     vor ihrem ersten Anker (Grenzlabel = Anker-Folio − 1), sofern die
@@ -257,7 +259,7 @@ def _roman_prefix(meas: dict[int, dict], first_d: int) -> dict:
         if m["roman"]
     }
     best_v0, best_support, best_last = 0, 0, -1
-    for v0 in range(1, min(first_d, 30) + 1):
+    for v0 in range(1, min(first_d, _MAX_ROMAN_PROBE) + 1):
         support = [
             i for i, vals in roman_pages.items()
             if i < first_d and (v0 + i) in vals
@@ -274,7 +276,7 @@ def _roman_prefix(meas: dict[int, dict], first_d: int) -> dict:
     return {"startpage": 0, "prefix": "", "style": "r", "firstpagenum": 1}
 
 
-def classify(meas: dict[int, dict], n: int) -> dict:
+def classify(meas: dict[int, dict]) -> dict:
     """Klassifiziert die Messung. Rückgabe mit `class`:
     'none' (kein Ziffer-Signal), 'refused' (Disziplin-Bruch), sonst
     'constant-offset' (1 Segment) bzw. 'drift' (+1-Stufentreppe)."""
@@ -293,9 +295,9 @@ def classify(meas: dict[int, dict], n: int) -> dict:
     if not segs:
         return {"class": "refused", "reason":
                 "Stufenprofil bricht die +1-Disziplin (Schritt ≠ +1, "
-                "nummerierte Grenzseite oder Einzelnker-Segment)"}
+                "nummerierte Grenzseite oder Einzelanker-Segment)"}
 
-    ranges, evidence = _ranges_from_segments(meas, segs, n)
+    ranges, evidence = _ranges_from_segments(meas, segs)
     total_anchors = sum(s["anchors"] for s in segs)
     if total_anchors < MIN_TOTAL_ANCHORS:
         return {"class": "refused", "reason":
@@ -349,28 +351,6 @@ def classify(meas: dict[int, dict], n: int) -> dict:
     }
 
 
-def labels_from_ranges(ranges: list[dict], n: int) -> list[str]:
-    """Label-Liste (wie read_page_labels) aus einem Range-Baum rendern."""
-    out = []
-    for i in range(n):
-        cur = None
-        for r in ranges:
-            if r["startpage"] <= i:
-                cur = r
-        if cur is None:
-            out.append("")
-            continue
-        v = cur.get("firstpagenum", 0) + i - cur["startpage"]
-        style = cur.get("style", "")
-        if style == "D":
-            out.append(str(v))
-        elif style in ("r", "R"):
-            out.append(_roman_render(v, style == "R") if v >= 1 else "")
-        else:
-            out.append("")
-    return out
-
-
 def would_heal(pdf: str | Path) -> dict:
     """Dry-Run-Verdiktion der Katalog-Regel (#395): Tree vorhanden, aber
     falsch — und die Druckseite trägt ein klassifizierbares Signal.
@@ -381,35 +361,32 @@ def would_heal(pdf: str | Path) -> dict:
         n = doc.page_count
     finally:
         doc.close()
-    verdict = classify(meas, n)
+    verdict = classify(meas)
     if verdict["class"] not in ("constant-offset", "drift"):
         return {**verdict, "would_heal": False,
                 "reason": verdict.get("reason", verdict["class"])}
-    labels = labels_from_ranges(verdict["ranges"], n)
-    from . import pdf_kernel
+    labels = pdf_kernel.labels_from_ranges(verdict["ranges"], n)
 
     current = pdf_kernel.read_page_labels(pdf)
     if current == labels:
         return {**verdict, "would_heal": False,
                 "reason": "labels already match measurement"}
-    # Messebasierter No-Defect-Check (Produktionsfall 7ZMNXU6R: Labels
-    # bereits korrekt): stimmt JEDES gemessene Folio mit dem aktuellen
-    # Label überein, trägt die Druckseite keinen Defekt-Befund — dann ist
-    # eine Abweichung nur Konvention (z. B. römischer Vorspann-Stil) und
-    # KEIN heilbarer Defekt. Kein Operator-Run ohne Beweis.
+    # Messbasierter No-Defect-Check (Produktionsfall 7ZMNXU6R: Labels
+    # bereits korrekt): stimmt JEDES gemessene Folio mit dem AKTUELLEN
+    # Label selbst überein (Vergleich gegen die gemessenen Ziffern —
+    # nicht gegen den Superset-Baum der Klassifikation, der als Deckung
+    # jede naive Fortsetzung überdeckt), trägt die Druckseite keinen
+    # Defekt-Befund — dann ist eine Abweichung nur Konvention (z. B.
+    # römischer Vorspann-Stil) und KEIN heilbarer Defekt. Kein
+    # Operator-Run ohne Beweis.
     all_match = any(m["digits"] for m in meas.values())
     for i, m in meas.items():
         if not m["digits"]:
             continue
-        expected = {
-            r["firstpagenum"] + i - r["startpage"]
-            for r in verdict["ranges"]
-            if r["style"] == "D" and r["startpage"] <= i
-        }
-        if expected and current[i] not in {str(v) for v in expected}:
+        if current[i] not in {str(d) for d in m["digits"]}:
             all_match = False
             break
-    if all_match and any(m["digits"] for m in meas.values()):
+    if all_match:
         return {**verdict, "would_heal": False,
                 "reason": "all measured folios already correct"}
     return {**verdict, "would_heal": True, "op": "write_label_ranges",

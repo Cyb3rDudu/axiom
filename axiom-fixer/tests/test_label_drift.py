@@ -14,8 +14,8 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
 import pymupdf  # type: ignore[reportMissingImports]
+import pytest
 
 HERE = Path(__file__).resolve().parent
 PKG = HERE.parent
@@ -49,9 +49,9 @@ EXPECTED = {
            # test_interior_grenzen_exakt_und_anker_aequivalent).
            "anchor_ranges": [{"startpage": 28, "prefix": "", "style": "D", "firstpagenum": 19}]},
 }
-# Klasse B ist durch A2 (IHNEI6E7: zwei Segmente) und A6 (DFI2CY65)
-# belegt — fixture_B1.json ist dieselbe Messung wie A2 und dient nur
-# der Klassen-Namenskonvention des Korpus.
+# Klasse B ist durch A2 (IHNEI6E7: zwei Segmente) und A6 (DFI2CY65,
+# Grenzfall) belegt — KEIN eigenes Fixture-File nötig (B1 war eine
+# Zweitmessung identischer Bänder wie A2).
 # A4/A5 (Fenster-Bücher): Interior-Grenzen exakt, Front-Konvention abweichend
 EXPECTED["A4"] = {"class": "drift", "exact": False,
                   "anchor_ranges": [{"startpage": 74, "prefix": "", "style": "D", "firstpagenum": 55},
@@ -105,9 +105,11 @@ def test_klassen_a_b_c_werden_heilbar_klassifiziert(name):
     """Die 8 christine-Bücher (Klassen A/B/C) klassifizieren heilbar —
     die Karte war nie chaotisch, nur die Messung war es."""
     meas, n = _load_fixture(name)
-    v = label_drift.classify(meas, n)
+    v = label_drift.classify(meas)
     assert v["class"] == EXPECTED[name]["class"], v.get("reason", "")
-    assert v.get("would_heal", True)
+    # Echte Tor-Zeugen statt vakuer would_heal-Default-Wahrheit: die
+    # Ankerbasis trägt das Qualitäts-Tor des Produktionskorpus.
+    assert v["anchors"] >= 5, v
 
 
 @pytest.mark.parametrize("name,expected", [("A1", EXPECTED["A1"]), ("A2", EXPECTED["A2"]),
@@ -118,7 +120,7 @@ def test_referenzbaeume_werden_exakt_reproduziert(name, expected):
     EXAKT der Referenzbaum aus ALL_TREES.json (Range-Grenzen, Folio-
     Anker, römischer Vorspann mit adoptierter Startzahl/Case)."""
     meas, n = _load_fixture(name)
-    v = label_drift.classify(meas, n)
+    v = label_drift.classify(meas)
     assert v["ranges"] == expected["ranges"]
 
 
@@ -129,12 +131,12 @@ def test_interior_grenzen_exakt_und_anker_aequivalent(name):
     offener Vorschlag — aber JEDE gemessene Folio stimmt mit dem
     emittierten Baum."""
     meas, n = _load_fixture(name)
-    v = label_drift.classify(meas, n)
+    v = label_drift.classify(meas)
     assert v["class"] == "drift"
     ranges = v["ranges"]
     for want in EXPECTED[name]["anchor_ranges"]:
         assert want in ranges, f"{name}: Interior-Grenze fehlt: {want}"
-    labels = label_drift.labels_from_ranges(ranges, n)
+    labels = pdf_kernel.labels_from_ranges(ranges, n)
     for i, m in meas.items():
         if not m["digits"]:
             continue
@@ -153,10 +155,10 @@ def test_klasse_d_wird_zur_neuen_messung_gesund_geheilt():
     möglich: ein Gate 'Tree fehlt → nie #395' stellt den alten Verdict
     wieder her, verliert aber dieselbe Heilqualität wie A–C)."""
     meas, n = _load_fixture("D1")
-    v = label_drift.classify(meas, n)
+    v = label_drift.classify(meas)
     assert v["class"] == "constant-offset"
     assert v["anchors"] >= 300
-    labels = label_drift.labels_from_ranges(v["ranges"], n)
+    labels = pdf_kernel.labels_from_ranges(v["ranges"], n)
     hits = sum(1 for i, m in meas.items() if m["digits"] and labels[i] in {str(d) for d in m["digits"]})
     assert hits >= 300
 
@@ -172,7 +174,7 @@ def test_mutation_a_jahreszahlen_drehen_die_klasse_nicht():
     for i in range(0, n, 4):
         meas.setdefault(i, {"digits": [], "roman": []})
         meas[i]["digits"] = sorted(set(meas[i]["digits"]) | {2013})
-    v = label_drift.classify(meas, n)
+    v = label_drift.classify(meas)
     assert v["class"] == "constant-offset"
     assert v["ranges"] == EXPECTED["A1"]["ranges"]
 
@@ -191,13 +193,13 @@ def test_mutation_b_ohne_bandfilter_liefert_falschen_baum():
     for i in range(n):
         digits = set(meas.get(i, {}).get("digits", [])) | {i + 1}
         unfiltered[i] = {"digits": sorted(digits), "roman": []}
-    v = label_drift.classify(unfiltered, n)
+    v = label_drift.classify(unfiltered)
     assert v["class"] in ("constant-offset", "drift"), v
     assert v["ranges"] != EXPECTED["A1"]["ranges"], (
         "ohne Positionsfilter müsste die Fließtext-Familie den Baum drehen"
     )
     # Mit Positionsfilter (die Fixture IST die Band-Messung): exakter Baum.
-    v2 = label_drift.classify(meas, n)
+    v2 = label_drift.classify(meas)
     assert v2["ranges"] == EXPECTED["A1"]["ranges"]
 
 
@@ -233,7 +235,7 @@ def test_drift_treppe_mit_schritt_1_heilt():
     p = _drift_pdf(FIX / "_drift_ok.pdf", dropped=1)
     try:
         meas, n = _load_fixture_pdf(p)
-        v = label_drift.classify(meas, n)
+        v = label_drift.classify(meas)
         assert v["class"] == "drift"
         assert v["segments"] == 3
         r = v["ranges"]
@@ -250,7 +252,7 @@ def test_schritt_2_an_grenze_wird_verweigert():
     p = _drift_pdf(FIX / "_drift_bad.pdf", dropped=2)
     try:
         meas, n = _load_fixture_pdf(p)
-        v = label_drift.classify(meas, n)
+        v = label_drift.classify(meas)
         assert v["class"] == "refused", v
         assert v["reason"]  # ehrlicher Park-Grund (Rausch- oder Restlauf-Gate)
     finally:
@@ -270,7 +272,7 @@ def test_ohne_ziffer_signal_keine_heilung():
     doc.close()
     try:
         meas, n = _load_fixture_pdf(p)
-        v = label_drift.classify(meas, n)
+        v = label_drift.classify(meas)
         assert v["class"] == "none"
     finally:
         p.unlink(missing_ok=True)
@@ -283,7 +285,7 @@ def test_labels_bereits_korrekt_kein_heal():
     try:
         # Labels exakt auf die Messung setzen: delta 0 …
         meas, n = _load_fixture_pdf(p)
-        v = label_drift.classify(meas, n)
+        v = label_drift.classify(meas)
         assert v["class"] in ("constant-offset", "drift")
         doc = pymupdf.open(p)
         doc.set_page_labels([{"startpage": 0, "prefix": "", "style": "D",
@@ -294,6 +296,53 @@ def test_labels_bereits_korrekt_kein_heal():
         wh = label_drift.would_heal(p)
         assert wh["would_heal"] is False
         assert "already" in wh["reason"]
+    finally:
+        p.unlink(missing_ok=True)
+
+
+def test_naive_fortsetzung_bleibt_heilbar():
+    """C1-Regression: aktuelle Labels = NAIVE Fortsetzung (ein D-Lauf ab
+    Segment 1) auf einem echten Drift-Buch. Der alte No-Defect-Check
+    vergaß gegen den SUPREET-Baum der Klassifikation (jeder Anker der
+    Folgeranges erfüllt auch die naive Folge) und parkte das Buch falsch
+    als 'already correct' — 18 von 27 Folios widersprechen. Der Vergleich
+    gegen die GEMESSENEN Ziffern erkennt den Defekt: would_heal True."""
+    p = _drift_pdf(FIX / "_naive.pdf", dropped=1)
+    try:
+        doc = pymupdf.open(p)
+        doc.set_page_labels([{"startpage": 0, "prefix": "", "style": "D",
+                              "firstpagenum": 1}])  # naive Folge: Label == Seite+1
+        doc.saveIncr()
+        doc.close()
+        wh = label_drift.would_heal(p)
+        assert wh["would_heal"] is True, wh
+        assert wh["class"] == "drift"
+    finally:
+        p.unlink(missing_ok=True)
+
+
+def test_zweiseiten_restfamilie_wird_verweigert():
+    """C2-Regression: ein konsistenter, nicht erklärter 2-Seiten-Lauf
+    (Seiten 20-21 drucken 23,24 — Familie Delta +3, Werte steigen +1
+    Seite für Seite) ist kein Rauschen, sondern ein Echo-/Restsegment:
+    MIN_UNEXPLAINED_FAMILY=2 parkt den Fall beim Owner statt die
+    gedruckten Folios zu überstimmen."""
+    doc = pymupdf.open()
+    W, H = pymupdf.paper_size("a4")
+    for i in range(22):
+        pg = doc.new_page(width=W, height=H)
+        folio = i + 1 if i < 20 else i + 3  # 1..20, dann Sprung auf 23,24
+        pg.insert_text((300, 30), str(folio), fontsize=12)
+        pg.insert_text((40, 150), f"Kapiteltext {i} " + "lorem ipsum " * 10, fontsize=11)
+    p = FIX / "_restfamilie.pdf"
+    doc.save(p)
+    doc.close()
+    try:
+        meas, n = _load_fixture_pdf(p)
+        v = label_drift.classify(meas)
+        assert v["class"] == "refused", v
+        assert "nicht erklärter konsistenter Lauf" in v["reason"]
+        assert label_drift.MIN_UNEXPLAINED_FAMILY == 2
     finally:
         p.unlink(missing_ok=True)
 
@@ -349,6 +398,47 @@ def test_e2e_katalogregel_heilt_ohne_modell_mit_readback(tmp_path, dropped, cls,
     assert p.read_bytes() == vorher
     spur = json.loads((cfg.work_root / key / "report.json").read_text())
     assert spur["catalog_rule"].endswith("(#395)")
+
+
+def test_e2e_geheilter_folgelauf_ist_idempotent(tmp_path):
+    """W14: Nach vollzogener Katalog-Heilung ist ein Folgelauf ein No-Op —
+    die #395-Regel declint (Labels == Messung, kein Defekt-Befund), #253
+    declint (Tree vorhanden) — ohne Modell bleibt der ehrliche NO-MODEL-
+    Verdict, und work.pdf behält die geheilten Labels (kein Re-Heal,
+    keine Neuverschiebung)."""
+    import repair_agent as ra
+
+    cfg = _cfg(tmp_path)
+    key = "E2EIDEM"
+    att = cfg.zotero_storage_root / key
+    att.mkdir(parents=True)
+    _drift_pdf(att / "book.pdf", dropped=0)
+    rep1 = ra.run_agent(key, apply=True, client=None, cfg=cfg)
+    assert rep1["verdict"] == "healed"
+    work = cfg.work_root / key / "work.pdf"
+    geheilt = pdf_kernel.read_page_labels(work)
+    assert geheilt == [str(i + 1) for i in range(30)]
+    rep2 = ra.run_agent(key, apply=True, client=None, cfg=cfg)
+    assert rep2["verdict"] == "NO-MODEL", json.dumps(rep2, default=str)[:300]
+    assert pdf_kernel.read_page_labels(work) == geheilt, "Folgelauf verschiebt erneut!"
+
+
+CORPUS = Path.home() / "fixtures" / "fixer-395"
+
+
+@pytest.mark.skipif(
+    not (CORPUS / "pdfs-original").is_dir(),
+    reason="Produktions-Korpus (~/fixtures/fixer-395, halo) nicht vorhanden",
+)
+@pytest.mark.parametrize("name,key", [("A1", "RTH8Y9R5"), ("C1", "6EE8CZSA"), ("D1", "7ZMNXU6R")])
+def test_fixture_provenanz_gegen_pristine_pdfs(name, key):
+    """Goldener Zeuge (W14, nur mit lokalem Produktions-Korpus): die
+    anonymen Fixtures sind WIRKLICH die Band-Messung der ungekürzten
+    Original-PDFs — measure_bands reproduziert sie Seite für Seite
+    (Fixture-Herkunft bewiesen, kein Abschreib-Drittweg)."""
+    live = label_drift.measure_bands(CORPUS / "pdfs-original" / f"{key}.pdf")
+    data = json.loads((FIX / "measurements" / f"fixture_{name}.json").read_text())
+    assert {str(i): m for i, m in live.items()} == data["bands"]
 
 
 def test_e2e_refuse_faellt_an_agenten_zurueck(tmp_path):
