@@ -398,6 +398,10 @@ def test_e2e_katalogregel_heilt_ohne_modell_mit_readback(tmp_path, dropped, cls,
     assert p.read_bytes() == vorher
     spur = json.loads((cfg.work_root / key / "report.json").read_text())
     assert spur["catalog_rule"].endswith("(#395)")
+    # Negativ-Zeuge: kein Front-Matter (Ziffer ab Seite 0) → KEIN
+    # römischer Vorschlag, also auch keine scheindemokratische offene
+    # Entscheidung (Modus 'none' erzeugt keine open_decisions).
+    assert rep.get("open_decisions") == []
 
 
 def test_e2e_geheilter_folgelauf_ist_idempotent(tmp_path):
@@ -593,3 +597,80 @@ def test_e2e_report_traegt_roman_als_offenen_entscheidungspunkt(tmp_path):
     assert od and od[0]["point"] == "roman_prefix"
     assert "Vorschlag" in od[0]["choice"]
     assert "roman_evidence" in od[0]
+
+
+def test_e2e_dry_run_traegt_roman_als_offenen_entscheidungspunkt(tmp_path):
+    """Dry-Run-Zeuge (Review-Runde 2, W1): der römische Vorschlag ist
+    MARKIERT, bevor irgendein Byte geschrieben wird — der Owner
+    entscheidet anhand des Dry-Run-Reports, nicht erst nach der Heilung.
+    Der Apply-Pfad war schon gepinnt; dieser Zeuge hält die Kanal-
+    Verkabelung des DRY-RUN-Reports (return-Wert == Audit-Spur) fest."""
+    import repair_agent as ra
+
+    cfg = _cfg(tmp_path)
+    key = "E2EROMAN0"
+    att = cfg.zotero_storage_root / key
+    att.mkdir(parents=True)
+    # Gleiche Buchform wie der Apply-Zeuge: 2 unnummerierte Titelei-
+    # Seiten, Folios 1..12 ab Seite 2 → römischer VORSCHLAG (nicht
+    # adoptiert), der als offener Entscheidungspunkt markiert werden muss.
+    doc = pymupdf.open()
+    W, H = pymupdf.paper_size("a4")
+    folio = 1
+    for i in range(14):
+        pg = doc.new_page(width=W, height=H)
+        if i >= 2:
+            pg.insert_text((300, 30), str(folio), fontsize=12)
+            folio += 1
+        pg.insert_text((40, 150), f"Text {i} " + "lorem ipsum " * 5, fontsize=11)
+    doc.save(att / "book.pdf")
+    doc.close()
+    vorher = (att / "book.pdf").read_bytes()
+    rep = ra.run_agent(key, apply=False, client=None, cfg=cfg)
+    assert rep["verdict"] == "report", json.dumps(rep, default=str)[:400]
+    assert rep["apply"] is False
+    od = rep["open_decisions"]
+    assert od and od[0]["point"] == "roman_prefix", od
+    assert "Vorschlag" in od[0]["choice"]
+    assert "roman_evidence" in od[0]
+    # Dry-Run schreibt NIE: Storage-Original bleibt byte-identisch …
+    assert (att / "book.pdf").read_bytes() == vorher
+    # … und die Audit-Spur trägt dieselbe offene Entscheidung wie der
+    # Rückgabewert (Report-Kanal == report.json-Kanal).
+    spur = json.loads((cfg.work_root / key / "report.json").read_text())
+    assert spur["open_decisions"] == od
+
+
+def test_delta_tiebreak_waehlt_deterministisch_das_kleinere_delta():
+    """Tie-Break-Zeuge (Review-Runde 2, W2): Support-Tie 6:6 — Seiten
+    0-5 drucken Folio Seite+1 (Delta +1), Seiten 6-11 Seite+2 (Delta +2).
+    classify wählt deterministisch das KLEINERE Delta
+    (min(support, key=(-support, d))). Beide Kandidaten sind +1-Schritt-
+    Nachbarn, das Buch heilt so oder so als Drift — der Zeuge pinnt
+    die WAHL (dominant_delta), nicht nur das Ergebnis."""
+    doc = pymupdf.open()
+    W, H = pymupdf.paper_size("a4")
+    for i in range(12):
+        pg = doc.new_page(width=W, height=H)
+        folio = i + 1 if i < 6 else i + 2
+        pg.insert_text((300, 30), str(folio), fontsize=12)
+        pg.insert_text((40, 150), f"Text {i} " + "lorem ipsum " * 5, fontsize=11)
+    p = FIX / "_tie.pdf"
+    doc.save(p)
+    doc.close()
+    try:
+        meas, n = _load_fixture_pdf(p)
+        v = label_drift.classify(meas)
+        assert v["class"] == "drift", v.get("reason", "")
+        assert v["dominant_delta"] == 1, v["dominant_delta"]
+        d = [r for r in v["ranges"] if r["style"] == "D"]
+        # Grenzform Anker · Anker (p5: 6, p6: 8): zweite Range beginnt
+        # AUF der Ankerseite mit deren gemessenem Folio.
+        assert [r["startpage"] for r in d] == [0, 6]
+        assert [r["firstpagenum"] for r in d] == [1, 8]
+        # jede gemessene Folio stimmt mit dem emittierten Baum überein
+        labels = pdf_kernel.labels_from_ranges(v["ranges"], n)
+        for i, m in meas.items():
+            assert labels[i] in {str(x) for x in m["digits"]}
+    finally:
+        p.unlink(missing_ok=True)
