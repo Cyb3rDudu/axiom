@@ -122,8 +122,11 @@ class TestRunAgentFastPath:
         )
 
     def _noisy_missing_tree_pdf(self, path: Path, n=6, folio_from=1):
-        """Wie _missing_tree_pdf plus Rauschen: 2 von 6 Ziffer-Seiten ohne
-        Label-Treffer überschreiten die #395-Rauschschwelle (25 %)."""
+        """Wie _missing_tree_pdf plus Rauschen. Die #395-Regel declint
+        bewusst — das ERSTE feuernde Gate ist das Anker-Tor (nur 4 Anker
+        am dominanten Delta < MIN_TOTAL_ANCHORS 5); das Rausch-Gate
+        (2 von 6 Ziffer-Seiten ohne Label-Treffer = 33 % > 25 %) trägt
+        zusätzlich, feuert aber erst nach dem Anker-Tor."""
         doc = pymupdf.open()
         for i in range(n):
             pg = doc.new_page()

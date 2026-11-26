@@ -180,6 +180,17 @@ def _apply_op_plan(op: dict) -> dict:
     return result
 
 
+def _named_label_count(op: dict) -> int:
+    """Dry-Run-Evidenz: Anzahl BENANNTER Seiten — nicht Listen-/Range-
+    Länge. Ein leer rendernder Range-Baum benennt keine Seite und fällt
+    im Dry-Run als No-Op auf (gleiche Sicht wie der Write-Pfad)."""
+    if op.get("op") == "write_label_ranges":
+        n = pdf_kernel.doc_page_count(op["source"])
+        rendered = pdf_kernel.labels_from_ranges(op.get("ranges") or [], n)
+        return sum(1 for lab in rendered if str(lab).strip())
+    return sum(1 for lab in (op.get("labels") or []) if str(lab).strip())
+
+
 def run_plan(plan: dict, apply: bool = False) -> dict:
     """Validiert (und wendet optional an) einen Plan. Lässt keine Ausnahme
     nach außen — Validierungs-/Lesefehler werden strukturiert berichtet."""
@@ -204,7 +215,7 @@ def run_plan(plan: dict, apply: bool = False) -> dict:
                     "op": op["op"],
                     "source": op["source"],
                     "backup": op["backup"],
-                    "label_count": len(op.get("labels") or op.get("ranges") or []),
+                    "label_count": _named_label_count(op),
                     "expected_after": op.get("expected_after"),
                 }
                 for op in plan["operations"]

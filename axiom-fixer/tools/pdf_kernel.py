@@ -154,23 +154,33 @@ def _atomic_save(doc: pymupdf.Document, pdf: str) -> None:
 
 
 def _validate_ranges(ranges: list[dict], n: int) -> list[dict] | None:
-    """Strukturprüfung eines Range-Baums (#395): erste Range bei Seite 0,
-    Startpages streig steigend, Style aus der PDF-Semantik. Rückgabe
-    None = nicht darstellbar."""
+    """Strukturprüfung eines Range-Baums (#395): erste Range bei Seite 0
+    (Deckungspflicht — Seiten vor dem ersten Entry blieben still
+    unbenannt), Startpages strikt steigend, Style aus der PDF-Semantik,
+    firstpagenum der nummerierten Ranges ist int >= 1 (bool ist kein
+    int-Anwärter: True == 1; pymupdf normalisiert <= 0 still und
+    divergierte damit von labels_from_ranges). Rückgabe None = nicht
+    darstellbar."""
     if not ranges or not isinstance(ranges, list):
         return None
     prev = -1
-    for r in ranges:
+    for k, r in enumerate(ranges):
         sp = r.get("startpage")
         style = r.get("style", "")
-        fpn = r.get("firstpagenum", 0)
-        if not isinstance(sp, int) or not (0 <= sp < n) or sp <= prev:
+        fpn = r.get("firstpagenum")
+        if isinstance(sp, bool) or not isinstance(sp, int) or not (0 <= sp < n):
+            return None
+        if k == 0 and sp != 0:
+            return None  # Deckung ab Seite 0 (keine stille Titelei-Lücke)
+        if sp <= prev:
             return None
         if r.get("prefix", "") != "":
             return None  # Präfixe trägt dieser Baum bewusst nicht
         if style not in ("", "D", "r", "R"):
             return None
-        if not isinstance(fpn, int) or (style in ("r", "R") and fpn < 1):
+        if style and (
+            isinstance(fpn, bool) or not isinstance(fpn, int) or fpn < 1
+        ):
             return None
         prev = sp
     return ranges
@@ -178,8 +188,10 @@ def _validate_ranges(ranges: list[dict], n: int) -> list[dict] | None:
 
 def write_label_ranges(pdf: str | Path, ranges: list[dict]) -> None:
     """#395: setzt einen MEHRFACH-Range-Baum (römischer Vorspann + mehrere
-    D-Segmente — das Drift-/Two-Range-Heilungsformat). Validierung wie
-    write_page_labels (nie falsch befüllen), atomarer Save wie dort."""
+    D-Segmente — das Drift-/Two-Range-Heilungsformat). Validierung über
+    _validate_ranges (Deckung ab Seite 0, strikt steigend, int >= 1 als
+    firstpagenum — nie falsch befüllen), atomarer Save wie in
+    write_page_labels."""
     pdf = str(pdf)
     doc = pymupdf.open(pdf)
     try:
@@ -195,12 +207,42 @@ def write_label_ranges(pdf: str | Path, ranges: list[dict]) -> None:
         doc.close()
 
 
+def _roman_render(v: int, upper: bool) -> str:
+    table = [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"),
+             (90, "xc"), (50, "l"), (40, "xl"), (10, "x"), (9, "ix"),
+             (5, "v"), (4, "iv"), (1, "i")]
+    out = ""
+    for n, sym in table:
+        while v >= n:
+            out += sym
+            v -= n
+    return out.upper() if upper else out
+
+
 def labels_from_ranges(ranges: list[dict], n: int) -> list[str]:
     """Label-Liste (read_page_labels-Form) aus einem Range-Baum — die
-    gemeinsame Render-Sicht von Klassifikator und Readback-Vergleich."""
-    from tools.label_drift import labels_from_ranges as render
-
-    return render(ranges, n)
+    gemeinsame Render-Sicht (#395) von Klassifikator (label_drift),
+    surgery_exec-Validator und Readback-Vergleich. Range->Label ist
+    PDF-Semantik, lebt deshalb hier im Kernel (einzig).
+    """
+    out = []
+    for i in range(n):
+        cur = None
+        for r in ranges:
+            if r["startpage"] <= i:
+                cur = r
+        if cur is None:
+            out.append("")
+            continue
+        v = cur.get("firstpagenum", 0) + i - cur["startpage"]
+        style = cur.get("style", "")
+        if style == "D":
+            out.append(str(v))
+        elif style in ("r", "R"):
+            out.append(_roman_render(v, style == "R") if v >= 1 else "")
+        else:
+            out.append("")
+    return out
 
 
 def _zone_texts(page: pymupdf.Page) -> dict[str, str]:

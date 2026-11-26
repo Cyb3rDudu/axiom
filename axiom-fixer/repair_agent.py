@@ -578,7 +578,7 @@ def _label_drift_rule(cfg, key: str, apply: bool) -> dict | None:
         report = {
             "key": key,
             "verdict": "report",
-            "catalog_rule": "labeltree-wrong+folios -> write_label_ranges (#395)",
+            "catalog_rule": "labeltree-wrong-or-missing+folios -> write_label_ranges (#395)",
             "final_step": {
                 "action": "report",
                 "plan_class": verdict["plan_class"],
@@ -612,7 +612,7 @@ def _label_drift_rule(cfg, key: str, apply: bool) -> dict | None:
     report = {
         "key": key,
         "verdict": "healed" if applied and proof and match else "halt",
-        "catalog_rule": "labeltree-wrong+folios -> write_label_ranges (#395)",
+        "catalog_rule": "labeltree-wrong-or-missing+folios -> write_label_ranges (#395)",
         "heal_readback": proof,
         "final_step": {
             "action": "heal" if applied and proof and match else "rollback",
@@ -679,7 +679,9 @@ def run_agent(
     # Semantik von #253 nicht darstellen kann; wo beide greifen würden,
     # ist der #395-Baum der vollständigere (röm. Vorspann + alle Segmente).
     # #253 bleibt als strenger Fallback (bewiesenes Ende) für Signale, die
-    # die #395-Tore (Rauschen, Widerspruch) nicht tragen.
+    # die #395-Tore (Rauschen, Widerspruch) nicht tragen. Gate-Divergenz
+    # (bewusst): #395 verlangt Band-Messung UND gerenderte-Label-
+    # Gleichheit, #253 nur den Readback-Beweis.
     drift_report = _label_drift_rule(cfg, key, apply)
     if drift_report is not None:
         return drift_report

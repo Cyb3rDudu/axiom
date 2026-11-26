@@ -46,7 +46,11 @@ HEAL_STEPS = [
 ]
 
 
-def test_volllauf_heilt_arbeitskopie_und_schreibt_report():
+def test_katalogregel_heilt_arbeitskopie_und_schreibt_report():
+    """#395-Katalog-Heilung (nicht Agenten-Volllauf): BBBB2222 (Labels
+    phys+2, Folios sauber im Band) heilt deterministisch über die
+    Band-Messungs-Regel — client=None ist der Beweis, dass KEIN Modell
+    beteiligt war."""
     cfg = _cfg_sandbox()
     key = "BBBB2222"  # Sandbox-Storage: falsche_labels-Kopie (Label=phys+2)
     run_dir = _fresh_run_dir(cfg, key)
@@ -81,6 +85,65 @@ def test_ohne_apply_kein_schreibzugriff():
     assert rep["verdict"] == "report"
     lbls = read_page_labels(run_dir / "work.pdf")
     assert lbls == [str(i + 3) for i in range(10)], "Dry-Run schrieb heimlich!"
+
+
+def test_agent_surgery_ohne_cli_freigabe_schreibt_nicht(tmp_path):
+    """C3-Regression — der Freigabe-Zeuge für h_surgery. BBBB2222 short-
+    circuited seit #395 im Katalog-Dry-Run (Verdict 'report'), der alte
+    Zeuge prüfte die ctx['allow_apply']-Konjunktion nie mehr. Dieser
+    Fall declint BEIDE Katalog-Regeln bewusst (#395: Rauschquote 4/10
+    Ziffer-Seiten; #253: Lauf endet vor Dokumentende) und erreicht den
+    Agentenpfad — der surgery-Step trägt apply:true. OHNE CLI-Freigabe
+    (apply=False) darf KEIN Byte an work.pdf geschrieben werden; wird
+    die Konjunktion `step.apply and ctx['allow_apply']` in h_surgery
+    entfernt, wird hier geschrieben und dieser Zeuge ROT."""
+    import pymupdf  # type: ignore[reportMissingImports]
+
+    from config import Config
+
+    cfg = Config(
+        zotero_storage_root=tmp_path / "storage",
+        rag_api_base="http://127.0.0.1:9",
+        database_url="",
+        deepseek_api_key="",
+        deepseek_base_url="",
+        model="",
+        backup_root=tmp_path / "backups",
+        work_root=tmp_path / "runs",
+        budget_max_ops=10,
+        budget_max_seconds=0,
+        lang_profiles=["de"],
+        probe_write=False,
+        provenance={},
+    )
+    key = "CCC3333"
+    att = cfg.zotero_storage_root / key
+    att.mkdir(parents=True)
+    doc = pymupdf.open()
+    for i in range(10):
+        pg = doc.new_page()
+        # Body unterhalb des Kopf-Bands; Folios 1..6 im Fuß-Band, danach
+        # reines Band-Rauschen (Jahr) — gleiche Form wie DOCBEISPIEL1.
+        pg.insert_text((72, 150), f"chapter text {i} " + "lorem ipsum dolor " * 20)
+        if i < 6:
+            pg.insert_text((72, 800), str(i + 1))
+        else:
+            pg.insert_text((72, 40), "2020")
+    doc.save(att / "doc.pdf")
+    doc.close()
+    run_dir = _fresh_run_dir(cfg, key)
+    rep = run_agent(key, apply=False, client=MockClient(list(HEAL_STEPS)), cfg=cfg)
+    # Agentenpfad erreicht (kein Katalog-Short-Circuit): Mock-Protokoll
+    # endet im report-Step → halt.
+    assert rep["verdict"] == "halt"
+    surg = [r for r in rep["evidence"] if r.get("action") == "surgery"]
+    assert surg and surg[0]["ok"] is True, "surgery-Step lief (im Dry-Run)"
+    # Der Kern-Zeuge: apply:true im Step OHNE CLI-Freigabe schreibt NICHT.
+    assert read_page_labels(run_dir / "work.pdf") == [""] * 10, (
+        "apply-im-Step ohne CLI-Freigabe schrieb heimlich!"
+    )
+    spur = json.loads((run_dir / "report.json").read_text())
+    assert spur == rep and spur["verdict"] == "halt"
 
 
 def test_spread_ocr_apply_ohne_freigabe_erzeugt_keine_artefakte():
