@@ -12,7 +12,6 @@ import pytest
 pytest.importorskip("torch")
 
 from axiom_compute_worker.compute_core import image_caption_backfill_cli as cli
-from axiom_compute_worker.compute_core import image_captioner as ic
 
 
 class FakeCap:
