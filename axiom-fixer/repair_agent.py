@@ -574,17 +574,11 @@ def _label_drift_rule(cfg, key: str, apply: bool) -> dict | None:
             }
         ],
     }
-    # Stil-Politik: der römische Vorschlag ist ein MARKIERTER offener
-    # Entscheidungspunkt (nie eine stille Wahl) — der Bericht trägt ihn
-    # mit der gemessenen Roman-Spur in JEDEN Lauf.
-    open_decisions = []
-    re_ = verdict.get("roman_evidence") or {}
-    if re_.get("mode") == "proposal":
-        open_decisions.append({
-            "point": "roman_prefix",
-            "choice": "r ab I (Vorschlag, nicht aus Messung adoptiert)",
-            "roman_evidence": re_,
-        })
+    # Stil-Politik: die Roman-Spur ist ein MARKIERTER offener
+    # Entscheidungspunkt (nie eine stille Wahl) — bei Vorschlag ODER
+    # gemessenen Widersprüchen (auch adoptierte Ketten können Lücken
+    # haben) trägt der Bericht sie in JEDEN Lauf.
+    open_decisions = label_drift.open_decisions_for(verdict)
     if not apply:
         report = {
             "key": key,
@@ -615,7 +609,9 @@ def _label_drift_rule(cfg, key: str, apply: bool) -> dict | None:
     res = surgery_exec.run_plan(plan, apply=True)
     applied = bool(res.get("applied"))
     # #258: healed NUR mit Readback-Beweis + Treffer gegen die gerenderten
-    # Labels (der Range-Baum muss EXAKT das Gemessene gelandet sein).
+    # Labels (der geschriebene Baum muss EXAKT der PLAN sein; die
+    # "Messung"-Aussage gilt für die ZIFFER-Spur — die Roman-Spur ist
+    # Vorschlag/Owner-Territorium, Widersprüche s. open_decisions).
     proof = _heal_readback_proof(work)
     match = proof is not None and pdf_kernel.read_page_labels(work) == expected
     op_cause = res.get("cause") or next(
@@ -632,7 +628,8 @@ def _label_drift_rule(cfg, key: str, apply: bool) -> dict | None:
             "plan_class": verdict["plan_class"],
             "reason": (
                 "Katalog-Regel (#395): write_label_ranges ausgeführt, "
-                "Read-Back bestätigt (Range-Baum == Messung)."
+                "Read-Back bestätigt (Baum == Plan; Ziffer-Spur == "
+                "Messung, roman_evidence s. open_decisions)."
                 if applied and proof and match
                 else (
                     f"write_label_ranges abgelehnt: {op_cause}"

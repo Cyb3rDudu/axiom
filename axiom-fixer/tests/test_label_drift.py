@@ -674,3 +674,37 @@ def test_delta_tiebreak_waehlt_deterministisch_das_kleinere_delta():
             assert labels[i] in {str(x) for x in m["digits"]}
     finally:
         p.unlink(missing_ok=True)
+
+
+def test_open_decisions_feuern_auch_bei_adoptierten_ketten_mit_luecken():
+    """Review 46fd9ba0: IHNEI6E7 heilt adopted/4-Anker-Kette mit 2
+    gemessenen Widersprüchen — genau dort muss der Entscheidungspunkt
+    MARKIERT sein (Kopplung an Widersprüche, nicht an den Modus)."""
+    meas, n = _load_fixture("A2")
+    v = label_drift.classify(meas)
+    assert v["roman_evidence"]["mode"] == "adopted"
+    assert len(v["roman_evidence"]["contradictions"]) >= 2
+    od = label_drift.open_decisions_for(v)
+    assert od and od[0]["point"] == "roman_prefix"
+    assert "Lücken" in od[0]["choice"]
+    assert "roman_evidence" in od[0]
+
+
+def test_open_decisions_schweigen_bei_sauber_adoptierter_kette():
+    """A1 (RTH8Y9R5): adoptiert aus durchgehender Kette, 0 Widersprüche
+    — kein offener Entscheidungspunkt nötig (nichts Markierbares)."""
+    meas, n = _load_fixture("A1")
+    v = label_drift.classify(meas)
+    assert v["roman_evidence"]["mode"] == "adopted"
+    assert v["roman_evidence"]["contradictions"] == []
+    assert label_drift.open_decisions_for(v) == []
+
+
+def test_open_decisions_proposal_und_none():
+    """Vorschlag -> markiert; kein Vorspann (mode none) -> leer."""
+    meas, n = _load_fixture("C1")
+    v = label_drift.classify(meas)
+    assert v["roman_evidence"]["mode"] == "proposal"
+    od = label_drift.open_decisions_for(v)
+    assert od and "Vorschlag" in od[0]["choice"]
+    assert label_drift.open_decisions_for({"roman_evidence": {"mode": "none"}}) == []

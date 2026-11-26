@@ -459,3 +459,35 @@ def would_heal(pdf: str | Path) -> dict:
                 "(roman front matter s. roman_evidence)"}
     return {**verdict, "would_heal": True, "op": "write_label_ranges",
             "labels": labels}
+
+
+def open_decisions_for(verdict: dict) -> list[dict]:
+    """Stil-Politik-Kanal: die Roman-Spur als MARKIERTER offener
+    Entscheidungspunkt in jeden Bericht. Feuert bei Vorschlag (stille
+    r-I-Wahl ohne gemessene Kette) UND bei adoptierten Ketten mit
+    Lücken — gemessene römische Widersprüche machen die "adoptiert aus
+    M-Wahrheit"-Aussage unvollständig und gehören dem Owner (Review
+    46fd9ba0: IHNEI6E7 adopted/4-Anker mit 2 Widersprüchen)."""
+    re_ = verdict.get("roman_evidence") or {}
+    mode = re_.get("mode")
+    contradictions = re_.get("contradictions") or []
+    if mode == "none":
+        return []
+    if mode == "proposal":
+        return [{
+            "point": "roman_prefix",
+            "choice": "r ab I (Vorschlag, nicht aus Messung adoptiert)",
+            "roman_evidence": re_,
+        }]
+    if contradictions:
+        return [{
+            "point": "roman_prefix",
+            "choice": (
+                f"aus Kette adoptiert, aber Kette hat Lücken "
+                f"({len(contradictions)} gemessene römische Widersprüche "
+                f"gegen den emittierten Vorspann) — Front-Matter-Drift, "
+                f"Owner-Territorium"
+            ),
+            "roman_evidence": re_,
+        }]
+    return []
